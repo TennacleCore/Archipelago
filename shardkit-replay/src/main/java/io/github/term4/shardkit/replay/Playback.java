@@ -46,8 +46,8 @@ public final class Playback {
     final Map<Integer, Entity> entities = new HashMap<>();
     /** Seqs whose remove op drained before their (deferred) spawn materialized - that spawn must never happen. */
     final Set<Integer> removedEarly = new HashSet<>();
-    /** Actors between death and respawn: their move ops must not raise a fresh ghost. */
-    final Set<String> deadActors = new HashSet<>();
+    /** Actors whose real counterpart isn't renderable (hidden, or between death and respawn): no ghost rises. */
+    final Set<String> hiddenActors = new HashSet<>();
 
     private long tick;
     private Runnable whenDone;

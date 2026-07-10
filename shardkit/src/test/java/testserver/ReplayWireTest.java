@@ -85,7 +85,7 @@ class ReplayWireTest extends HeadlessServerTest {
     }
 
     @Test
-    void corpsesExpireAndStayGoneUntilRespawn() {
+    void corpsesVanishExactlyWhenTheRecordingHidThem() {
         Shard game = new Shard(instance);
         FakePlayer actor = FakePlayer.connect(instance, new Pos(3.5, 70, 3.5), "Lingering");
         game.join(actor.player);
@@ -94,7 +94,9 @@ class ReplayWireTest extends HeadlessServerTest {
         try {
             tick();
             actor.player.kill();
-            for (int i = 0; i < 30; i++) tick(); // dead on the respawn screen; moves keep sampling
+            for (int i = 0; i < 5; i++) tick();  // the corpse lies for as long as the game says
+            actor.player.setAutoViewable(false); // the game's death config hides it at ITS OWN tick (here +5)
+            for (int i = 0; i < 5; i++) tick();  // still dead, still hidden; moves keep sampling
         } finally {
             file = rec.stop();
             actor.player.remove();
@@ -106,11 +108,11 @@ class ReplayWireTest extends HeadlessServerTest {
             tick();
             Ghost corpse = pb.ghost("Lingering");
             assertNotNull(corpse);
-            for (int i = 0; i < 10; i++) tick();
-            assertFalse(corpse.isRemoved(), "the corpse renders through the death animation");
-            for (int i = 0; i < 15; i++) tick(); // past vanilla deathTime (20)
-            assertTrue(corpse.isRemoved(), "then expires like vanilla's dead-entity despawn");
-            assertNull(pb.ghost("Lingering"), "and the move track raises no ghost before the respawn act");
+            for (int i = 0; i < 4; i++) tick();
+            assertFalse(corpse.isRemoved(), "the corpse lasts exactly as long as it really did - observed, not assumed");
+            for (int i = 0; i < 3; i++) tick(); // past the recorded hide
+            assertTrue(corpse.isRemoved(), "gone at the recorded hide tick");
+            assertNull(pb.ghost("Lingering"), "and the move track raises no ghost while the real one was hidden");
         } finally {
             pb.halt();
         }

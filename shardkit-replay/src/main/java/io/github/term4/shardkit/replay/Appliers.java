@@ -44,7 +44,7 @@ final class Appliers {
             Pos pos = new Pos(m.x(), m.y(), m.z(), m.yaw(), m.pitch());
             Ghost ghost = pb.ghosts.get(m.player());
             if (ghost == null) {
-                if (pb.deadActors.contains(m.player())) return; // no ghost rises before the respawn act
+                if (pb.hiddenActors.contains(m.player())) return; // no ghost while the real one wasn't renderable
                 Channels.Skin skin = pb.skins.get(m.player());
                 ghost = new Ghost(m.player(), skin != null ? skin.textures() : null,
                         skin != null ? skin.signature() : null);
@@ -172,18 +172,13 @@ final class Appliers {
     }
 
     static final class ActApplier implements Applier<Channels.Act> {
-        /** Vanilla {@code deathTime}: the corpse renders this long, then vanishes until respawn (matches the
-         *  mechanics DeathConfig default - its hideCorpse fires after the same 20-tick animation). */
-        private static final long CORPSE_TICKS = 20;
-
-        private final Map<String, Long> dying = new HashMap<>();
-
         @Override
         public void apply(@NotNull Playback pb, @NotNull Recorded<Channels.Act> op) {
             String player = op.op().player();
             Ghost ghost = pb.ghost(player);
-            if (ghost == null && op.op().kind() != Channels.RESPAWN) return;
-            switch (op.op().kind()) {
+            int kind = op.op().kind();
+            if (ghost == null && kind != Channels.RESPAWN && kind != Channels.HIDDEN && kind != Channels.SHOWN) return;
+            switch (kind) {
                 case Channels.SWING_MAIN -> ghost.swingMainHand();
                 case Channels.SWING_OFF -> ghost.swingOffHand();
                 case Channels.HURT -> ghost.damage(DamageType.GENERIC, 0f);
@@ -192,34 +187,25 @@ final class Appliers {
                 case Channels.USE_ON -> { meta(ghost).setActiveHand(PlayerHand.MAIN); meta(ghost).setHandActive(true); }
                 case Channels.USE_OFF -> meta(ghost).setHandActive(false);
                 case Channels.ARROWS -> meta(ghost).setArrowCount(op.op().value());
-                // status 3 = the wire death animation; the ghost stays server-alive as the corpse until it expires
-                case Channels.DEATH -> {
-                    ghost.triggerStatus((byte) 3);
-                    dying.put(player, op.tick());
-                    pb.deadActors.add(player);
-                }
+                // status 3 = the wire death animation; the corpse persists until the RECORDED hide/respawn
+                case Channels.DEATH -> ghost.triggerStatus((byte) 3);
                 // a death-posed client entity never stands back up: drop any lingering corpse; the next move op
                 // raises a fresh ghost at the respawn point (the recording re-emits its full state)
                 case Channels.RESPAWN -> {
-                    dying.remove(player);
-                    pb.deadActors.remove(player);
-                    Ghost corpse = pb.ghosts.remove(player);
-                    if (corpse != null) corpse.remove();
+                    pb.hiddenActors.remove(player);
+                    drop(pb, player);
                 }
+                case Channels.HIDDEN -> {
+                    pb.hiddenActors.add(player);
+                    drop(pb, player);
+                }
+                case Channels.SHOWN -> pb.hiddenActors.remove(player); // next move op raises the ghost
             }
         }
 
-        // the corpse expires like vanilla's dead-entity despawn; the actor stays dead (no ghost) until respawn
-        @Override
-        public void tick(@NotNull Playback pb) {
-            var it = dying.entrySet().iterator();
-            while (it.hasNext()) {
-                var entry = it.next();
-                if (pb.tick() - entry.getValue() < CORPSE_TICKS) continue;
-                Ghost corpse = pb.ghosts.remove(entry.getKey());
-                if (corpse != null) corpse.remove();
-                it.remove();
-            }
+        private static void drop(Playback pb, String player) {
+            Ghost gone = pb.ghosts.remove(player);
+            if (gone != null) gone.remove();
         }
 
         private static LivingEntityMeta meta(Ghost ghost) {

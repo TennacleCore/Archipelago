@@ -26,7 +26,7 @@ final class Channels {
     record Dig(int x, int y, int z, String digger, boolean start) {}
 
     static final int SWING_MAIN = 0, SWING_OFF = 1, HURT = 2, SNEAK_ON = 3, SNEAK_OFF = 4,
-            USE_ON = 5, USE_OFF = 6, ARROWS = 7, DEATH = 8, RESPAWN = 9;
+            USE_ON = 5, USE_OFF = 6, ARROWS = 7, DEATH = 8, RESPAWN = 9, HIDDEN = 10, SHOWN = 11;
 
     // moves run FIRST: they create the ghosts that same-tick spawns/equips/acts reference (a bobber cast on the
     // ghost's first tick needs the ghost's id as its wire owner); skins earlier still (ghost creation reads them)
@@ -76,6 +76,7 @@ final class Channels {
                     case USE_ON, USE_OFF -> "use";
                     case ARROWS -> "arrows";
                     case DEATH, RESPAWN -> "life";
+                    case HIDDEN, SHOWN -> "visible";
                     default -> null;
                 };
                 if (group != null) s.latest(Channels.ACTS, op.op().player() + ":" + group, op);

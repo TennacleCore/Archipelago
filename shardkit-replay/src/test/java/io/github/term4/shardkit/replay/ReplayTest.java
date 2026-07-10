@@ -41,8 +41,10 @@ class ReplayTest {
     @BeforeAll
     static void boot() {
         if (instance != null) return;
-        MinecraftServer.init();
-        MinecraftServer.process().dispatcher().start();
+        if (MinecraftServer.process() == null) { // another test class in this JVM may have booted already
+            MinecraftServer.init();
+            MinecraftServer.process().dispatcher().start();
+        }
         instance = MinecraftServer.getInstanceManager().createInstanceContainer();
         instance.setGenerator(unit -> unit.modifier().fillHeight(0, 64, Block.STONE));
         instance.loadChunk(0, 0).join();

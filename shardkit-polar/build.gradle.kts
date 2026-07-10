@@ -56,6 +56,7 @@ dependencies {
     compileOnly("net.minestom:minestom:$minestomVersion")
 
     testImplementation("net.minestom:minestom:$minestomVersion")
+    testImplementation("com.github.luben:zstd-jni:1.5.7-7") // diff-density harness compresses candidate payloads
     testImplementation("org.tinylog:tinylog-api:2.8.0-M1")
     testImplementation("org.tinylog:tinylog-impl:2.8.0-M1")
     testImplementation("org.tinylog:slf4j-tinylog:2.8.0-M1")

@@ -57,6 +57,9 @@ dependencies {
     compileOnly("org.slf4j:slf4j-api:2.0.18") // minestom's runtime always carries the binding
 
     testImplementation("net.minestom:minestom:$minestomVersion")
+    // storage-breakdown harness: reads/rewrites polar frames and compresses candidate encodings directly
+    testImplementation("dev.hollowcube:polar:dev")
+    testImplementation("com.github.luben:zstd-jni:1.5.7-7")
     testImplementation("org.tinylog:tinylog-api:2.8.0-M1")
     testImplementation("org.tinylog:tinylog-impl:2.8.0-M1")
     testImplementation("org.tinylog:slf4j-tinylog:2.8.0-M1")
@@ -71,5 +74,6 @@ tasks.test {
     failOnNoDiscoveredTests = false
     // synchronous player spawns + relaxed thread asserts (like Minestom's Env); must be set before ServerFlag loads
     systemProperty("minestom.inside-test", "true")
+    systemProperty("breakdown.files", System.getProperty("breakdown.files", "")) // extra replay files for the harness
     jvmArgs("--enable-native-access=ALL-UNNAMED") // polar's zstd-jni (restricted-method warning on JDK 24+)
 }

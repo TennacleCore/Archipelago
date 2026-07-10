@@ -45,6 +45,7 @@ final class Probes {
         private final Map<String, Boolean> lastSneak = new HashMap<>();
         private final Map<String, Boolean> lastUse = new HashMap<>();
         private final Map<String, Integer> lastArrows = new HashMap<>();
+        private final Map<String, Boolean> lastViewable = new HashMap<>();
 
         @Override
         public void sample(@NotNull Recording rec) {
@@ -60,6 +61,7 @@ final class Probes {
                     lastSneak.remove(name);
                     lastUse.remove(name);
                     lastArrows.remove(name);
+                    lastViewable.remove(name);
                 }
                 if (!lastEquip.containsKey(name)) {
                     PlayerSkin skin = m.getSkin(); // null on offline setups without forwarded profiles
@@ -90,6 +92,12 @@ final class Probes {
                 int arrows = m.getEntityMeta() instanceof LivingEntityMeta lm ? lm.getArrowCount() : 0;
                 if (!Integer.valueOf(arrows).equals(lastArrows.put(name, arrows))) {
                     rec.emit(Channels.ACTS, new Channels.Act(name, Channels.ARROWS, arrows));
+                }
+                // observed, not assumed: a game hiding a player (corpse cleanup at ITS configured tick, vanish
+                // features) replays at exactly the recorded moment
+                boolean viewable = m.isAutoViewable();
+                if (!Boolean.valueOf(viewable).equals(lastViewable.put(name, viewable))) {
+                    rec.emit(Channels.ACTS, new Channels.Act(name, viewable ? Channels.SHOWN : Channels.HIDDEN, 0));
                 }
             }
         }

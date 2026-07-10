@@ -42,8 +42,11 @@ class PolarShardCodecTest {
 
     @BeforeAll
     static void boot() {
-        MinecraftServer.init();
-        MinecraftServer.process().dispatcher().start();
+        if (instance != null) return;
+        if (MinecraftServer.process() == null) { // another test class in this JVM may have booted already
+            MinecraftServer.init();
+            MinecraftServer.process().dispatcher().start();
+        }
         instance = MinecraftServer.getInstanceManager().createInstanceContainer();
         instance.setGenerator(unit -> unit.modifier().fillHeight(0, 64, Block.STONE));
         instance.loadChunk(0, 0).join();
