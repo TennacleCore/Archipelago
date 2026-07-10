@@ -218,6 +218,32 @@ public final class PolarShardCodec {
         return load(shard, Files.readAllBytes(path));
     }
 
+    /**
+     * Re-emits {@code file} with extra {@link DataKey} entries merged into its user data (new keys win) -
+     * attaches data computed after the save to an already-serialized world, without touching a shard.
+     */
+    public static byte @NotNull [] amendUserData(byte @NotNull [] file, @NotNull Consumer<UserDataWriter> userData) {
+        PolarWorld world = PolarReader.read(file);
+        CompoundBinaryTag root;
+        try {
+            root = world.userData().length == 0 ? CompoundBinaryTag.builder().putInt("v", FORMAT).build()
+                    : BinaryTagIO.unlimitedReader().read(new ByteArrayInputStream(world.userData()));
+        } catch (IOException e) {
+            throw new UncheckedIOException("unreadable user data - not a shard save?", e);
+        }
+        UserDataWriter writer = new UserDataWriter();
+        userData.accept(writer);
+        CompoundBinaryTag user = CompoundBinaryTag.builder().put(root.getCompound("user")).put(writer.tags.build()).build();
+        CompoundBinaryTag amended = CompoundBinaryTag.builder().put(root).put("user", user).build();
+        try (ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            BinaryTagIO.writer().write(amended, out);
+            return PolarWriter.write(new PolarWorld(world.version(), world.dataVersion(), world.compression(),
+                    world.minSection(), world.maxSection(), out.toByteArray(), List.copyOf(world.chunks())));
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
     private static boolean isUntouched(String paletteEntry) {
         return UNTOUCHED.equals(paletteEntry) || "structure_void".equals(paletteEntry);
     }
@@ -287,7 +313,9 @@ public final class PolarShardCodec {
         if (userData.length == 0) return UserDataView.EMPTY; // e.g. a plain polar world used as a diff
         CompoundBinaryTag root;
         try {
-            root = BinaryTagIO.reader().read(new ByteArrayInputStream(userData));
+            // unlimitedReader: the default reader's 128KiB anti-DoS cap is for untrusted network NBT and
+            // silently truncates big op logs (replays) - this data is a file the operator chose to load
+            root = BinaryTagIO.unlimitedReader().read(new ByteArrayInputStream(userData));
         } catch (IOException e) {
             return UserDataView.EMPTY; // foreign user data: the blocks still loaded
         }
@@ -340,6 +368,12 @@ public final class PolarShardCodec {
         DESCRIBERS.add(describer);
     }
 
+    /** Revives ONE saved entity descriptor through the registered revivers (replay/playback systems), or {@code null}. */
+    public static @Nullable Entity reviveDescriptor(@NotNull CompoundBinaryTag descriptor) {
+        Function<CompoundBinaryTag, Entity> reviver = REVIVERS.get(descriptor.getString("id"));
+        return reviver != null ? reviver.apply(descriptor) : null;
+    }
+
     /** Descriptors whose id had no reviver at load, re-emitted on save so this app never DROPS a foreign app's entities. */
     private static final Tag<List<CompoundBinaryTag>> UNREVIVED = Tag.Transient("shardkit-polar:unrevived");
 
@@ -347,7 +381,7 @@ public final class PolarShardCodec {
         ListBinaryTag.Builder<CompoundBinaryTag> out = ListBinaryTag.builder(BinaryTagTypes.COMPOUND);
         for (Entity entity : shard.entities()) {
             if (entity instanceof Player || entity.isRemoved()) continue;
-            CompoundBinaryTag desc = describe(entity);
+            CompoundBinaryTag desc = descriptor(entity);
             if (desc == null) continue; // no stamp, no generic tier: not persistable (like the fork cloner's skip)
             Pos pos = entity.getPosition();
             out.add(CompoundBinaryTag.builder().put(desc)
@@ -358,7 +392,8 @@ public final class PolarShardCodec {
         return out.build();
     }
 
-    private static @Nullable CompoundBinaryTag describe(Entity entity) {
+    /** {@code entity}'s save descriptor - its stamp, a registered describer's, or a generic tier - or {@code null}. */
+    public static @Nullable CompoundBinaryTag descriptor(@NotNull Entity entity) {
         Supplier<CompoundBinaryTag> stamped = entity.getTag(WorldAccess.ENTITY_SAVE);
         if (stamped != null) return stamped.get();
         for (Function<Entity, CompoundBinaryTag> describer : DESCRIBERS) {

@@ -3,6 +3,7 @@ rootProject.name = "ShardKit"
 include("world-access")
 include("shardkit")
 include("shardkit-polar")
+include("shardkit-replay")
 
 // dev loop: build against the sibling mechanics checkout when present - no publishToMavenLocal,
 // no stale-jar-under-a-running-JVM hazards; absent (CI/other machines) the mavenLocal/Central artifact resolves

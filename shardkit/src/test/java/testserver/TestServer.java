@@ -23,7 +23,12 @@ import io.github.term4.shardkit.Shard;
 import io.github.term4.shardkit.ShardManager;
 import io.github.term4.shardkit.ShardView;
 import io.github.term4.shardkit.polar.PolarShardCodec;
+import io.github.term4.shardkit.replay.Playback;
+import io.github.term4.shardkit.replay.Recording;
+import io.github.term4.shardkit.replay.Replay;
+import io.github.term4.shardkit.replay.SpawnMode;
 import io.github.term4.worldaccess.WorldAccess;
+import net.kyori.adventure.text.Component;
 import net.minestom.server.MinecraftServer;
 import net.minestom.server.Auth;
 import net.minestom.server.command.builder.Command;
@@ -54,6 +59,8 @@ import java.nio.file.Path;
 public final class TestServer {
 
     private static ExplosionSystem explosions;
+    private static Recording recording; // demo keeps one recording/playback at a time; the lib supports many
+    private static Playback playback;
 
     public static void main(String[] args) {
         // the mm ExampleServer's platform flags, verbatim
@@ -91,6 +98,7 @@ public final class TestServer {
         });
         PolarShardCodec.reviveEntity("mm:item", DroppedItemEntity::fromSave);
         PolarShardCodec.reviveEntity("mm:projectile", projectiles::fromSave);
+        ReplayBridge.install(); // replay-side mechanics glue (launch capture, shooter scrub, footage flags)
 
         InstanceContainer world = MinecraftServer.getInstanceManager().createInstanceContainer();
         world.setExplosionSupplier(explosions.supplier()); // route instance.explode(...) through the system
@@ -276,5 +284,81 @@ public final class TestServer {
             if (sender instanceof Player p) p.setGameMode(ctx.get(mode));
         }, mode);
         MinecraftServer.getCommandManager().register(gm);
+
+        // replay demo over :shardkit-replay - record a shard, play it back into a fresh one
+        Path replayDir = Path.of("replays");
+        Command replay = new Command("replay");
+        Argument<String> replayName = ArgumentType.Word("replayName");
+        Argument<Long> seekTick = ArgumentType.Long("tick");
+        replay.setDefaultExecutor((sender, ctx) ->
+                sender.sendMessage("usage: /replay record <shard> | stop <name> | play <name> <newShard> [visual] | seek <tick> | halt"));
+        replay.addSyntax((sender, ctx) -> {
+            if (recording != null) { sender.sendMessage("[replay] already recording - /replay stop <name> first"); return; }
+            Shard g = shards.byName(ctx.get(name));
+            if (g == null) { sender.sendMessage("[shard] no shard named '" + ctx.get(name) + "'"); return; }
+            recording = Replay.record(g);
+            sender.sendMessage("[replay] recording '" + ctx.get(name) + "' - build/move, then /replay stop <name>");
+        }, ArgumentType.Literal("record"), name);
+        replay.addSyntax((sender, ctx) -> {
+            if (recording == null) { sender.sendMessage("[replay] nothing is recording"); return; }
+            Recording rec = recording;
+            recording = null;
+            byte[] file = rec.stop();
+            try {
+                Files.createDirectories(replayDir);
+                Files.write(replayDir.resolve(ctx.get(replayName) + ".polar"), file);
+            } catch (IOException e) {
+                sender.sendMessage("[replay] write failed: " + e.getMessage());
+                return;
+            }
+            sender.sendMessage("[replay] '" + ctx.get(replayName) + "' saved: " + rec.tick() + " ticks, "
+                    + rec.counts() + " (" + file.length + " bytes)");
+        }, ArgumentType.Literal("stop"), replayName);
+        // "visual" = stand-ins only, ignoring registered revivers - the mechanics-less look, for comparison
+        Argument<String> playMode = ArgumentType.Word("playMode").from("visual");
+        CommandExecutor doPlay = (sender, ctx) -> {
+            if (playback != null) { sender.sendMessage("[replay] one playback at a time (tick " + playback.tick() + ")"); return; }
+            byte[] file;
+            try {
+                file = Files.readAllBytes(replayDir.resolve(ctx.get(replayName) + ".polar"));
+            } catch (IOException e) {
+                sender.sendMessage("[replay] no replay named '" + ctx.get(replayName) + "'");
+                return;
+            }
+            String n = ctx.get(forkName);
+            if (shards.byName(n) != null) { sender.sendMessage("[shard] '" + n + "' already exists"); return; }
+            Shard target = shards.create(world, n);
+            SpawnMode spawns = ctx.has(playMode) ? SpawnMode.VISUAL : SpawnMode.UPGRADE;
+            try {
+                playback = Replay.play(target, file, spawns).whenDone(() -> {
+                    target.sendMessage(Component.text("[replay] finished"));
+                    playback = null;
+                });
+            } catch (IllegalArgumentException e) {
+                shards.destroy(target);
+                sender.sendMessage("[replay] " + e.getMessage());
+                return;
+            }
+            String skipped = playback.skipped().isEmpty() ? "" : " (skipped channels: " + playback.skipped() + ")";
+            sender.sendMessage("[replay] playing '" + ctx.get(replayName) + "' [" + spawns + "]: " + playback.length()
+                    + " ticks, " + playback.counts() + skipped + " - /shard spectate or join the shard to watch");
+        };
+        replay.addSyntax(doPlay, ArgumentType.Literal("play"), replayName, forkName);
+        replay.addSyntax(doPlay, ArgumentType.Literal("play"), replayName, forkName, playMode);
+        replay.addSyntax((sender, ctx) -> {
+            if (playback == null) { sender.sendMessage("[replay] nothing is playing"); return; }
+            try {
+                playback.seek(ctx.get(seekTick));
+                sender.sendMessage("[replay] at tick " + playback.tick() + "/" + playback.length());
+            } catch (RuntimeException e) {
+                sender.sendMessage("[replay] " + e.getMessage());
+            }
+        }, ArgumentType.Literal("seek"), seekTick);
+        replay.addSyntax((sender, ctx) -> {
+            if (playback == null) { sender.sendMessage("[replay] nothing is playing"); return; }
+            playback.halt(); // whenDone clears the field
+            sender.sendMessage("[replay] halted");
+        }, ArgumentType.Literal("halt"));
+        MinecraftServer.getCommandManager().register(replay);
     }
 }

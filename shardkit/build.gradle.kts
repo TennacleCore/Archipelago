@@ -58,6 +58,7 @@ dependencies {
     // the integration DEMO only - the published shardkit artifact never depends on mechanics
     testImplementation("io.github.term4:minestom-mechanics:0.2.0")
     testImplementation(project(":shardkit-polar")) // /shard save|load in the playground
+    testImplementation(project(":shardkit-replay")) // /replay + the mechanics registration bridge
     testImplementation("org.tinylog:tinylog-api:2.8.0-M1")
     testImplementation("org.tinylog:tinylog-impl:2.8.0-M1")
     testImplementation("org.tinylog:slf4j-tinylog:2.8.0-M1")

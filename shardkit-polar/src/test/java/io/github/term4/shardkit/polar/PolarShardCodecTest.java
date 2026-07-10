@@ -30,6 +30,7 @@ import java.nio.file.Path;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -240,5 +241,32 @@ class PolarShardCodecTest {
         var thrown = assertThrows(IllegalArgumentException.class, () -> PolarShardCodec.load(shard, bytes));
         assertTrue(thrown.getMessage().contains("broken:not_a_block"), "the bad palette entry is named");
         assertEquals(0, shard.overlaySize(), "a failed load never mutates the shard");
+    }
+
+    private record Op(long tick, double x) {}
+    private static final DataKey<List<Op>> OPS = new DataKey<>("replay:ops",
+            net.minestom.server.codec.StructCodec.struct(
+                    "t", net.minestom.server.codec.Codec.LONG, Op::tick,
+                    "x", net.minestom.server.codec.Codec.DOUBLE, Op::x, Op::new).list());
+
+    @Test
+    void amendAttachesOpsToTheT0SnapshotBytes() {
+        Shard live = new Shard(instance);
+        live.setBlock(new Vec(44, 70, 44), Block.STONE);
+        live.setTime(18000);
+        byte[] t0 = PolarShardCodec.save(live, data -> data.put(META, new GameMeta("bedwars", 3)));
+
+        List<Op> ops = new java.util.ArrayList<>(); // MUST exceed adventure's 128KiB default-reader cap (~36B/op)
+        for (int i = 0; i < 6000; i++) ops.add(new Op(i, i * 0.5));
+        byte[] file = PolarShardCodec.amendUserData(t0, data -> data.put(OPS, List.copyOf(ops)));
+
+        Shard target = new Shard(instance);
+        PolarShardCodec.UserDataView view = PolarShardCodec.load(target, file);
+        List<Op> read = view.get(OPS);
+        assertNotNull(read, "the op log rides the amended snapshot");
+        assertEquals(6000, read.size());
+        assertEquals(new GameMeta("bedwars", 3), view.get(META), "existing user data survives the amend");
+        assertEquals(1, target.overlaySize(), "t0 blocks came along");
+        assertEquals(18000, target.timeOverride(), "sky overrides came along");
     }
 }
