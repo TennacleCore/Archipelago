@@ -2,10 +2,11 @@ package io.github.term4.shardkit;
 
 import io.github.term4.shardkit.testsupport.FakePlayer;
 import io.github.term4.shardkit.testsupport.HeadlessServerTest;
-import io.github.term4.worldaccess.WorldAccess;
-import io.github.term4.worldaccess.WorldPolicy;
+import io.github.term4.shardkit.world.WorldAccess;
+import io.github.term4.shardkit.world.WorldPolicy;
 import net.minestom.server.MinecraftServer;
 import net.minestom.server.coordinate.BlockVec;
+import net.minestom.server.coordinate.Point;
 import net.minestom.server.coordinate.Pos;
 import net.minestom.server.entity.GameMode;
 import net.minestom.server.entity.Player;
@@ -15,13 +16,18 @@ import net.minestom.server.event.EventDispatcher;
 import net.minestom.server.event.EventNode;
 import net.minestom.server.event.player.PlayerPacketEvent;
 import net.minestom.server.event.player.PlayerStartDiggingEvent;
+import net.minestom.server.instance.Weather;
 import net.minestom.server.instance.block.Block;
 import net.minestom.server.instance.block.BlockFace;
 import net.minestom.server.item.ItemStack;
 import net.minestom.server.item.Material;
+import net.minestom.server.network.packet.client.ClientPacket;
 import net.minestom.server.network.packet.client.play.ClientPlayerActionPacket;
 import net.minestom.server.network.packet.client.play.ClientPlayerBlockPlacementPacket;
 import net.minestom.server.network.packet.server.play.BlockChangePacket;
+import net.minestom.server.network.packet.server.play.ChangeGameStatePacket;
+import net.minestom.server.network.packet.server.play.MultiBlockChangePacket;
+import net.minestom.server.network.packet.server.play.SetTimePacket;
 import net.minestom.server.network.packet.server.play.WorldEventPacket;
 import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.AfterAll;
@@ -29,7 +35,9 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -63,8 +71,7 @@ class ShardViewTest extends HeadlessServerTest {
     }
 
     private static boolean dispatch(Player player, Object packet) {
-        PlayerPacketEvent event = new PlayerPacketEvent(player,
-                (net.minestom.server.network.packet.client.ClientPacket) packet);
+        PlayerPacketEvent event = new PlayerPacketEvent(player, (ClientPacket) packet);
         EventDispatcher.call(event);
         return event.isCancelled();
     }
@@ -193,14 +200,14 @@ class ShardViewTest extends HeadlessServerTest {
         shard.join(member.player);
         try {
             member.sent.clear(); bystander.sent.clear();
-            java.util.Map<net.minestom.server.coordinate.Point, Block> tower = new java.util.HashMap<>();
+            Map<Point, Block> tower = new HashMap<>();
             for (int y = 64; y <= 80; y++) tower.put(new BlockVec(10, y, 10), Block.OAK_PLANKS); // spans sections 4 + 5
             shard.setBlocks(tower);
-            var batches = member.sent(net.minestom.server.network.packet.server.play.MultiBlockChangePacket.class);
+            var batches = member.sent(MultiBlockChangePacket.class);
             assertEquals(2, batches.size(), "one packet per touched section");
             assertEquals(17, batches.stream().mapToInt(p -> p.blocks().length).sum(), "every block delivered once");
             assertEquals(0, member.sent(BlockChangePacket.class).size(), "no per-block packets");
-            assertEquals(0, bystander.sent(net.minestom.server.network.packet.server.play.MultiBlockChangePacket.class).size());
+            assertEquals(0, bystander.sent(MultiBlockChangePacket.class).size());
             assertTrue(shard.getBlock(10, 80, 10).compare(Block.OAK_PLANKS));
             assertTrue(instance.getBlock(10, 70, 10).isAir(), "the base map is never written");
         } finally {
@@ -255,17 +262,17 @@ class ShardViewTest extends HeadlessServerTest {
         try {
             member.sent.clear(); bystander.sent.clear();
             shard.setTime(18000);
-            shard.setWeather(new net.minestom.server.instance.Weather(1f, 0f));
-            assertEquals(1, member.sent(net.minestom.server.network.packet.server.play.SetTimePacket.class).size());
-            assertEquals(3, member.sent(net.minestom.server.network.packet.server.play.ChangeGameStatePacket.class).size());
-            assertEquals(0, bystander.sent(net.minestom.server.network.packet.server.play.SetTimePacket.class).size());
-            assertEquals(0, bystander.sent(net.minestom.server.network.packet.server.play.ChangeGameStatePacket.class).size());
+            shard.setWeather(new Weather(1f, 0f));
+            assertEquals(1, member.sent(SetTimePacket.class).size());
+            assertEquals(3, member.sent(ChangeGameStatePacket.class).size());
+            assertEquals(0, bystander.sent(SetTimePacket.class).size());
+            assertEquals(0, bystander.sent(ChangeGameStatePacket.class).size());
             assertEquals(18000, shard.time());
             assertTrue(shard.weather().isRaining());
 
             member.sent.clear();
             shard.leave(member.player);
-            assertEquals(1, member.sent(net.minestom.server.network.packet.server.play.SetTimePacket.class).size(), "base sky re-sent on leave");
+            assertEquals(1, member.sent(SetTimePacket.class).size(), "base sky re-sent on leave");
         } finally {
             shard.leave(member.player);
         }

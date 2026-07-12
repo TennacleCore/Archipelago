@@ -1,17 +1,22 @@
 package io.github.term4.shardkit;
 
+import io.github.term4.shardkit.event.ShardCreateEvent;
+import io.github.term4.shardkit.event.ShardDestroyEvent;
+import io.github.term4.shardkit.event.ShardTransferEvent;
 import io.github.term4.shardkit.testsupport.HeadlessServerTest;
-import io.github.term4.worldaccess.WorldAccess;
+import io.github.term4.shardkit.world.WorldAccess;
 import net.minestom.server.MinecraftServer;
 import net.minestom.server.collision.BoundingBox;
 import net.minestom.server.collision.PhysicsResult;
 import net.minestom.server.coordinate.Point;
 import net.minestom.server.coordinate.Pos;
 import net.minestom.server.coordinate.Vec;
+import net.minestom.server.entity.Entity;
 import net.minestom.server.entity.EntityType;
 import net.minestom.server.entity.ExperienceOrb;
 import net.minestom.server.entity.ItemEntity;
 import net.minestom.server.entity.LivingEntity;
+import net.minestom.server.entity.Player;
 import net.minestom.server.event.Event;
 import net.minestom.server.event.EventNode;
 import net.minestom.server.instance.block.Block;
@@ -103,8 +108,8 @@ class ShardTest extends HeadlessServerTest {
             assertEquals(a.diff(), b.diff(), "the fork snapshots the diff");
             assertEquals(18000, b.timeOverride(), "sky overrides copy");
 
-            List<net.minestom.server.entity.Entity> owned = b.entities().stream()
-                    .filter(e -> !(e instanceof net.minestom.server.entity.Player)).toList();
+            List<Entity> owned = b.entities().stream()
+                    .filter(e -> !(e instanceof Player)).toList();
             assertEquals(1, owned.size(), "the cloner reproduced the zombie");
             assertNotSame(zombie, owned.get(0));
             assertSame(b, WorldAccess.of(owned.get(0)), "the clone belongs to the fork");
@@ -137,8 +142,8 @@ class ShardTest extends HeadlessServerTest {
         a.spawn(orb, new Pos(54, 65, 50)).join();
         try {
             Shard b = a.fork(Shard::copyEntity);
-            List<net.minestom.server.entity.Entity> owned = b.entities().stream()
-                    .filter(e -> !(e instanceof net.minestom.server.entity.Player)).toList();
+            List<Entity> owned = b.entities().stream()
+                    .filter(e -> !(e instanceof Player)).toList();
             assertEquals(4, owned.size(), "plain + stamped + item + orb copy; the unstamped subclass is skipped");
             assertTrue(owned.stream().anyMatch(e -> e.getEntityType() == EntityType.COW), "the stamp supplier ran");
             var dataCopy = owned.stream().filter(e -> e instanceof LivingEntity l && l.getHealth() == 7f)
@@ -148,7 +153,7 @@ class ShardTest extends HeadlessServerTest {
             assertTrue(owned.stream().anyMatch(e -> e instanceof ItemEntity i
                     && i.getItemStack().equals(loot.getItemStack())), "plain item copies with its stack");
             assertTrue(owned.stream().anyMatch(e -> e instanceof ExperienceOrb o && o.getExperienceCount() == 11));
-            owned.forEach(net.minestom.server.entity.Entity::remove);
+            owned.forEach(Entity::remove);
         } finally {
             plain.remove();
             custom.remove();
@@ -273,6 +278,22 @@ class ShardTest extends HeadlessServerTest {
         assertEquals(original.overlaySize(), restored.overlaySize());
         original.forEachDiff((pos, block) -> assertEquals(block, restored.getBlock(pos), "state (incl. properties) round-trips"));
         assertEquals(original.diff(), restored.diff(), "diff() snapshots agree - the export/import pair");
+    }
+
+    @Test
+    void plainShardOnTickRidesTheServerScheduler() {
+        Shard plain = new Shard(instance);
+        List<Long> seen = new ArrayList<>();
+        Runnable stop = plain.onTick(seen::add);
+        try {
+            MinecraftServer.getSchedulerManager().processTick();
+            MinecraftServer.getSchedulerManager().processTick();
+            assertEquals(List.of(plain.ticks(), plain.ticks()), seen, "fires per server tick with the shard's clock");
+        } finally {
+            stop.run();
+        }
+        MinecraftServer.getSchedulerManager().processTick();
+        assertEquals(2, seen.size(), "the handle removed the hook");
     }
 
     @Test

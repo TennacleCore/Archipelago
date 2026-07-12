@@ -1,11 +1,13 @@
 package io.github.term4.shardkit;
 
+import io.github.term4.shardkit.testsupport.FakePlayer;
 import io.github.term4.shardkit.testsupport.HeadlessServerTest;
-import io.github.term4.worldaccess.WorldPolicy;
+import io.github.term4.shardkit.world.WorldPolicy;
 import net.minestom.server.coordinate.Pos;
 import net.minestom.server.entity.Entity;
 import net.minestom.server.entity.EntityType;
 import net.minestom.server.entity.LivingEntity;
+import net.minestom.server.entity.Player;
 import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.Test;
 
@@ -47,6 +49,29 @@ class WorldPolicyTest extends HeadlessServerTest {
         try {
             assertTrue(WorldPolicy.canAffect(staff, inShard), "the granted actor reaches the shard");
             assertFalse(WorldPolicy.canAffect(inShard, staff), "everyone else stays gated");
+        } finally {
+            WorldPolicy.set(ShardPolicy.DEFAULT);
+            inShard.remove();
+            staff.remove();
+        }
+    }
+
+    @Test
+    void policyGrantsEntityVisibilityWithoutAView() {
+        Shard game = new Shard(instance);
+        Player staff = FakePlayer.connect(instance, new Pos(40.5, 65, 40.5), "PolicyStaff").player;
+        LivingEntity inShard = new LivingEntity(EntityType.ZOMBIE);
+        try {
+            game.spawn(inShard, new Pos(42.5, 65, 42.5)).join();
+            assertFalse(inShard.getViewers().contains(staff), "base players never see shard entities");
+
+            WorldPolicy.set(new ShardPolicy() {
+                @Override public boolean sees(@NotNull Player viewer, @NotNull Entity subject) {
+                    return viewer == staff || ShardPolicy.super.sees(viewer, subject);
+                }
+            });
+            ShardView.refireViewableRule(inShard);
+            assertTrue(inShard.getViewers().contains(staff), "the policy grants entity visibility, no view needed");
         } finally {
             WorldPolicy.set(ShardPolicy.DEFAULT);
             inShard.remove();

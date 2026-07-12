@@ -1,7 +1,8 @@
 package io.github.term4.shardkit;
 
-import io.github.term4.worldaccess.WorldAccess;
-import io.github.term4.worldaccess.WorldPolicy;
+import io.github.term4.shardkit.world.WorldAccess;
+import io.github.term4.shardkit.world.WorldPolicy;
+import net.minestom.server.entity.Entity;
 import net.minestom.server.entity.Player;
 import org.jetbrains.annotations.NotNull;
 
@@ -13,6 +14,11 @@ import org.jetbrains.annotations.NotNull;
 public interface ShardPolicy extends WorldPolicy {
 
     ShardPolicy DEFAULT = new ShardPolicy() {};
+
+    @Override
+    default boolean sees(@NotNull Player viewer, @NotNull Entity subject) {
+        return ShardView.of(viewer).seesEntitiesOf(subject.getTag(WorldAccess.ENTITY_TAG));
+    }
 
     @Override
     default boolean seesBlocksOf(@NotNull Player viewer, @NotNull WorldAccess world) {

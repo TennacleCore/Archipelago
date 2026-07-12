@@ -1,6 +1,7 @@
 package io.github.term4.shardkit;
 
-import io.github.term4.worldaccess.WorldAccess;
+import io.github.term4.shardkit.world.WorldAccess;
+import io.github.term4.shardkit.world.WorldPolicy;
 import net.minestom.server.coordinate.Point;
 import net.minestom.server.entity.Entity;
 import net.minestom.server.entity.Player;
@@ -15,15 +16,10 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * What a player SEES of the sharded world, independent of game membership: exactly one block view (a shard's
- * overlay or the base map - overlays don't blend) plus the set of shards whose entities are visible. Purely
- * observational - mechanics targeting, broadcasts and block editing stay bound to {@link Shard#join membership};
- * a non-member's block view is read-only.
- *
- * <p>Immutable; compose from a preset: {@code ShardView.of(shard)} (spectate a game), {@code ShardView.base()
- * .withEntities(shard)} (staff: the game's players over the plain map), {@code ShardView.base().withAllEntities()}
- * (every player everywhere). Apply with {@link #set}; members get {@code of(their shard)} implicitly and
- * {@link Shard#join} clears any explicit view.
+ * What a player SEES of the sharded world: one block view (a shard's overlay or the base map) plus the set of
+ * shards whose entities are visible. Purely observational - targeting, broadcasts and editing follow
+ * {@link Shard#join membership}. Immutable; compose from {@link #base()}/{@link #of(Shard)} and apply with
+ * {@link #set}; members get their shard's view implicitly.
  */
 public final class ShardView {
 
@@ -86,8 +82,6 @@ public final class ShardView {
         return blocks == shard || seesEntitiesOf(shard);
     }
 
-    // --- per-player application ---
-
     /** The player's effective view: their explicit view, else the default for their shard binding. */
     public static @NotNull ShardView of(@NotNull Player player) {
         ShardView explicit = player.getTag(TAG);
@@ -111,9 +105,9 @@ public final class ShardView {
         applyChange(player, old);
     }
 
-    /** Visibility between two entities; the single rule every viewable/viewer predicate delegates to. */
+    /** Visibility between two entities; every viewable/viewer predicate delegates here, through the policy. */
     public static boolean sees(@NotNull Player viewer, @NotNull Entity subject) {
-        return of(viewer).seesEntitiesOf(subject.getTag(WorldAccess.ENTITY_TAG));
+        return WorldPolicy.canSee(viewer, subject);
     }
 
     /** This view with every reference to {@code shard} dropped; {@code null} when nothing shard-specific remains. */
@@ -160,26 +154,67 @@ public final class ShardView {
     /** The sky follows the block view: the new view's weather/time, or the base's when leaving. */
     private static void sendSkySwap(Player player, @Nullable Shard to) {
         if (!player.isOnline()) return;
-        if (to == null) Shard.sendBaseSky(player);
+        if (to == null) ShardSky.sendBase(player);
         else if (player.getInstance() == to.instance()) to.sendSky(player);
+    }
+
+    // Minestom's Option.updateRule holds the view's own mutex across its pair-locking callbacks - an
+    // unordered outer lock, so two concurrent rule updates deadlock AB-BA (soak-reproduced on 26.1.2).
+    // This outer lock restores a total order for the lib's own updates; a rule update racing a
+    // chunk-crossing's pair ops (inside Entity.tick) is the documented residual only Minestom can close.
+    // The helpers below are the only door - never call a rule update bare.
+    private static final Object RULE_LOCK = new Object();
+
+    static void applyViewableRule(Entity entity) {
+        synchronized (RULE_LOCK) {
+            entity.updateViewableRule(v -> sees(v, entity));
+        }
+    }
+
+    static void refireViewableRule(Entity entity) {
+        synchronized (RULE_LOCK) {
+            entity.updateViewableRule();
+        }
     }
 
     /** Stamps + re-evaluates both visibility directions for {@code player} (rules read tags live, so re-stamping is idempotent). */
     static void applyRules(Player player) {
-        player.updateViewableRule(v -> sees(v, player));
-        player.updateViewerRule(e -> sees(player, e));
+        // the plain default can't know about views; don't clobber a custom policy
+        if (WorldPolicy.get() == WorldPolicy.SAME_WORLD) WorldPolicy.set(ShardPolicy.DEFAULT);
+        synchronized (RULE_LOCK) {
+            player.updateViewableRule(v -> sees(v, player));
+            player.updateViewerRule(e -> sees(player, e));
+        }
     }
 
-    /** Re-sends every position either overlay touches, as the new view sees it (loaded chunks only - chunk load re-applies). */
+    /**
+     * Re-sends every position where the two views can diverge, as the new view sees it (loaded chunks only -
+     * chunk load re-applies). Chains diverge only below their lowest common ancestor - shared layers render
+     * identically - so a sibling layer switch re-sends just the diverging diffs.
+     */
     private static void sendBlockSwap(Player player, @Nullable Shard from, @Nullable Shard to) {
         if (!player.isOnline()) return;
         var in = player.getInstance();
+        Shard lca = lowestCommonAncestor(from, to);
+        Set<Point> positions = new HashSet<>();
         // each side only if the player is in that shard's world (a swap can cross instances)
-        if (from != null && in == from.instance()) {
-            Shard newView = to != null && in == to.instance() ? to : null;
-            from.forEachDiff((pos, block) -> sendViewAt(player, newView, pos));
+        if (from != null && in == from.instance()) collectChainDiff(from, lca, positions);
+        if (to != null && in == to.instance()) collectChainDiff(to, lca, positions);
+        Shard newView = to != null && in == to.instance() ? to : null;
+        for (Point pos : positions) sendViewAt(player, newView, pos);
+    }
+
+    private static void collectChainDiff(Shard shard, @Nullable Shard stop, Set<Point> out) {
+        for (Shard s = shard; s != null && s != stop; s = s.parent()) s.forEachDiff((pos, block) -> out.add(pos));
+    }
+
+    private static @Nullable Shard lowestCommonAncestor(@Nullable Shard a, @Nullable Shard b) {
+        for (Shard s = a; s != null; s = s.parent()) {
+            for (Shard t = b; t != null; t = t.parent()) {
+                if (s == t) return s;
+            }
         }
-        if (to != null && in == to.instance()) to.forEachDiff((pos, block) -> sendViewAt(player, to, pos));
+        return null;
     }
 
     private static void sendViewAt(Player player, @Nullable Shard view, Point pos) {
