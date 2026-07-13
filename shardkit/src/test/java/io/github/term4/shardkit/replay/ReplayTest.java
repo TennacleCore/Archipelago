@@ -462,9 +462,7 @@ class ReplayTest {
         byte[] file;
         try {
             stage.spawn(snowball, new Pos(4.5, 70, 4.5)).join();
-            tick();
-            tick();
-            tick(); // the entity rests: its track goes silent after the first sighting
+            for (int i = 0; i < 8; i++) tick(); // the entity rests: its track goes silent after the first sighting
         } finally {
             file = rec.stop();
             snowball.remove();
@@ -478,7 +476,8 @@ class ReplayTest {
             assertNotNull(twin);
             await("twin lands", () -> twin.getInstance() != null);
             twin.teleport(new Pos(4.5, 65, 4.5)).join(); // a physics twin drifting (falling) off a silent track
-            tick();
+            // the pin waits out the rest grace (a momentary track stall is not a rest), then snaps back
+            for (int i = 0; i < 4; i++) tick();
             await("the silent track pins the twin back", () -> twin.getPosition().y() == 70);
         } finally {
             pb.halt();

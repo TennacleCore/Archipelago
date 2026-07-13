@@ -46,6 +46,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
+import java.util.function.Predicate;
 import java.util.function.UnaryOperator;
 
 /**
@@ -59,6 +60,7 @@ public final class Recording {
     private static final Logger LOGGER = LoggerFactory.getLogger(Recording.class);
 
     private final Shard shard;
+    private final Predicate<Shard> layerFilter;
     private final ShardFile.Content t0;
     private final Map<Recordable<?>, Queue<Recorded<?>>> ops = new ConcurrentHashMap<>();
     private final List<Dispatcher> dispatchers;
@@ -84,8 +86,9 @@ public final class Recording {
     private final AtomicBoolean active = new AtomicBoolean(true);
     private boolean loggedError;
 
-    Recording(@NotNull Shard shard) {
+    Recording(@NotNull Shard shard, @NotNull Predicate<Shard> layerFilter) {
         this.shard = shard;
+        this.layerFilter = layerFilter;
         this.t0 = ShardFile.snapshot(shard);
         layerIds.put(shard, nextLayer.getAndIncrement()); // the recorded root is always layer 0
         watchBlocks(shard, 0);
@@ -142,14 +145,17 @@ public final class Recording {
         return entity.getTag(WorldAccess.ENTITY_TAG) instanceof Shard bound && inTree(bound);
     }
 
+    // the root always records; an excluded layer cuts off its whole subtree (a child's diff is
+    // meaningless without its parent)
     private boolean inTree(Shard bound) {
         for (Shard s = bound; s != null; s = s.parent()) {
             if (s == shard) return true;
+            if (!layerFilter.test(s)) return false;
         }
         return false;
     }
 
-    /** The recorded tree's live layer shards, parents before children (the sweep and samplers iterate this). */
+    /** The recorded layer shards, parents before children (the sweep and samplers iterate this). */
     public @NotNull List<Shard> layers() {
         List<Shard> out = new ArrayList<>();
         collectLayers(shard, out);
@@ -158,13 +164,16 @@ public final class Recording {
 
     private void collectLayers(Shard s, List<Shard> out) {
         out.add(s);
-        for (Shard child : s.children()) collectLayers(child, out);
+        for (Shard child : s.children()) {
+            if (layerFilter.test(child)) collectLayers(child, out);
+        }
     }
 
     /** {@code layer}'s id in this recording; first sight registers it (create op + its relative diff, dumped as layered block ops). */
     public int layer(@NotNull Shard layer) {
         Integer known = layerIds.get(layer);
         if (known != null) return known;
+        if (!inTree(layer)) throw new IllegalArgumentException("not a recorded layer (outside the tree, or filtered out)");
         int parent = layer.parent() == null ? 0 : layer(layer.parent()); // outside computeIfAbsent: no reentry
         return layerIds.computeIfAbsent(layer, l -> {
             int id = nextLayer.getAndIncrement();

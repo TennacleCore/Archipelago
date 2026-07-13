@@ -35,8 +35,10 @@ import org.jetbrains.annotations.Nullable;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Function;
 
 /** The core channels' playback side. */
@@ -245,6 +247,7 @@ final class Appliers {
         private record Pin(Pos pos, long tick) {}
 
         private final Map<Integer, Pin> lastTrack = new HashMap<>();
+        private final Set<Integer> reversedTwins = new HashSet<>();
         private final LookBack<Integer, Channels.EntityMove> history =
                 new LookBack<>(Channels.ENTITY_MOVES, Channels.EntityMove::seq);
 
@@ -261,6 +264,8 @@ final class Appliers {
         // own physics IS the wire; the track hard-resyncs only on real divergence, and the rest pin (below,
         // tighter) trues up the final position once the track goes silent.
         private static final double RESYNC_SQ = 1.0;
+        /** Silent-track ticks before the rest pin may fire (a stall is not a rest). */
+        private static final long REST_GRACE_TICKS = 3;
 
         @Override
         public void apply(@NotNull Playback pb, @NotNull Recorded<Channels.EntityMove> op) {
@@ -287,9 +292,33 @@ final class Appliers {
 
         private void drive(Playback pb, int seq, Pos target, boolean hard) {
             Entity e = pb.entity(seq);
-            if (e == null || e.getInstance() == null) return; // spawn is async; the next track op corrects
+            // the pin advances even while the async spawn hasn't landed: with a stale spawn-tick anchor,
+            // the rest pin yanked a freshly revived twin back to its spawn point (zero velocity + teleport
+            // = the 1.8 frozen-item chop, capture-diagnosed)
             Pin previous = lastTrack.put(seq, new Pin(target, pb.tick()));
-            if (Visuals.standIn(e) || hard) {
+            if (e == null || e.getInstance() == null) return; // the next track op (or the pin) places it
+            if (Visuals.standIn(e)) {
+                e.teleport(target);
+                return;
+            }
+            if (hard) {
+                // reverse is non-physical (a sim can't fall upwards): the track drives, but through the
+                // tracker's RELATIVE-MOVE wire - what a live entity emits, so clients lerp it; a teleport
+                // packet per op reads as snapping. Entry parks the twin's own physics ONCE (no per-tick
+                // velocity packets) so only the track moves it
+                if (reversedTwins.add(seq)) {
+                    e.setVelocity(Vec.ZERO);
+                    e.setNoGravity(true);
+                }
+                e.refreshPosition(target, false, true);
+                return;
+            }
+            if (reversedTwins.remove(seq)) { // forward again: free-run resumes, re-seeded along the track
+                e.setNoGravity(false);
+                if (previous != null && pb.tick() > previous.tick()) {
+                    long dt = pb.tick() - previous.tick();
+                    e.setVelocity(target.sub(previous.pos()).asVec().div(dt).mul(ServerFlag.SERVER_TICKS_PER_SECOND));
+                }
                 e.teleport(target);
                 return;
             }
@@ -311,11 +340,16 @@ final class Appliers {
                 var entry = it.next();
                 Entity e = pb.entity(entry.getKey());
                 if (e == null || e.isRemoved()) {
+                    reversedTwins.remove(entry.getKey());
                     it.remove();
                     continue;
                 }
                 Pin pin = entry.getValue();
-                if (pin.tick() == pb.tick()) continue; // this tick's track op already placed it
+                // a track can stall a tick or two WITHOUT the entity resting: the RECORDED item's own async
+                // spawn holds its position (no delta, no ops) while the revived twin already flies - pinning
+                // then sends the zero+snap that kills a 1.8 client's local item sim (capture-diagnosed).
+                // only a track silent past the grace is a real rest
+                if (pb.tick() - pin.tick() < REST_GRACE_TICKS) continue;
                 if (e.getInstance() != null && e.getPosition().distanceSquared(pin.pos()) > toleranceSq(e)) {
                     e.setVelocity(Vec.ZERO); // stop the drift, not just the symptom
                     e.teleport(pin.pos());

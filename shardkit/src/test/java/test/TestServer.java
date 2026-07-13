@@ -511,7 +511,7 @@ public final class TestServer {
         Argument<String> replayName = ArgumentType.Word("replayName");
         Argument<Long> seekTick = ArgumentType.Long("tick");
         replay.setDefaultExecutor((sender, ctx) ->
-                sender.sendMessage("usage: /replay record <shard> | stop <name> | play <name> <newShard> [visual]"
+                sender.sendMessage("usage: /replay record <shard> [solo] | stop <name> | play <name> <newShard> [visual]"
                         + " | seek <tick> | reverse | forward | pause | resume | rate <r> | rewind <ticks>"
                         + " | commit | state <actor> | bookmark <name> | bookmarks | goto <name> | halt"));
         replay.addSyntax((sender, ctx) -> {
@@ -543,6 +543,16 @@ public final class TestServer {
                 sender.sendMessage("[replay] recording '" + ctx.get(name) + "' - build/move, then /replay stop <name>");
             });
         }, ArgumentType.Literal("record"), name);
+        // solo = the layer filter demo: just this shard, none of its child layers
+        replay.addSyntax((sender, ctx) -> {
+            if (recording != null) { sender.sendMessage("[replay] already recording - /replay stop <name> first"); return; }
+            Shard g = shards.byName(ctx.get(name));
+            if (g == null) { sender.sendMessage("[shard] no shard named '" + ctx.get(name) + "'"); return; }
+            offClock(() -> {
+                recording = Replay.record(g, layer -> false);
+                sender.sendMessage("[replay] recording '" + ctx.get(name) + "' SOLO (child layers excluded)");
+            });
+        }, ArgumentType.Literal("record"), name, ArgumentType.Literal("solo"));
         replay.addSyntax((sender, ctx) -> {
             if (recording == null) { sender.sendMessage("[replay] nothing is recording"); return; }
             Recording rec = recording;

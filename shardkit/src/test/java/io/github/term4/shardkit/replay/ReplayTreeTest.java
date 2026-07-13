@@ -148,6 +148,44 @@ class ReplayTreeTest {
     }
 
     @Test
+    void layerFiltersScopeTheRecordedTree() {
+        ShardManager shards = new ShardManager();
+        Shard stage = shards.create(instance, "replay-filter-stage");
+        Shard keep = shards.child(stage, "replay-filter-keep");
+        Shard skip = shards.child(stage, "replay-filter-skip");
+        Shard under = shards.child(skip, "replay-filter-under"); // the filter ACCEPTS it; its parent doesn't
+        Entity inKeep = new Entity(EntityType.ARMOR_STAND);
+        Entity inSkip = new Entity(EntityType.ARMOR_STAND);
+        Playback pb = null;
+        try {
+            Recording rec = Replay.record(stage, layer -> layer != skip);
+            keep.spawn(inKeep, new Pos(2.5, 66, 2.5));
+            skip.spawn(inSkip, new Pos(3.5, 66, 3.5));
+            tick(); // the sweep sights kept layers + their entities
+            keep.setBlock(new Vec(1, 75, 1), Block.GOLD_BLOCK);
+            skip.setBlock(new Vec(2, 75, 2), Block.GOLD_BLOCK);  // excluded: never hooked
+            under.setBlock(new Vec(3, 75, 3), Block.GOLD_BLOCK); // subtree of an excluded layer: also out
+            tick();
+            byte[] file = rec.stop();
+
+            assertEquals(1, rec.counts().getOrDefault("replay:layer", 0), "one create: the kept child only");
+            assertEquals(1, rec.counts().getOrDefault("replay:block", 0), "excluded layers' writes never record");
+            assertEquals(1, rec.counts().getOrDefault("replay:spawn", 0), "excluded layers' entities never sweep");
+
+            Shard theater = new Shard(instance);
+            pb = Replay.play(theater, file);
+            for (int i = 0; i < 3; i++) tick();
+            assertNotNull(pb.layer(1), "the kept layer rises");
+            assertNull(pb.layer(2), "no second layer ever existed");
+        } finally {
+            if (pb != null) pb.halt();
+            shards.destroy(stage);
+            inKeep.remove();
+            inSkip.remove();
+        }
+    }
+
+    @Test
     void layersCreatedAndDestroyedMidRecordingReplayTheirLifecycle() {
         ShardManager shards = new ShardManager();
         Shard stage = shards.create(instance, "replay-life-stage");

@@ -16,6 +16,7 @@ import net.minestom.server.event.EventDispatcher;
 import net.minestom.server.event.EventNode;
 import net.minestom.server.event.entity.EntityDespawnEvent;
 import net.minestom.server.event.entity.EntityItemMergeEvent;
+import net.minestom.server.event.item.PickupItemEvent;
 import net.minestom.server.event.player.PlayerBlockBreakEvent;
 import net.minestom.server.event.player.PlayerBlockInteractEvent;
 import net.minestom.server.event.player.PlayerBlockPlaceEvent;
@@ -70,26 +71,41 @@ final class BlockRouting {
                     && player.getInstance() == d.instance() ? d : null;
             Shard viewed = ShardView.of(player).blocks();
             if (viewed != null && player.getInstance() != viewed.instance()) viewed = null;
-            boolean handled;
-            if (bound != null && bound == viewed) {
-                handled = place ? place(bound, player, (ClientPlayerBlockPlacementPacket) e.getPacket())
-                        : dig(bound, player, (ClientPlayerActionPacket) e.getPacket());
-            } else if (viewed != null && bound != viewed && WorldPolicy.canEdit(player, viewed)) {
-                handled = place ? place(viewed, player, (ClientPlayerBlockPlacementPacket) e.getPacket())
-                        : dig(viewed, player, (ClientPlayerActionPacket) e.getPacket());
-            } else if (bound != null || viewed != null) {
-                handled = place ? readOnlyPlace(player, viewed, (ClientPlayerBlockPlacementPacket) e.getPacket())
-                        : readOnlyDig(player, viewed, (ClientPlayerActionPacket) e.getPacket());
-            } else return;
-            if (handled) {
-                // ack AFTER the block work, like the stock listeners: an early ack rolls the modern client's
-                // prediction back to the pre-edit state until our block packet lands (jitter breaking the
-                // block under your own feet)
-                int sequence = place ? ((ClientPlayerBlockPlacementPacket) e.getPacket()).sequence()
-                        : ((ClientPlayerActionPacket) e.getPacket()).sequence();
-                player.sendPacket(new AcknowledgeBlockChangePacket(sequence));
-                e.setCancelled(true);
+            Shard edited;
+            if (bound != null && bound == viewed) edited = bound;
+            else if (viewed != null && bound != viewed && WorldPolicy.canEdit(player, viewed)) edited = viewed;
+            else if (bound != null || viewed != null) edited = null; // read-only: swallowed + resynced
+            else return;
+            // cheap thread-safe claim checks keep the cancel decision synchronous; unclaimed packets
+            // (interactions, throwables, drops) stay Minestom's
+            if (place ? !player.getItemInHand(((ClientPlayerBlockPlacementPacket) e.getPacket()).hand()).material().isBlock()
+                    : !digs((ClientPlayerActionPacket) e.getPacket())) {
+                return;
             }
+            e.setCancelled(true);
+            // ack AFTER the block work, like the stock listeners: an early ack rolls the modern client's
+            // prediction back to the pre-edit state until our block packet lands (jitter breaking the
+            // block under your own feet)
+            int sequence = place ? ((ClientPlayerBlockPlacementPacket) e.getPacket()).sequence()
+                    : ((ClientPlayerActionPacket) e.getPacket()).sequence();
+            if (edited == null) { // no shard writes: resync from the viewed chain, thread-safe reads
+                if (place) readOnlyPlace(player, viewed, (ClientPlayerBlockPlacementPacket) e.getPacket());
+                else readOnlyDig(player, viewed, (ClientPlayerActionPacket) e.getPacket());
+                player.sendPacket(new AcknowledgeBlockChangePacket(sequence));
+                return;
+            }
+            // the write path runs on the EDITED shard's clock: overlay writes are single-writer, and an
+            // observer with edit rights (or a server-ticked member of a domain shard) arrives on a foreign
+            // thread; an attached member is already on it and runs inline
+            var packet = e.getPacket();
+            Runnable work = () -> {
+                if (place) place(edited, player, (ClientPlayerBlockPlacementPacket) packet);
+                else dig(edited, player, (ClientPlayerActionPacket) packet);
+                player.sendPacket(new AcknowledgeBlockChangePacket(sequence));
+            };
+            var domain = edited.domain();
+            if (domain != null && !domain.onThread()) domain.execute(work);
+            else work.run();
         });
         // late joiners get the visibility rules, or they'd see every shard's players/entities until the next join/leave
         node.addListener(PlayerSpawnEvent.class, e -> {
@@ -109,6 +125,11 @@ final class BlockRouting {
         node.addListener(EntityItemMergeEvent.class, e -> {
             if (!WorldPolicy.canAffect(e.getEntity(), e.getMerged())) e.setCancelled(true);
         });
+        // pickup is only viewer-gated upstream - an observer VIEWING a game's entities is a viewer of its
+        // drops, and an uncancelled pickup REMOVES the item; same cross-world gate as the merge scan
+        node.addListener(PickupItemEvent.class, e -> {
+            if (!WorldPolicy.canAffect(e.getLivingEntity(), e.getItemEntity())) e.setCancelled(true);
+        });
         node.addListener(PlayerChunkLoadEvent.class, e -> {
             Shard viewed = ShardView.of(e.getPlayer()).blocks();
             if (viewed == null || e.getPlayer().getInstance() != viewed.instance()) return;
@@ -117,13 +138,20 @@ final class BlockRouting {
         return node;
     }
 
-    /** Shard-backed placement; {@code true} = handled. Non-block items pass to Minestom (interactions, throwables). */
-    private static boolean place(Shard shard, Player player, ClientPlayerBlockPlacementPacket p) {
+    /** The dig statuses this routing claims; drops and item-state actions stay Minestom's. */
+    private static boolean digs(ClientPlayerActionPacket p) {
+        var status = p.status();
+        return status == ClientPlayerActionPacket.Status.STARTED_DIGGING
+                || status == ClientPlayerActionPacket.Status.FINISHED_DIGGING
+                || status == ClientPlayerActionPacket.Status.CANCELLED_DIGGING;
+    }
+
+    /** Shard-backed placement (claimed: the held item is a block). */
+    private static void place(Shard shard, Player player, ClientPlayerBlockPlacementPacket p) {
         Instance base = shard.instance();
         ItemStack held = player.getItemInHand(p.hand());
         Material material = held.material();
-        if (!material.isBlock()) return false;
-        if (!base.isChunkLoaded(p.blockPosition())) return true;
+        if (!base.isChunkLoaded(p.blockPosition())) return;
         BlockVec clicked = p.blockPosition().asBlockVec();
         Vec cursor = new Vec(p.cursorPositionX(), p.cursorPositionY(), p.cursorPositionZ());
         Block interacted = shard.getBlock(clicked);
@@ -131,7 +159,7 @@ final class BlockRouting {
         // block-handler onInteract is skipped: overlay writes never attach handlers
         PlayerBlockInteractEvent interact = new PlayerBlockInteractEvent(player, p.hand(), base, interacted, clicked, cursor, p.blockFace());
         EventDispatcher.call(interact);
-        if (interact.isBlockingItemUse()) return true;
+        if (interact.isBlockingItemUse()) return;
 
         boolean canPlace = switch (player.getGameMode()) {
             case SPECTATOR -> false;
@@ -160,14 +188,14 @@ final class BlockRouting {
         DimensionType dim = shard.dimension();
         if (target.y() >= dim.maxY() || target.y() < dim.minY()) {
             rejectPlace(shard, player, clicked, target);
-            return true;
+            return;
         }
         if (!base.getWorldBorder().inBounds(target)) canPlace = false;
 
         Block block = held.get(DataComponents.BLOCK_STATE, ItemBlockState.EMPTY).apply(material.block());
         if (!canPlace || intersectsEntity(shard, target, player, block)) {
             rejectPlace(shard, player, clicked, target);
-            return true;
+            return;
         }
         // orientation/shape rules over the SHARD view; the base pipeline runs them inside placeBlock - here pre-event
         var rule = manager.getBlockPlacementRule(block);
@@ -175,7 +203,7 @@ final class BlockRouting {
             Block ruled = rule.blockPlace(new BlockPlacementRule.PlacementState(
                     (x, y, z, cond) -> shard.getBlock(x, y, z, cond), block, p.blockFace(), target,
                     cursor, player.getPosition(), held, player.isSneaking()));
-            if (ruled == null) { rejectPlace(shard, player, clicked, target); return true; } // rule rejected the spot
+            if (ruled == null) { rejectPlace(shard, player, clicked, target); return; } // rule rejected the spot
             block = ruled;
         }
         PlayerBlockPlaceEvent event = new PlayerBlockPlaceEvent(player, base, block, p.blockFace(), target, cursor, p.hand());
@@ -183,44 +211,41 @@ final class BlockRouting {
         EventDispatcher.call(event);
         if (event.isCancelled()) {
             rejectPlace(shard, player, clicked, target);
-            return true;
+            return;
         }
         shard.setBlock(target, event.getBlock());
         if (event.doesConsumeBlock()) player.setItemInHand(p.hand(), held.consume(1));
         else player.getInventory().update();
-        return true;
     }
 
-    /** Shard-backed digging; {@code true} = handled. Trusts the client's FINISHED timing like the base pipeline. */
-    private static boolean dig(Shard shard, Player player, ClientPlayerActionPacket p) {
+    /** Shard-backed digging (claimed: a {@link #digs} status). Trusts the client's FINISHED timing like the base pipeline. */
+    private static void dig(Shard shard, Player player, ClientPlayerActionPacket p) {
         Instance base = shard.instance();
         var status = p.status();
         boolean start = status == ClientPlayerActionPacket.Status.STARTED_DIGGING;
         boolean finish = status == ClientPlayerActionPacket.Status.FINISHED_DIGGING;
-        boolean cancel = status == ClientPlayerActionPacket.Status.CANCELLED_DIGGING;
-        if (!start && !finish && !cancel) return false; // drops / item state etc. stay Minestom's
-        if (!base.isChunkLoaded(p.blockPosition())) return true;
+        if (!base.isChunkLoaded(p.blockPosition())) return;
         BlockVec pos = p.blockPosition().asBlockVec();
         Block block = shard.getBlock(pos);
-        if (cancel) {
+        if (!start && !finish) { // cancelled
             EventDispatcher.call(new PlayerCancelDiggingEvent(player, base, block, pos));
-            return true;
+            return;
         }
-        if (block.isAir()) return true;
+        if (block.isAir()) return;
         if (shouldPreventBreaking(player, block)) {
             resync(shard, player, pos, pos);
-            return true;
+            return;
         }
         int breakTicks = BlockBreakCalculation.breakTicks(block, player);
         if (start && breakTicks != 0) { // the client animates the dig; its FINISHED completes it
             EventDispatcher.call(new PlayerStartDiggingEvent(player, base, block, pos, p.blockFace()));
-            return true;
+            return;
         }
         if (finish) {
             if (breakTicks == BlockBreakCalculation.UNBREAKABLE) { // hacked-client FINISH on bedrock
                 EventDispatcher.call(new PlayerCancelDiggingEvent(player, base, block, pos));
                 resync(shard, player, pos, pos);
-                return true;
+                return;
             }
             PlayerFinishDiggingEvent finishEvent = new PlayerFinishDiggingEvent(player, base, block, pos);
             EventDispatcher.call(finishEvent);
@@ -230,14 +255,13 @@ final class BlockRouting {
         EventDispatcher.call(event);
         if (event.isCancelled()) {
             resync(shard, player, pos, pos);
-            return true;
+            return;
         }
         shard.setBlock(pos, event.getResultBlock());
         var fx = new WorldEventPacket(WorldEvent.PARTICLES_DESTROY_BLOCK.id(), pos, block.stateId(), false);
         for (Player w : shard.watchers()) {
             if (w != player) w.sendPacket(fx);
         }
-        return true;
     }
 
     // upstream PlayerActionListener.shouldPreventBreaking
@@ -255,24 +279,17 @@ final class BlockRouting {
     }
 
     /** A non-member's (or view-swapped member's) edit: swallowed, the client corrected from its viewed world. */
-    private static boolean readOnlyPlace(Player player, @Nullable Shard viewed, ClientPlayerBlockPlacementPacket p) {
-        if (!player.getItemInHand(p.hand()).material().isBlock()) return false;
+    private static void readOnlyPlace(Player player, @Nullable Shard viewed, ClientPlayerBlockPlacementPacket p) {
         player.getInventory().update();
         BlockVec clicked = p.blockPosition().asBlockVec();
         sendViewedBlock(player, viewed, clicked);
         sendViewedBlock(player, viewed, clicked.relative(p.blockFace()));
-        return true;
     }
 
-    private static boolean readOnlyDig(Player player, @Nullable Shard viewed, ClientPlayerActionPacket p) {
-        var status = p.status();
-        if (status != ClientPlayerActionPacket.Status.STARTED_DIGGING
-                && status != ClientPlayerActionPacket.Status.FINISHED_DIGGING
-                && status != ClientPlayerActionPacket.Status.CANCELLED_DIGGING) return false;
-        if (status != ClientPlayerActionPacket.Status.CANCELLED_DIGGING) {
+    private static void readOnlyDig(Player player, @Nullable Shard viewed, ClientPlayerActionPacket p) {
+        if (p.status() != ClientPlayerActionPacket.Status.CANCELLED_DIGGING) {
             sendViewedBlock(player, viewed, p.blockPosition().asBlockVec());
         }
-        return true;
     }
 
     private static void sendViewedBlock(Player player, @Nullable Shard viewed, Point pos) {

@@ -19,6 +19,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.function.UnaryOperator;
 
@@ -72,12 +73,21 @@ public final class Replay {
         SPAWN_HOOKS.add(hook);
     }
 
-    /** Starts recording {@code shard} (multiple concurrent recordings are fine). */
+    /** Starts recording {@code shard} and its whole layer tree (multiple concurrent recordings are fine). */
     public static @NotNull Recording record(@NotNull Shard shard) {
+        return record(shard, layer -> true);
+    }
+
+    /**
+     * {@link #record(Shard)} recording only the child layers {@code layers} accepts - the root always
+     * records, and an excluded layer excludes its whole subtree (a child's diff is meaningless without its
+     * parent). {@code layer -> false} = just the root, no children.
+     */
+    public static @NotNull Recording record(@NotNull Shard shard, @NotNull Predicate<Shard> layers) {
         if (DISPATCHERS.isEmpty()) {
             throw new IllegalStateException("no recording sources registered - CoreChannels.register() or Replay.dispatchers(...)");
         }
-        Recording recording = new Recording(shard);
+        Recording recording = new Recording(shard, layers);
         EventDispatcher.call(new RecordingStartEvent(recording));
         return recording;
     }

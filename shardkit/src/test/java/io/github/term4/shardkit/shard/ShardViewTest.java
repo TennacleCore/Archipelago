@@ -2,6 +2,7 @@ package io.github.term4.shardkit.shard;
 
 import io.github.term4.shardkit.testsupport.FakePlayer;
 import io.github.term4.shardkit.testsupport.HeadlessServerTest;
+import io.github.term4.shardkit.ticking.ExecutionDomain;
 import io.github.term4.shardkit.world.WorldAccess;
 import io.github.term4.shardkit.world.WorldPolicy;
 import net.minestom.server.MinecraftServer;
@@ -9,11 +10,13 @@ import net.minestom.server.coordinate.BlockVec;
 import net.minestom.server.coordinate.Point;
 import net.minestom.server.coordinate.Pos;
 import net.minestom.server.entity.GameMode;
+import net.minestom.server.entity.ItemEntity;
 import net.minestom.server.entity.Player;
 import net.minestom.server.entity.PlayerHand;
 import net.minestom.server.event.Event;
 import net.minestom.server.event.EventDispatcher;
 import net.minestom.server.event.EventNode;
+import net.minestom.server.event.item.PickupItemEvent;
 import net.minestom.server.event.player.PlayerPacketEvent;
 import net.minestom.server.event.player.PlayerStartDiggingEvent;
 import net.minestom.server.instance.Weather;
@@ -24,6 +27,7 @@ import net.minestom.server.item.Material;
 import net.minestom.server.network.packet.client.ClientPacket;
 import net.minestom.server.network.packet.client.play.ClientPlayerActionPacket;
 import net.minestom.server.network.packet.client.play.ClientPlayerBlockPlacementPacket;
+import net.minestom.server.network.packet.server.play.AcknowledgeBlockChangePacket;
 import net.minestom.server.network.packet.server.play.BlockChangePacket;
 import net.minestom.server.network.packet.server.play.ChangeGameStatePacket;
 import net.minestom.server.network.packet.server.play.MultiBlockChangePacket;
@@ -159,6 +163,47 @@ class ShardViewTest extends HeadlessServerTest {
         } finally {
             ShardView.set(spectator.player, null);
             spectator.player.setItemInMainHand(ItemStack.AIR);
+        }
+    }
+
+    @Test
+    void editsMarshalOntoTheDomainShardsClock() {
+        ExecutionDomain domain = ExecutionDomain.create();
+        Shard shard = new Shard(instance, domain);
+        shard.join(member.player); // a plain Player isn't covered: a server-ticked member, foreign to the clock
+        member.player.setItemInMainHand(ItemStack.of(Material.STONE, 5));
+        try {
+            member.sent.clear();
+            assertTrue(dispatch(member.player, placePacket(7, 63, 7)), "claimed + cancelled synchronously");
+            // the write and the trailing ack run on the shard's own clock, not this thread
+            await("the placement lands on the domain clock", () -> shard.getBlock(7, 64, 7).compare(Block.STONE));
+            await("the ack follows the block work", () -> !member.sent(AcknowledgeBlockChangePacket.class).isEmpty());
+            assertTrue(instance.getBlock(7, 64, 7).isAir(), "the base map is never written");
+        } finally {
+            shard.leave(member.player);
+            member.player.setItemInMainHand(ItemStack.AIR);
+            domain.retire();
+        }
+    }
+
+    @Test
+    void crossWorldPickupsAreCancelled() {
+        Shard a = new Shard(instance);
+        Shard b = new Shard(instance);
+        ItemEntity drop = new ItemEntity(ItemStack.of(Material.DIAMOND));
+        a.spawn(drop, new Pos(1.5, 64, 1.5));
+        b.join(member.player);
+        try {
+            PickupItemEvent cross = new PickupItemEvent(member.player, drop);
+            EventDispatcher.call(cross);
+            assertTrue(cross.isCancelled(), "a foreign world's drop never picks up (the scan is viewer-gated only)");
+            a.join(member.player);
+            PickupItemEvent own = new PickupItemEvent(member.player, drop);
+            EventDispatcher.call(own);
+            assertFalse(own.isCancelled(), "own-world pickups pass");
+        } finally {
+            a.leave(member.player);
+            drop.remove();
         }
     }
 

@@ -4,17 +4,23 @@ import io.github.term4.shardkit.shard.Shard;
 import io.github.term4.shardkit.replay.core.Channels;
 import io.github.term4.shardkit.replay.core.CoreChannels;
 import io.github.term4.shardkit.replay.core.StateChannels;
+import io.github.term4.shardkit.ticking.ExecutionDomain;
 import io.github.term4.shardkit.testsupport.FakePlayer;
 import io.github.term4.shardkit.testsupport.HeadlessServerTest;
 import net.minestom.server.MinecraftServer;
 import net.minestom.server.coordinate.Pos;
+import net.minestom.server.entity.Entity;
+import net.minestom.server.entity.EntityType;
 import net.minestom.server.entity.EquipmentSlot;
 import net.minestom.server.item.ItemStack;
 import net.minestom.server.item.Material;
 import net.minestom.server.network.packet.server.play.BlockBreakAnimationPacket;
 import net.minestom.server.network.packet.server.play.EntityAnimationPacket;
 import net.minestom.server.network.packet.server.play.EntityEquipmentPacket;
+import net.minestom.server.network.packet.server.play.EntityPositionAndRotationPacket;
 import net.minestom.server.network.packet.server.play.EntityStatusPacket;
+import net.minestom.server.network.packet.server.play.EntityTeleportPacket;
+import net.minestom.server.network.packet.server.play.EntityVelocityPacket;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
@@ -156,6 +162,57 @@ class ReplayWireTest extends HeadlessServerTest {
             assertEquals(2, inv.get(1).amount());
         } finally {
             pb.halt();
+        }
+    }
+
+    @Test
+    void reversedTwinsRideTheRelativeMoveWire() {
+        Shard stage = new Shard(instance);
+        Entity real = new Entity(EntityType.SNOWBALL);
+        Recording rec = Replay.record(stage);
+        byte[] file;
+        try {
+            stage.spawn(real, new Pos(1.5, 75, 1.5)).join();
+            tick(); // sighted: spawn op + generic descriptor (a REVIVED self-simulating twin on playback)
+            for (int i = 2; i <= 7; i++) { // a hand-authored arc, one point per tick
+                rec.emit(Channels.ENTITY_MOVES, new Channels.EntityMove(0, 1.5 + i * 0.4, 75 - i * 0.2, 1.5, 0, 0));
+                tick();
+            }
+        } finally {
+            file = rec.stop();
+            real.remove();
+        }
+
+        // a DOMAIN theater: the twin must really tick (refreshPosition's wire arms off the entity's clock)
+        ExecutionDomain domain = ExecutionDomain.create();
+        Shard theater = new Shard(instance, domain);
+        FakePlayer viewer = FakePlayer.connect(instance, new Pos(4.5, 75, 4.5), "RewindWire");
+        theater.join(viewer.player);
+        Playback pb = Replay.play(theater, file);
+        try {
+            pb.pause(true); // hold at the end while the stage is set (a drained forward playback ends itself)
+            pb.seek(7);
+            await("the revived twin lands", () -> pb.entity(0) != null && pb.entity(0).getInstance() != null);
+            int twin = pb.entity(0).getEntityId();
+            long settle = domain.ticks();
+            await("the seek placement settles", () -> domain.ticks() >= settle + 3);
+            viewer.sent.clear();
+            pb.reverse(true);
+            pb.pause(false);
+            await("the timeline walks back across the arc", () -> pb.tick() <= 3);
+            long teleports = viewer.sent(EntityTeleportPacket.class).stream()
+                    .filter(p -> p.entityId() == twin).count();
+            long relMoves = viewer.sent(EntityPositionAndRotationPacket.class).stream()
+                    .filter(p -> p.entityId() == twin).count();
+            long velocities = viewer.sent(EntityVelocityPacket.class).stream()
+                    .filter(p -> p.entityId() == twin).count();
+            assertTrue(relMoves >= 2, "reverse rides the tracker's relative moves (saw " + relMoves + ")");
+            assertTrue(teleports <= 1, "no teleport packet per op (saw " + teleports + ")");
+            assertTrue(velocities <= 1, "one parking velocity at most (saw " + velocities + ")");
+        } finally {
+            pb.halt();
+            viewer.player.remove();
+            domain.retire();
         }
     }
 

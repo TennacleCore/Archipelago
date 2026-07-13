@@ -115,12 +115,25 @@ class ReplayBridgeTest extends HeadlessServerTest {
             assertTrue(wire.getOrDefault("EntityTeleportPacket", 0)
                     + wire.getOrDefault("EntityPositionSyncPacket", 0) <= 10,
                     "position snaps stay rare, got " + wire);
+            // a zero mid-flight kills the 1.8 client's local item sim (the frozen-drop capture); the
+            // landing sync's own zero is the only legitimate one
+            assertTrue(zeroVelocities(viewer, twin.getEntityId()) <= 1,
+                    "no zero-velocity kicks beyond the landing sync");
         } finally {
             if (pb != null) pb.halt();
             viewer.player.remove();
             stageClock.retire();
             theaterClock.retire();
         }
+    }
+
+    private static long zeroVelocities(FakePlayer viewer, int entityId) {
+        return viewer.sent.stream()
+                .map(sp -> net.minestom.server.network.packet.server.SendablePacket
+                        .extractServerPacket(net.minestom.server.network.ConnectionState.PLAY, sp))
+                .filter(p -> p instanceof net.minestom.server.network.packet.server.play.EntityVelocityPacket v
+                        && v.entityId() == entityId && v.velocity().equals(Vec.ZERO))
+                .count();
     }
 
     private static Map<String, Integer> classify(FakePlayer viewer, int entityId) {
