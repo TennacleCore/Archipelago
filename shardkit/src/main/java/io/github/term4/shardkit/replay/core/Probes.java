@@ -17,8 +17,6 @@ import net.minestom.server.event.Event;
 import net.minestom.server.event.EventNode;
 import net.minestom.server.event.entity.EntityDamageEvent;
 import net.minestom.server.event.item.PickupItemEvent;
-import net.minestom.server.event.player.PlayerBlockBreakEvent;
-import net.minestom.server.event.player.PlayerBlockPlaceEvent;
 import net.minestom.server.event.player.PlayerCancelDiggingEvent;
 import net.minestom.server.event.player.PlayerDeathEvent;
 import net.minestom.server.event.player.PlayerHandAnimationEvent;
@@ -42,7 +40,8 @@ final class Probes {
     private Probes() {}
 
     static List<Supplier<Dispatcher>> core() {
-        return List.of(LayerSampler::new, ActorSampler::new, EntitySampler::new, BlockProbe::new, ActProbe::new,
+        // no block probe: the block channel records at the Shard write hook (Recording.watchBlocks)
+        return List.of(LayerSampler::new, ActorSampler::new, EntitySampler::new, ActProbe::new,
                 LifeProbe::new, DigProbe::new, PickupProbe::new);
     }
 
@@ -180,24 +179,6 @@ final class Probes {
                 lastLayer.remove(e);
                 rec.remove(e, e.getPosition());
             }
-        }
-    }
-
-    static final class BlockProbe extends EventDispatcher {
-        @Override
-        protected void listen(@NotNull EventNode<Event> node, @NotNull Recording rec) {
-            node.addListener(PlayerBlockPlaceEvent.class, e -> {
-                if (!rec.covers(e.getPlayer())) return;
-                var p = e.getBlockPosition();
-                rec.emit(Channels.BLOCKS, new Channels.BlockOp(rec.layerOf(e.getPlayer()),
-                        p.blockX(), p.blockY(), p.blockZ(), Nbt.blockString(e.getBlock())));
-            });
-            node.addListener(PlayerBlockBreakEvent.class, e -> {
-                if (!rec.covers(e.getPlayer())) return;
-                var p = e.getBlockPosition();
-                rec.emit(Channels.BLOCKS, new Channels.BlockOp(rec.layerOf(e.getPlayer()),
-                        p.blockX(), p.blockY(), p.blockZ(), Nbt.blockString(e.getResultBlock())));
-            });
         }
     }
 

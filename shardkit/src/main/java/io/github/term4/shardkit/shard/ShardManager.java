@@ -93,7 +93,8 @@ public final class ShardManager {
         return register(top.flatten(cloner), name);
     }
 
-    private Shard register(Shard shard, @Nullable String name) {
+    /** Adopts an externally constructed shard (e.g. a {@code ShardFile.loadTree} layer) into the registry. */
+    public @NotNull Shard register(@NotNull Shard shard, @Nullable String name) {
         if (name != null && byName.putIfAbsent(name, shard) != null) {
             shard.reset(); // a fork already spawned its clones - drop them
             throw new IllegalArgumentException("shard name already in use: " + name);

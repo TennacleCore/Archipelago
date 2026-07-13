@@ -29,6 +29,15 @@ final class Overlay {
                 .put(local(pos.blockX(), pos.blockY(), pos.blockZ()), block);
     }
 
+    // single-writer (the owner clock); readers tolerate the empty-chunk window
+    void remove(Point pos) {
+        long key = CoordConversion.chunkIndex(pos.blockX() >> 4, pos.blockZ() >> 4);
+        ConcurrentHashMap<Integer, Block> chunk = chunks.get(key);
+        if (chunk == null) return;
+        chunk.remove(local(pos.blockX(), pos.blockY(), pos.blockZ()));
+        if (chunk.isEmpty()) chunks.remove(key, chunk);
+    }
+
     void forEach(BiConsumer<Point, Block> consumer) {
         chunks.forEach((chunkKey, blocks) -> blocks.forEach((local, block) ->
                 consumer.accept(unpack(chunkKey, local), block)));

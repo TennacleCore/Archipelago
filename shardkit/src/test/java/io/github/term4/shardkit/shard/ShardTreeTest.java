@@ -268,7 +268,8 @@ class ShardTreeTest extends HeadlessServerTest {
         Map<Point, Block> diff = flat.diff();
         assertEquals(Block.GOLD_BLOCK, diff.get(under), "the root layer rides along");
         assertEquals(Block.DIAMOND_BLOCK, diff.get(over));
-        assertEquals(Block.AIR, diff.get(broken), "the leaf's mask wins over the root's block");
+        assertTrue(flat.getBlock(broken).isAir(), "the leaf's mask wins over the root's block");
+        assertNull(diff.get(broken), "air over base air is no diff - the mask normalized away");
         assertEquals(13000, flat.timeOverride(), "the nearest sky override carries");
         assertEquals(2, flat.entities().size(), "every LAYER's entities gathered, not just the leaf's");
         assertEquals(1, root.entities().size(), "sources untouched");

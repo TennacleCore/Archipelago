@@ -5,7 +5,7 @@ import io.github.term4.shardkit.event.ShardDestroyEvent;
 import io.github.term4.shardkit.event.replay.RecordingStopEvent;
 import io.github.term4.shardkit.storage.EntityDescriptors;
 import io.github.term4.shardkit.storage.Nbt;
-import io.github.term4.shardkit.storage.polar.PolarShardCodec;
+import io.github.term4.shardkit.storage.ShardFile;
 import io.github.term4.shardkit.replay.channel.Dispatcher;
 import io.github.term4.shardkit.replay.channel.Recordable;
 import io.github.term4.shardkit.replay.channel.Recorded;
@@ -18,16 +18,21 @@ import net.kyori.adventure.nbt.CompoundBinaryTag;
 import net.kyori.adventure.nbt.ListBinaryTag;
 import net.minestom.server.MinecraftServer;
 import net.minestom.server.codec.Transcoder;
+import net.minestom.server.coordinate.Point;
 import net.minestom.server.coordinate.Pos;
+import net.minestom.server.coordinate.Vec;
 import net.minestom.server.entity.Entity;
+import net.minestom.server.instance.block.Block;
 import net.minestom.server.event.Event;
 import net.minestom.server.event.EventDispatcher;
 import net.minestom.server.event.EventNode;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -36,9 +41,11 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 import java.util.function.UnaryOperator;
 
 /**
@@ -52,7 +59,7 @@ public final class Recording {
     private static final Logger LOGGER = LoggerFactory.getLogger(Recording.class);
 
     private final Shard shard;
-    private final byte[] t0;
+    private final ShardFile.Content t0;
     private final Map<Recordable<?>, Queue<Recorded<?>>> ops = new ConcurrentHashMap<>();
     private final List<Dispatcher> dispatchers;
     private final Runnable stopSampler;
@@ -61,6 +68,9 @@ public final class Recording {
 
     // mutators hop via onOwner, but a retired domain runs them inline on the caller - stay concurrent-safe
     private final Map<Entity, Track> tracked = new ConcurrentHashMap<>();
+    private final Map<Point, String> covered = new ConcurrentHashMap<>();
+    private final List<Runnable> unhooks = new CopyOnWriteArrayList<>();
+    private final List<Replay.Bookmark> bookmarks = new CopyOnWriteArrayList<>();
     private final Map<Entity, String> pickedUpBy = new ConcurrentHashMap<>();
     private final Set<String> refreshActors = ConcurrentHashMap.newKeySet();
     private final Set<Integer> seen = ConcurrentHashMap.newKeySet();
@@ -70,13 +80,15 @@ public final class Recording {
     private final AtomicInteger nextLayer = new AtomicInteger();
     private final EventNode<Event> shardWatch;
     private volatile long tick;
+    private volatile boolean understructure = true;
     private final AtomicBoolean active = new AtomicBoolean(true);
     private boolean loggedError;
 
     Recording(@NotNull Shard shard) {
         this.shard = shard;
-        this.t0 = PolarShardCodec.save(shard, null, false);
+        this.t0 = ShardFile.snapshot(shard);
         layerIds.put(shard, nextLayer.getAndIncrement()); // the recorded root is always layer 0
+        watchBlocks(shard, 0);
         this.dispatchers = new ArrayList<>();
         Replay.dispatcherFactories().forEach(factory -> dispatchers.add(factory.get()));
         dispatchers.forEach(d -> d.start(this));
@@ -159,10 +171,24 @@ public final class Recording {
             emit(Channels.LAYERS, new Channels.Layer(id, parent, true));
             // the dump is a snapshot: a cross-clock layer's reads ride ITS clock or a batch could tear
             // (emits hop back with call-time stamps); a plain layer under a domain recording stays best-effort
-            onLayerClock(l, () -> l.forEachDiff((pos, block) -> emit(Channels.BLOCKS, new Channels.BlockOp(id,
-                    pos.blockX(), pos.blockY(), pos.blockZ(), Nbt.blockString(block)))));
+            onLayerClock(l, () -> {
+                l.forEachDiff((pos, block) -> emit(Channels.BLOCKS, new Channels.BlockOp(id,
+                        pos.blockX(), pos.blockY(), pos.blockZ(), Nbt.blockString(block))));
+                watchBlocks(l, id); // same clock task: no write lands between the dump and the hook
+            });
             return id;
         });
+    }
+
+    // the write hook is THE block source - player edits, server setBlocks, playback writes and commits all
+    // record here (a cancelled place never writes, so it never records); event probes would double these
+    private void watchBlocks(Shard layer, int id) {
+        if (!active.get()) return;
+        unhooks.add(layer.onBlockChange((pos, previous, block) -> {
+            if (id == 0) blockCovered(pos, previous);
+            emit(Channels.BLOCKS, new Channels.BlockOp(id,
+                    pos.blockX(), pos.blockY(), pos.blockZ(), Nbt.blockString(block)));
+        }));
     }
 
     private void onLayerClock(Shard layer, Runnable op) {
@@ -235,6 +261,42 @@ public final class Recording {
         });
     }
 
+    /**
+     * Records what {@code pos} showed before the recorded root's first write there. Rides out as tick-0
+     * block ops ahead of the channel: they hold the historical view when a playback theater is a child of
+     * the still-live shard (the time-rewind recipe) - a fresh theater's copies normalize away.
+     */
+    public void blockCovered(@NotNull Point pos, @NotNull Block before) {
+        if (!active.get() || !understructure) return;
+        covered.putIfAbsent(new Vec(pos.blockX(), pos.blockY(), pos.blockZ()), Nbt.blockString(before));
+    }
+
+    /**
+     * Whether {@link #blockCovered} masks are kept (default true). Archival view-only footage can drop them
+     * for size - up to one op per touched position; forward play, reverse viewing and seeks into a FRESH
+     * theater never need them, only rewinding over the still-live shard does.
+     */
+    public @NotNull Recording understructure(boolean keep) {
+        understructure = keep;
+        if (!keep) covered.clear();
+        return this;
+    }
+
+    /** Marks the current tick in the bookmark index (a goal, a bed break) - any thread, mid-game. */
+    public void bookmark(@NotNull String name) {
+        bookmark(name, CompoundBinaryTag.empty());
+    }
+
+    /** {@link #bookmark(String)} with an app payload. */
+    public void bookmark(@NotNull String name, @NotNull CompoundBinaryTag data) {
+        if (active.get()) bookmarks.add(new Replay.Bookmark(tick, name, data));
+    }
+
+    /** The bookmark index so far, in mark order. */
+    public @NotNull List<Replay.Bookmark> bookmarks() {
+        return List.copyOf(bookmarks);
+    }
+
     /** Whether {@code entity} is on the entity track (spawned, not yet removed). */
     public boolean tracks(@NotNull Entity entity) {
         return tracked.containsKey(entity);
@@ -267,30 +329,42 @@ public final class Recording {
 
     /** Ends the recording (a no-op when it already auto-ended) and returns the replay file: the t0 snapshot with the op log in its user data. */
     public byte @NotNull [] stop() {
-        endRecording();
-        return encodeFile();
+        return stop(null);
     }
 
-    /** {@link #stop()} with the encode (NBT build + zstd, pure CPU) off-thread; recording still ends immediately. */
-    public @NotNull CompletableFuture<byte[]> stopAsync() {
+    /** {@link #stop()} with the app's own {@link io.github.term4.shardkit.storage.DataKey} entries in the file (game results, metadata - read back via {@code ShardFile.userData} or {@code Playback.data}). */
+    public byte @NotNull [] stop(@Nullable Consumer<ShardFile.UserDataWriter> userData) {
         endRecording();
-        return CompletableFuture.supplyAsync(this::encodeFile);
+        return encodeFile(userData);
+    }
+
+    /** {@link #stop()} with the encode (NBT build + gzip, pure CPU) off-thread; recording still ends immediately. */
+    public @NotNull CompletableFuture<byte[]> stopAsync() {
+        return stopAsync(null);
+    }
+
+    /** {@link #stop(Consumer)}, encoded off-thread. */
+    public @NotNull CompletableFuture<byte[]> stopAsync(@Nullable Consumer<ShardFile.UserDataWriter> userData) {
+        endRecording();
+        return CompletableFuture.supplyAsync(() -> encodeFile(userData));
     }
 
     private void endRecording() {
         if (!active.compareAndSet(true, false)) return; // a manual stop may race the shard-death auto-end
         stopSampler.run();
+        unhooks.forEach(Runnable::run);
         dispatchers.forEach(d -> d.stop(this));
         MinecraftServer.getGlobalEventHandler().removeChild(shardWatch);
         EventDispatcher.call(new RecordingStopEvent(this));
     }
 
-    private byte[] encodeFile() {
+    private byte[] encodeFile(@Nullable Consumer<ShardFile.UserDataWriter> userData) {
         CompoundBinaryTag.Builder channels = CompoundBinaryTag.builder();
         ops.forEach((type, list) -> {
-            if (list.isEmpty()) return;
+            List<Recorded<?>> all = materialize(type, list);
+            if (all.isEmpty()) return;
             ListBinaryTag.Builder<CompoundBinaryTag> encoded = ListBinaryTag.builder(BinaryTagTypes.COMPOUND);
-            for (Recorded<?> op : list) {
+            for (Recorded<?> op : all) {
                 encoded.add(CompoundBinaryTag.builder().putLong("t", op.tick()).put("op", encode(type, op)).build());
             }
             channels.put(type.id(), CompoundBinaryTag.builder()
@@ -298,7 +372,37 @@ public final class Recording {
         });
         CompoundBinaryTag container = CompoundBinaryTag.builder()
                 .putInt("v", 1).putLong("ticks", tick).put("channels", channels.build()).build();
-        return PolarShardCodec.amendUserData(t0, data -> data.put(Replay.OPS, container));
+        return t0.encode(data -> {
+            if (userData != null) userData.accept(data);
+            if (!bookmarks.isEmpty()) data.put(Replay.BOOKMARKS, List.copyOf(bookmarks));
+            data.put(Replay.OPS, container); // last: the lib's slots always win
+        });
+    }
+
+    // BLOCKS rides out with the understructure masks prepended (position-sorted: deterministic bytes)
+    private List<Recorded<?>> materialize(Recordable<?> type, Queue<Recorded<?>> queue) {
+        if (type != Channels.BLOCKS || covered.isEmpty()) return List.copyOf(queue);
+        List<Recorded<?>> out = new ArrayList<>();
+        covered.entrySet().stream()
+                .sorted(Comparator.comparingInt((Map.Entry<Point, String> en) -> en.getKey().blockY())
+                        .thenComparingInt(en -> en.getKey().blockZ()).thenComparingInt(en -> en.getKey().blockX()))
+                .forEach(en -> out.add(new Recorded<>(0, new Channels.BlockOp(0, en.getKey().blockX(),
+                        en.getKey().blockY(), en.getKey().blockZ(), en.getValue()))));
+        out.addAll(queue);
+        return out;
+    }
+
+    /** The t0 snapshot (the in-memory playback seeds its theater from it). */
+    @NotNull ShardFile.Content t0() {
+        return t0;
+    }
+
+    // the in-memory playback seam: every non-empty channel's ops, in file order (masks included)
+    void forEachChannel(BiConsumer<Recordable<?>, List<Recorded<?>>> consumer) {
+        ops.forEach((type, list) -> {
+            List<Recorded<?>> all = materialize(type, list);
+            if (!all.isEmpty()) consumer.accept(type, all);
+        });
     }
 
     @SuppressWarnings("unchecked")

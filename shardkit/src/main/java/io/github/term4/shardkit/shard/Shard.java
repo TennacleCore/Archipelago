@@ -89,6 +89,7 @@ public final class Shard implements WorldAccess {
     private final ShardView memberView = ShardView.newMemberView(this);
     private final TagHandler tags = TagHandler.newHandler();
     private volatile @Nullable ExecutionDomain domain;
+    private final List<BlockChangeHook> blockHooks = new CopyOnWriteArrayList<>();
     private final List<LongConsumer> tickHooks = new CopyOnWriteArrayList<>();
     /** Removal handle of the one underlying registration driving {@link #tickHooks} on the current clock. */
     private @Nullable Runnable tickDriver;
@@ -212,6 +213,33 @@ public final class Shard implements WorldAccess {
         return d != null ? d.ticks() : base.getWorldAge();
     }
 
+    /** One view change through this shard's write API; {@code previous} = the pre-write view. */
+    @FunctionalInterface
+    public interface BlockChangeHook {
+        void changed(@NotNull Point pos, @NotNull Block previous, @NotNull Block block);
+    }
+
+    /**
+     * Fires when a write changes this shard's view of a position - setBlock/setBlocks/pinBlock/reset; view
+     * no-ops and base/parent edits don't fire. Runs on the writing thread. Returns the removal handle.
+     * Replay recordings ride this: player edits, server writes, playback writes and commits all record
+     * through the one seam.
+     */
+    public @NotNull Runnable onBlockChange(@NotNull BlockChangeHook hook) {
+        blockHooks.add(hook);
+        return () -> blockHooks.remove(hook);
+    }
+
+    // pre-write view, read only while someone listens (the common no-hook path costs nothing)
+    private @Nullable Block preWrite(Point pos) {
+        return blockHooks.isEmpty() ? null : getBlock(pos);
+    }
+
+    private void fireBlockChange(Point pos, @Nullable Block previous, Block block) {
+        if (previous == null || previous.equals(block)) return; // nobody listened, or a view no-op
+        for (BlockChangeHook hook : blockHooks) hook.changed(pos, previous, block);
+    }
+
     /**
      * Per-tick hook on this shard's clock, called with {@link #ticks()} - a domain shard's own thread, a plain
      * shard's server scheduler. Survives a {@link #domain(ExecutionDomain) re-clock}. Returns the removal handle.
@@ -269,6 +297,7 @@ public final class Shard implements WorldAccess {
                 if (!base.isChunkLoaded(pos)) return; // never reached a client; nothing to revert
                 Block revert = parent != null ? parent.getBlock(pos) : base.getBlock(pos);
                 fanBlock(pos, new BlockChangePacket(pos, revert)); // descendants saw this layer too, where unmasked
+                fireBlockChange(pos, blockHooks.isEmpty() ? null : block, revert); // the entry IS the pre-reset view
             });
             overlay.clear();
             refreshLight(); // recomputed without the diff = parent-view light; untouched chunks restore base
@@ -349,9 +378,39 @@ public final class Shard implements WorldAccess {
     }
 
     @Override public void setBlock(@NotNull Point pos, @NotNull Block block) {
+        if (revertsToParent(pos, block)) {
+            if (overlay.at(pos.blockX(), pos.blockY(), pos.blockZ()) == null) return; // total no-op
+            Block previous = preWrite(pos);
+            overlay.remove(pos);
+            changed(pos, block);
+            fireBlockChange(pos, previous, block);
+            return;
+        }
+        pinBlock(pos, block);
+    }
+
+    /**
+     * {@link #setBlock} that always keeps the diff entry: a write equal to the parent view PINS the position
+     * (later parent/base changes no longer show through) instead of clearing it. Replay theaters use it -
+     * recorded layer state must reproduce verbatim whatever order the ops land in.
+     */
+    public void pinBlock(@NotNull Point pos, @NotNull Block block) {
+        Block previous = preWrite(pos);
         overlay.write(pos, block);
+        changed(pos, block);
+        fireBlockChange(pos, previous, block);
+    }
+
+    private void changed(Point pos, Block block) {
         fanBlock(pos, new BlockChangePacket(pos, block));
         lightChanged(Set.of(CoordConversion.chunkIndex(pos.blockX() >> 4, pos.blockZ() >> 4)));
+    }
+
+    // a write equal to the parent view isn't a diff: place-then-break ends with an EMPTY overlay, not a
+    // redundant explicit-air entry (unloaded chunks can't be compared - keep the entry)
+    private boolean revertsToParent(Point pos, Block block) {
+        if (!base.isChunkLoaded(pos)) return false;
+        return block.equals(parent != null ? parent.getBlock(pos) : base.getBlock(pos));
     }
 
     // a shard write has no native broadcast: it reaches this shard's block viewers plus every descendant's,
@@ -366,10 +425,19 @@ public final class Shard implements WorldAccess {
     /** One overlay write pass, then one {@link MultiBlockChangePacket} per touched section to each block viewer. */
     @Override public void setBlocks(@NotNull Map<Point, Block> blocks) {
         onDomain(() -> {
-            blocks.forEach(overlay::write);
-            fanBatch(blocks);
+            Map<Point, Block> changed = new HashMap<>();
+            blocks.forEach((pos, block) -> {
+                boolean reverts = revertsToParent(pos, block);
+                if (reverts && overlay.at(pos.blockX(), pos.blockY(), pos.blockZ()) == null) return; // total no-op
+                Block previous = preWrite(pos);
+                if (reverts) overlay.remove(pos);
+                else overlay.write(pos, block);
+                changed.put(pos, block);
+                fireBlockChange(pos, previous, block);
+            });
+            fanBatch(changed);
             Set<Long> chunks = new HashSet<>();
-            for (Point pos : blocks.keySet()) chunks.add(CoordConversion.chunkIndex(pos.blockX() >> 4, pos.blockZ() >> 4));
+            for (Point pos : changed.keySet()) chunks.add(CoordConversion.chunkIndex(pos.blockX() >> 4, pos.blockZ() >> 4));
             if (!chunks.isEmpty()) lightChanged(chunks);
             return null;
         });
@@ -690,6 +758,30 @@ public final class Shard implements WorldAccess {
      */
     public static @Nullable Entity copyEntity(@NotNull Entity entity) {
         return EntityCopy.of(entity);
+    }
+
+    /**
+     * Writes this shard's OWN diff into the base instance - the "winner's build lands on the real map" op.
+     * The lib never writes the base by itself; this is the one explicit exception, on the caller's order.
+     * Call from the base's ticking context (the server thread - base writes aren't clock-thread-safe). A
+     * child commits its RELATIVE diff; {@link #flatten} first to commit a chain's effective view. Entries
+     * the commit made redundant clear (a root shard's diff empties; unloaded-chunk entries stay - they
+     * couldn't commit); co-located shards see the base change wherever their own diffs don't mask it.
+     */
+    public void commitToBase() {
+        Map<Point, Block> committed = new HashMap<>();
+        diff().forEach((pos, block) -> {
+            if (!base.isChunkLoaded(pos)) return;
+            base.setBlock(pos, block);
+            committed.put(pos, block);
+        });
+        onDomain(() -> {
+            // view unchanged where the chain now matches; a child's masked entries stay load-bearing
+            committed.forEach((pos, block) -> {
+                if (revertsToParent(pos, block)) overlay.remove(pos);
+            });
+            return null;
+        });
     }
 
     /** Takes ownership of {@code entity} (already in the base instance) from its current world; players = {@link #join}. */

@@ -7,9 +7,10 @@ import io.github.term4.shardkit.shard.Shard;
 import io.github.term4.shardkit.event.replay.PlaybackStartEvent;
 import io.github.term4.shardkit.event.replay.RecordingStartEvent;
 import io.github.term4.shardkit.storage.DataKey;
-import io.github.term4.shardkit.storage.polar.PolarShardCodec;
+import io.github.term4.shardkit.storage.ShardFile;
 import net.kyori.adventure.nbt.CompoundBinaryTag;
 import net.minestom.server.codec.Codec;
+import net.minestom.server.codec.StructCodec;
 import net.minestom.server.event.EventDispatcher;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -22,15 +23,23 @@ import java.util.function.Supplier;
 import java.util.function.UnaryOperator;
 
 /**
- * Replays over shards: one polar file = the t0 snapshot (blocks + sky) plus a channel-per-recordable op log in
- * its user data. Everything is registration - {@link #register recordables}, {@link #dispatchers sources},
- * {@link #sanitizeDescriptors sanitizers}, {@link #onSpawn spawn hooks};
+ * Replays over shards: one {@code .shard} file = the t0 snapshot (blocks + sky) plus a channel-per-recordable
+ * op log in its user data. Everything is registration - {@link #register recordables}, {@link #dispatchers
+ * sources}, {@link #sanitizeDescriptors sanitizers}, {@link #onSpawn spawn hooks};
  * {@link io.github.term4.shardkit.replay.core.CoreChannels} is the built-in set.
  */
 public final class Replay {
 
-    /** The op log's slot in the polar user-data container. */
+    /** The op log's slot in the file's user-data section. */
     public static final DataKey<CompoundBinaryTag> OPS = new DataKey<>("replay:ops", Codec.NBT_COMPOUND);
+
+    /** A moment the game marked mid-recording ({@link Recording#bookmark}); {@code data} = app payload (empty when none). */
+    public record Bookmark(long tick, @NotNull String name, @NotNull CompoundBinaryTag data) {}
+
+    /** The bookmark index's slot in the file's user-data section. */
+    public static final DataKey<List<Bookmark>> BOOKMARKS = new DataKey<>("replay:bookmarks",
+            StructCodec.struct("t", Codec.LONG, Bookmark::tick, "n", Codec.STRING, Bookmark::name,
+                    "d", Codec.NBT_COMPOUND, Bookmark::data, Bookmark::new).list());
 
     private static final Map<String, Map<Integer, Recordable<?>>> RECORDABLES = new ConcurrentHashMap<>();
     private static final List<Supplier<Dispatcher>> DISPATCHERS = new CopyOnWriteArrayList<>();
@@ -87,9 +96,28 @@ public final class Replay {
         if (RECORDABLES.isEmpty()) {
             throw new IllegalStateException("no recordables registered - CoreChannels.register() or Replay.register(...)");
         }
-        CompoundBinaryTag ops = PolarShardCodec.load(target, file).get(OPS);
+        ShardFile.UserDataView data = ShardFile.load(target, file);
+        CompoundBinaryTag ops = data.get(OPS);
         if (ops == null) throw new IllegalArgumentException("no replay op log in this file (a plain shard save?)");
-        Playback playback = new Playback(target, ops, spawns);
+        Playback playback = new Playback(target, ops, spawns, data);
+        EventDispatcher.call(new PlaybackStartEvent(playback));
+        return playback;
+    }
+
+    /**
+     * Plays a STOPPED recording straight from memory - the t0 snapshot loads into {@code target}, the op
+     * queues play as they are; no encode/decode round trip. {@link Recording#stop()} still returns the file
+     * for footage that leaves the JVM.
+     */
+    public static @NotNull Playback play(@NotNull Shard target, @NotNull Recording recording) {
+        return play(target, recording, SpawnMode.REVIVED);
+    }
+
+    /** {@link #play(Shard, Recording)} with an explicit {@link SpawnMode}. */
+    public static @NotNull Playback play(@NotNull Shard target, @NotNull Recording recording, @NotNull SpawnMode spawns) {
+        if (recording.active()) throw new IllegalStateException("recording still running - stop() it first");
+        ShardFile.load(target, recording.t0());
+        Playback playback = new Playback(target, recording, spawns);
         EventDispatcher.call(new PlaybackStartEvent(playback));
         return playback;
     }

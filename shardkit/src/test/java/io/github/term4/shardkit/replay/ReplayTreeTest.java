@@ -3,6 +3,7 @@ package io.github.term4.shardkit.replay;
 import io.github.term4.shardkit.ticking.ExecutionDomain;
 import io.github.term4.shardkit.shard.Shard;
 import io.github.term4.shardkit.shard.ShardManager;
+import io.github.term4.shardkit.storage.polar.PolarShardCodec;
 import io.github.term4.shardkit.replay.core.Channels;
 import io.github.term4.shardkit.replay.core.CoreChannels;
 import io.github.term4.shardkit.testsupport.FakePlayer;
@@ -78,7 +79,8 @@ class ReplayTreeTest {
             stage.join(actor.player); // the layer switch back to the root
             tick(); // tick 3: LAYER act 0 + the mover's entity-layer op
             tick(); // tick 4
-            byte[] file = rec.stop();
+            // the whole tree op log must also survive a polar exchange round-trip
+            byte[] file = PolarShardCodec.toShardFile(PolarShardCodec.fromShardFile(rec.stop()));
 
             Shard theater = new Shard(instance);
             pb = Replay.play(theater, file);
@@ -125,7 +127,8 @@ class ReplayTreeTest {
             await("the foreign layer's t0 dump lands", () -> rec.counts().getOrDefault("replay:block", 0) >= 1);
             long landed = rec.tick();
             await("the recording outlives the dump's stamp", () -> rec.tick() >= landed + 2);
-            byte[] file = rec.stop();
+            // a split-tree (cross-domain) recording is footage like any other: it must transcode losslessly
+            byte[] file = PolarShardCodec.toShardFile(PolarShardCodec.fromShardFile(rec.stop()));
 
             Shard theater = new Shard(instance);
             pb = Replay.play(theater, file);

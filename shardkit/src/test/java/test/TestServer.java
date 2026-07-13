@@ -25,17 +25,23 @@ import io.github.term4.shardkit.shard.ShardManager;
 import io.github.term4.shardkit.shard.ShardView;
 import io.github.term4.shardkit.Storage;
 import io.github.term4.shardkit.event.replay.PlaybackStopEvent;
+import io.github.term4.shardkit.storage.DataKey;
 import io.github.term4.shardkit.storage.EntityDescriptors;
+import io.github.term4.shardkit.storage.ShardFile;
 import io.github.term4.shardkit.storage.polar.PolarShardCodec;
 import io.github.term4.shardkit.replay.Playback;
 import io.github.term4.shardkit.replay.Recording;
 import io.github.term4.shardkit.replay.Replay;
 import io.github.term4.shardkit.replay.SpawnMode;
+import io.github.term4.shardkit.replay.core.StateChannels;
 import io.github.term4.shardkit.ticking.ExecutionDomain;
 import io.github.term4.shardkit.world.WorldAccess;
+import net.kyori.adventure.nbt.BinaryTag;
+import net.kyori.adventure.nbt.ListBinaryTag;
 import net.kyori.adventure.text.Component;
 import net.minestom.server.MinecraftServer;
 import net.minestom.server.Auth;
+import net.minestom.server.codec.Codec;
 import net.minestom.server.command.CommandSender;
 import net.minestom.server.command.builder.Command;
 import net.minestom.server.command.builder.CommandExecutor;
@@ -56,6 +62,7 @@ import net.minestom.server.item.Material;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 /**
  * ShardKit playground WITH MinestomMechanics (from mavenLocal) glued in via {@link ShardBridge} - the reference
@@ -69,13 +76,13 @@ public final class TestServer {
     // theater fire on its clock thread
     private static volatile Recording recording;
     private static volatile Playback playback;
+    // the entity recipe: a shard save IS just a diff - descriptors ride the DataKey user-data section
+    private static final DataKey<BinaryTag> SAVED_ENTITIES = new DataKey<>("demo:entities", Codec.NBT);
 
     public static void main(String[] args) {
         // the mm ExampleServer's platform flags, verbatim
         System.setProperty("minestom.new-socket-write-lock", "true");
         System.setProperty("minestom.enforce-entity-interaction-range", "false"); // mechanics handles reach
-        System.setProperty("minestom.chunk-view-distance", "12"); // <12 derenders players ~150 blocks from spawn on legacy
-        System.setProperty("minestom.tps", "20");
 
         MinecraftServer server = MinecraftServer.init(new Auth.Bungee()); // bungee auth lets 1.7/Via-proxy clients join
 
@@ -107,6 +114,7 @@ public final class TestServer {
         EntityDescriptors.reviveEntity("mm:item", DroppedItemEntity::fromSave);
         EntityDescriptors.reviveEntity("mm:projectile", projectiles::fromSave);
         ReplayBridge.install(); // replay-side mechanics glue (launch capture, shooter scrub, footage flags)
+        StateChannels.register(); // opt-in player-state channels (health/hunger/xp/inventory) - /replay state
 
         InstanceContainer world = MinecraftServer.getInstanceManager().createInstanceContainer();
         world.setExplosionSupplier(explosions.supplier()); // route instance.explode(...) through the system
@@ -126,6 +134,7 @@ public final class TestServer {
             p.getInventory().addItemStack(ItemStack.of(Material.OAK_PLANKS, 64));
             p.getInventory().addItemStack(ItemStack.of(Material.LADDER, 64));
             p.getInventory().addItemStack(ItemStack.of(Material.IRON_PICKAXE));
+            // TODO: Update to use components
             p.sendMessage("/shard create <name> | child <parent> <new> | join <name> | fork <name> <new> | flatten <top> [bottom] <new> | save <name> | load <saved> <new> | leave | reset <name> | destroy <name> | list | tree | relight <name> <on|off> | spectate <name|off> | sky <name> <day|night|rain|clear>  -  /gm <mode>");
         });
 
@@ -222,8 +231,8 @@ public final class TestServer {
             });
         }, flatten, name, forkName);
 
-        // save/load = the polar codec round-trip: blocks (NBT included) + sky + stamped/generic entities;
-        // "blocks" mode = map template, no entity payload. Dirs resolve through Storage (code/sysprop/properties)
+        // save/load = the .shard round-trip: blocks (NBT included) + sky natively, entities via the DataKey
+        // recipe; "blocks" mode = map template, no entity payload. Dirs resolve through Storage
         Path saveDir = Storage.dir("save-dir", "shard-saves");
         var save = ArgumentType.Literal("save");
         Argument<String> saveMode = ArgumentType.Word("mode").from("blocks");
@@ -234,8 +243,8 @@ public final class TestServer {
             offClock(() -> {
                 try {
                     Files.createDirectories(saveDir);
-                    Path file = saveDir.resolve(ctx.get(name) + ".polar");
-                    PolarShardCodec.save(g, file, null, entities);
+                    Path file = saveDir.resolve(ctx.get(name) + ".shard");
+                    ShardFile.save(g, file, entities ? w -> w.put(SAVED_ENTITIES, EntityDescriptors.write(g)) : null);
                     sender.sendMessage("[shard] saved '" + ctx.get(name) + "' -> " + file + " (" + Files.size(file)
                             + " bytes, diff " + g.overlaySize() + (entities ? ")" : ", blocks only)"));
                 } catch (IOException e) {
@@ -246,16 +255,64 @@ public final class TestServer {
         shard.addSyntax(doSave, save, name);
         shard.addSyntax(doSave, save, name, saveMode);
 
+        // one file = the whole layer tree; loadtree rebuilds it, re-registered under the saved NAME hints
+        var savetree = ArgumentType.Literal("savetree");
+        shard.addSyntax((sender, ctx) -> {
+            Shard g = shards.byName(ctx.get(name));
+            if (g == null) { sender.sendMessage("[shard] no shard named '" + ctx.get(name) + "'"); return; }
+            offClock(() -> {
+                try {
+                    Files.createDirectories(saveDir);
+                    Path file = saveDir.resolve(ctx.get(name) + ".shard");
+                    Files.write(file, ShardFile.saveTree(g, shards::nameOf,
+                            (s, w) -> w.put(SAVED_ENTITIES, EntityDescriptors.write(s))));
+                    sender.sendMessage("[shard] saved the tree of '" + ctx.get(name) + "' -> " + file
+                            + " (" + Files.size(file) + " bytes)");
+                } catch (IOException e) {
+                    sender.sendMessage("[shard] savetree failed: " + e.getMessage());
+                }
+            });
+        }, savetree, name);
+
+        var loadtree = ArgumentType.Literal("loadtree");
+        shard.addSyntax((sender, ctx) -> {
+            Path file = saveDir.resolve(ctx.get(name) + ".shard");
+            if (!Files.exists(file)) { sender.sendMessage("[shard] no save named '" + ctx.get(name) + "'"); return; }
+            String prefix = ctx.get(forkName);
+            offClock(() -> {
+                try {
+                    List<ShardFile.TreeLayer> layers = ShardFile.loadTree(world, Files.readAllBytes(file));
+                    ExecutionDomain domain = ExecutionDomain.create(); // one tree, one clock
+                    StringBuilder named = new StringBuilder();
+                    for (int i = 0; i < layers.size(); i++) {
+                        ShardFile.TreeLayer layer = layers.get(i);
+                        String saved = layer.data().get(ShardFile.NAME);
+                        String n = prefix + "-" + (saved != null ? saved : i);
+                        shards.register(layer.shard(), n);
+                        layer.shard().domain(domain);
+                        if (layer.data().get(SAVED_ENTITIES) instanceof ListBinaryTag descs) {
+                            EntityDescriptors.read(layer.shard(), descs);
+                        }
+                        named.append(named.isEmpty() ? "" : ", ").append(n);
+                    }
+                    sender.sendMessage("[shard] tree loaded: " + named + " - /shard join " + prefix + "-...");
+                } catch (Exception e) {
+                    sender.sendMessage("[shard] loadtree failed: " + e.getMessage());
+                }
+            });
+        }, loadtree, name, forkName);
+
         var load = ArgumentType.Literal("load");
         shard.addSyntax((sender, ctx) -> {
-            Path file = saveDir.resolve(ctx.get(name) + ".polar");
+            Path file = saveDir.resolve(ctx.get(name) + ".shard");
             if (!Files.exists(file)) { sender.sendMessage("[shard] no save named '" + ctx.get(name) + "'"); return; }
             String n = ctx.get(forkName);
             if (shards.byName(n) != null) { sender.sendMessage("[shard] '" + n + "' already exists"); return; }
             offClock(() -> {
                 Shard g = shards.create(world, n, ExecutionDomain.create());
                 try {
-                    PolarShardCodec.load(g, file);
+                    ShardFile.UserDataView view = ShardFile.load(g, Files.readAllBytes(file));
+                    if (view.get(SAVED_ENTITIES) instanceof ListBinaryTag descs) EntityDescriptors.read(g, descs);
                     sender.sendMessage("[shard] loaded '" + ctx.get(name) + "' -> '" + n + "' (diff " + g.overlaySize()
                             + ") - /shard join " + n);
                 } catch (Exception e) {
@@ -264,6 +321,47 @@ public final class TestServer {
                 }
             });
         }, load, name, forkName);
+
+        // the exchange adapter: pure byte transcode .shard <-> .polar for polar tooling, no live shard involved
+        var export = ArgumentType.Literal("export");
+        shard.addSyntax((sender, ctx) -> {
+            try {
+                Path in = saveDir.resolve(ctx.get(name) + ".shard");
+                Path out = saveDir.resolve(ctx.get(name) + ".polar");
+                byte[] source = Files.readAllBytes(in);
+                Files.write(out, PolarShardCodec.fromShardFile(source));
+                sender.sendMessage("[shard] " + in.getFileName() + " -> " + out.getFileName() + " (" + Files.size(out)
+                        + " bytes, " + (PolarShardCodec.transcodesLosslessly(source) ? "verified lossless" : "LOSSY") + ")");
+            } catch (IOException e) {
+                sender.sendMessage("[shard] export failed: " + e.getMessage());
+            }
+        }, export, name);
+        var doImport = ArgumentType.Literal("import");
+        shard.addSyntax((sender, ctx) -> {
+            try {
+                Path in = saveDir.resolve(ctx.get(name) + ".polar");
+                Path out = saveDir.resolve(ctx.get(name) + ".shard");
+                byte[] source = Files.readAllBytes(in);
+                Files.write(out, PolarShardCodec.toShardFile(source));
+                sender.sendMessage("[shard] " + in.getFileName() + " -> " + out.getFileName() + " (" + Files.size(out)
+                        + " bytes, " + (PolarShardCodec.transcodesLosslessly(source) ? "verified lossless"
+                        : "LOSSY - polar-only data (biomes/light/chunk extras) dropped") + ")");
+            } catch (IOException e) {
+                sender.sendMessage("[shard] import failed: " + e.getMessage());
+            }
+        }, doImport, name);
+
+        // the winner's build lands on the real map (base writes belong on the server thread)
+        var commit = ArgumentType.Literal("commit");
+        shard.addSyntax((sender, ctx) -> {
+            Shard g = shards.byName(ctx.get(name));
+            if (g == null) { sender.sendMessage("[shard] no shard named '" + ctx.get(name) + "'"); return; }
+            MinecraftServer.getSchedulerManager().scheduleNextTick(() -> {
+                g.commitToBase();
+                sender.sendMessage("[shard] '" + ctx.get(name) + "' committed to the base map (diff now "
+                        + g.overlaySize() + ")");
+            });
+        }, commit, name);
 
         shard.addSyntax((sender, ctx) -> {
             if (!(sender instanceof Player p)) return;
@@ -413,7 +511,29 @@ public final class TestServer {
         Argument<String> replayName = ArgumentType.Word("replayName");
         Argument<Long> seekTick = ArgumentType.Long("tick");
         replay.setDefaultExecutor((sender, ctx) ->
-                sender.sendMessage("usage: /replay record <shard> | stop <name> | play <name> <newShard> [visual] | seek <tick> | halt"));
+                sender.sendMessage("usage: /replay record <shard> | stop <name> | play <name> <newShard> [visual]"
+                        + " | seek <tick> | reverse | forward | pause | resume | rate <r> | rewind <ticks>"
+                        + " | commit | state <actor> | bookmark <name> | bookmarks | goto <name> | halt"));
+        replay.addSyntax((sender, ctx) -> {
+            if (playback == null) { sender.sendMessage("[replay] nothing is playing"); return; }
+            playback.reverse(true);
+            sender.sendMessage("[replay] rewinding from tick " + playback.tick());
+        }, ArgumentType.Literal("reverse"));
+        replay.addSyntax((sender, ctx) -> {
+            if (playback == null) { sender.sendMessage("[replay] nothing is playing"); return; }
+            playback.reverse(false);
+            sender.sendMessage("[replay] playing forward from tick " + playback.tick());
+        }, ArgumentType.Literal("forward"));
+        replay.addSyntax((sender, ctx) -> {
+            if (playback == null) { sender.sendMessage("[replay] nothing is playing"); return; }
+            playback.pause(true);
+            sender.sendMessage("[replay] paused at tick " + playback.tick());
+        }, ArgumentType.Literal("pause"));
+        replay.addSyntax((sender, ctx) -> {
+            if (playback == null) { sender.sendMessage("[replay] nothing is playing"); return; }
+            playback.pause(false);
+            sender.sendMessage("[replay] resumed at tick " + playback.tick());
+        }, ArgumentType.Literal("resume"));
         replay.addSyntax((sender, ctx) -> {
             if (recording != null) { sender.sendMessage("[replay] already recording - /replay stop <name> first"); return; }
             Shard g = shards.byName(ctx.get(name));
@@ -430,7 +550,7 @@ public final class TestServer {
             byte[] file = rec.stop();
             try {
                 Files.createDirectories(replayDir);
-                Files.write(replayDir.resolve(ctx.get(replayName) + ".polar"), file);
+                Files.write(replayDir.resolve(ctx.get(replayName) + ".shard"), file);
             } catch (IOException e) {
                 sender.sendMessage("[replay] write failed: " + e.getMessage());
                 return;
@@ -444,7 +564,7 @@ public final class TestServer {
             if (playback != null) { sender.sendMessage("[replay] one playback at a time (tick " + playback.tick() + ")"); return; }
             byte[] file;
             try {
-                file = Files.readAllBytes(replayDir.resolve(ctx.get(replayName) + ".polar"));
+                file = Files.readAllBytes(replayDir.resolve(ctx.get(replayName) + ".shard"));
             } catch (IOException e) {
                 sender.sendMessage("[replay] no replay named '" + ctx.get(replayName) + "'");
                 return;
@@ -485,6 +605,86 @@ public final class TestServer {
             playback.halt(); // the stop event clears the field
             sender.sendMessage("[replay] halted");
         }, ArgumentType.Literal("halt"));
+        // the time-rewind recipe: stop the running recording, raise a theater CHILD of the live shard,
+        // play the recording IN MEMORY (no file), jump back; /replay commit lands the past for real
+        Argument<Long> backTicks = ArgumentType.Long("ticks");
+        replay.addSyntax((sender, ctx) -> {
+            if (recording == null) { sender.sendMessage("[replay] nothing is recording - /replay record <shard> first"); return; }
+            if (playback != null) { sender.sendMessage("[replay] one playback at a time"); return; }
+            Recording rec = recording;
+            recording = null;
+            rec.stop();
+            long back = ctx.get(backTicks);
+            offClock(() -> {
+                Shard live = rec.shard();
+                String n = shards.nameOf(live) + "-rewind";
+                if (shards.byName(n) != null) { sender.sendMessage("[shard] '" + n + "' already exists"); return; }
+                Shard theater = new Shard(live);
+                shards.register(theater, n);
+                playback = Replay.play(theater, rec);
+                playback.pause(true); // hold the rewound moment
+                playback.seek(Math.min(rec.tick(), Math.max(0, rec.tick() - back)));
+                sender.sendMessage("[replay] '" + n + "' shows " + back + " ticks ago (tick " + playback.tick()
+                        + "/" + playback.length() + ") - /shard spectate " + n
+                        + ", then /replay commit or /replay halt");
+            });
+        }, ArgumentType.Literal("rewind"), backTicks);
+        replay.addSyntax((sender, ctx) -> {
+            if (playback == null) { sender.sendMessage("[replay] nothing is playing"); return; }
+            Shard theater = playback.shard();
+            Shard live = theater.parent();
+            if (live == null) { sender.sendMessage("[replay] not a rewind theater (no parent to land on)"); return; }
+            offClock(() -> {
+                playback.halt(); // ghosts and twins clear; the rewound blocks stay
+                live.setBlocks(theater.diff());
+                shards.destroy(theater);
+                sender.sendMessage("[replay] the past landed on '" + shards.nameOf(live) + "'");
+            });
+        }, ArgumentType.Literal("commit"));
+        // arg id must differ from the literal's ("rate"): same-id nodes collide in the command tree
+        Argument<Double> playRate = ArgumentType.Double("speed");
+        replay.addSyntax((sender, ctx) -> {
+            if (playback == null) { sender.sendMessage("[replay] nothing is playing"); return; }
+            try {
+                playback.rate(ctx.get(playRate));
+                sender.sendMessage("[replay] rate " + playback.rate() + "x"
+                        + (playback.reversed() ? " (reversed)" : ""));
+            } catch (IllegalArgumentException e) {
+                sender.sendMessage("[replay] " + e.getMessage());
+            }
+        }, ArgumentType.Literal("rate"), playRate);
+        Argument<String> markName = ArgumentType.Word("markName");
+        replay.addSyntax((sender, ctx) -> {
+            if (recording == null) { sender.sendMessage("[replay] nothing is recording"); return; }
+            recording.bookmark(ctx.get(markName));
+            sender.sendMessage("[replay] bookmarked '" + ctx.get(markName) + "' @ tick " + recording.tick());
+        }, ArgumentType.Literal("bookmark"), markName);
+        replay.addSyntax((sender, ctx) -> {
+            if (playback == null) { sender.sendMessage("[replay] nothing is playing"); return; }
+            if (playback.bookmarks().isEmpty()) { sender.sendMessage("[replay] no bookmarks"); return; }
+            playback.bookmarks().forEach(b -> sender.sendMessage("[replay] '" + b.name() + "' @ tick " + b.tick()));
+        }, ArgumentType.Literal("bookmarks"));
+        replay.addSyntax((sender, ctx) -> {
+            if (playback == null) { sender.sendMessage("[replay] nothing is playing"); return; }
+            var mark = playback.bookmarks().stream().filter(b -> b.name().equals(ctx.get(markName))).findFirst();
+            if (mark.isEmpty()) { sender.sendMessage("[replay] no bookmark '" + ctx.get(markName) + "'"); return; }
+            offClock(() -> {
+                playback.seek(mark.get().tick());
+                sender.sendMessage("[replay] at '" + mark.get().name() + "' (tick " + playback.tick() + ")");
+            });
+        }, ArgumentType.Literal("goto"), markName);
+        // the state channels' read seam: the folded player state at the playback's current tick
+        Argument<String> actorName = ArgumentType.Word("actor");
+        replay.addSyntax((sender, ctx) -> {
+            if (playback == null) { sender.sendMessage("[replay] nothing is playing"); return; }
+            String actor = ctx.get(actorName);
+            var inv = StateChannels.inventory(playback, actor);
+            sender.sendMessage("[replay] " + actor + " @ tick " + playback.tick()
+                    + ": health=" + StateChannels.health(playback, actor)
+                    + " hunger=" + StateChannels.hunger(playback, actor)
+                    + " xp=" + StateChannels.xp(playback, actor)
+                    + " inventory=" + inv.size() + " known slots");
+        }, ArgumentType.Literal("state"), actorName);
         MinecraftServer.getGlobalEventHandler().addListener(PlaybackStopEvent.class, e -> {
             if (e.playback() == playback) {
                 e.playback().shard().sendMessage(Component.text("[replay] finished"));

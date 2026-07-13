@@ -81,7 +81,15 @@ final class BlockRouting {
                 handled = place ? readOnlyPlace(player, viewed, (ClientPlayerBlockPlacementPacket) e.getPacket())
                         : readOnlyDig(player, viewed, (ClientPlayerActionPacket) e.getPacket());
             } else return;
-            if (handled) e.setCancelled(true);
+            if (handled) {
+                // ack AFTER the block work, like the stock listeners: an early ack rolls the modern client's
+                // prediction back to the pre-edit state until our block packet lands (jitter breaking the
+                // block under your own feet)
+                int sequence = place ? ((ClientPlayerBlockPlacementPacket) e.getPacket()).sequence()
+                        : ((ClientPlayerActionPacket) e.getPacket()).sequence();
+                player.sendPacket(new AcknowledgeBlockChangePacket(sequence));
+                e.setCancelled(true);
+            }
         });
         // late joiners get the visibility rules, or they'd see every shard's players/entities until the next join/leave
         node.addListener(PlayerSpawnEvent.class, e -> {
@@ -116,7 +124,6 @@ final class BlockRouting {
         Material material = held.material();
         if (!material.isBlock()) return false;
         if (!base.isChunkLoaded(p.blockPosition())) return true;
-        player.sendPacket(new AcknowledgeBlockChangePacket(p.sequence()));
         BlockVec clicked = p.blockPosition().asBlockVec();
         Vec cursor = new Vec(p.cursorPositionX(), p.cursorPositionY(), p.cursorPositionZ());
         Block interacted = shard.getBlock(clicked);
@@ -193,7 +200,6 @@ final class BlockRouting {
         boolean cancel = status == ClientPlayerActionPacket.Status.CANCELLED_DIGGING;
         if (!start && !finish && !cancel) return false; // drops / item state etc. stay Minestom's
         if (!base.isChunkLoaded(p.blockPosition())) return true;
-        player.sendPacket(new AcknowledgeBlockChangePacket(p.sequence()));
         BlockVec pos = p.blockPosition().asBlockVec();
         Block block = shard.getBlock(pos);
         if (cancel) {
@@ -251,7 +257,6 @@ final class BlockRouting {
     /** A non-member's (or view-swapped member's) edit: swallowed, the client corrected from its viewed world. */
     private static boolean readOnlyPlace(Player player, @Nullable Shard viewed, ClientPlayerBlockPlacementPacket p) {
         if (!player.getItemInHand(p.hand()).material().isBlock()) return false;
-        player.sendPacket(new AcknowledgeBlockChangePacket(p.sequence()));
         player.getInventory().update();
         BlockVec clicked = p.blockPosition().asBlockVec();
         sendViewedBlock(player, viewed, clicked);
@@ -264,7 +269,6 @@ final class BlockRouting {
         if (status != ClientPlayerActionPacket.Status.STARTED_DIGGING
                 && status != ClientPlayerActionPacket.Status.FINISHED_DIGGING
                 && status != ClientPlayerActionPacket.Status.CANCELLED_DIGGING) return false;
-        player.sendPacket(new AcknowledgeBlockChangePacket(p.sequence()));
         if (status != ClientPlayerActionPacket.Status.CANCELLED_DIGGING) {
             sendViewedBlock(player, viewed, p.blockPosition().asBlockVec());
         }

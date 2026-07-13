@@ -4,17 +4,26 @@ import io.github.term4.shardkit.shard.Shard;
 import io.github.term4.shardkit.shard.ShardManager;
 import io.github.term4.shardkit.event.replay.PlaybackStopEvent;
 import io.github.term4.shardkit.event.replay.RecordingStopEvent;
-import io.github.term4.shardkit.storage.polar.PolarShardCodec;
+import io.github.term4.shardkit.storage.ShardFile;
+import io.github.term4.shardkit.replay.channel.Applier;
+import io.github.term4.shardkit.replay.channel.Recordable;
+import io.github.term4.shardkit.replay.channel.Recorded;
 import io.github.term4.shardkit.replay.core.Channels;
 import io.github.term4.shardkit.replay.core.CoreChannels;
+import io.github.term4.shardkit.replay.core.StateChannels;
+import io.github.term4.shardkit.storage.DataKey;
+import io.github.term4.shardkit.storage.Nbt;
 import io.github.term4.shardkit.ticking.ExecutionDomain;
 import io.github.term4.shardkit.world.WorldAccess;
 import net.kyori.adventure.nbt.BinaryTagTypes;
 import net.kyori.adventure.nbt.CompoundBinaryTag;
 import net.kyori.adventure.nbt.ListBinaryTag;
 import net.minestom.server.MinecraftServer;
+import net.minestom.server.codec.Codec;
+import net.minestom.server.codec.StructCodec;
 import net.minestom.server.codec.Transcoder;
 import net.minestom.server.coordinate.Pos;
+import net.minestom.server.coordinate.Vec;
 import net.minestom.server.entity.Entity;
 import net.minestom.server.entity.EntityType;
 import net.minestom.server.entity.ItemEntity;
@@ -29,6 +38,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
@@ -38,6 +48,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -306,8 +317,7 @@ class ReplayTest {
                                 .put("ops", ListBinaryTag.builder(BinaryTagTypes.COMPOUND).build()).build())
                         .build())
                 .build();
-        byte[] file = PolarShardCodec.amendUserData(PolarShardCodec.save(new Shard(instance), null, false),
-                data -> data.put(Replay.OPS, container));
+        byte[] file = ShardFile.save(new Shard(instance), data -> data.put(Replay.OPS, container));
 
         Shard theater = new Shard(instance);
         Playback pb = Replay.play(theater, file);
@@ -332,11 +342,29 @@ class ReplayTest {
         byte[] file = rec.stop();
 
         Shard theater = new Shard(instance);
-        Playback pb = Replay.play(theater, file); // the polar reader must not silently cap the op log at 128KiB
+        Playback pb = Replay.play(theater, file); // the NBT reader must not silently cap the op log at 128KiB
         try {
             assertEquals(6000, pb.counts().get("replay:block"));
             tick();
             assertEquals(Block.STONE, theater.getBlock(0, 64, 0));
+        } finally {
+            pb.halt();
+        }
+    }
+
+    @Test
+    void nbtBlocksSurviveTheT0Snapshot() {
+        CompoundBinaryTag nbt = CompoundBinaryTag.builder().putString("test:sign", "line1").build();
+        Shard stage = new Shard(instance);
+        stage.setBlock(new Pos(40, 70, 40), Block.CHEST.withNbt(nbt));
+        Recording rec = Replay.record(stage);
+        tick();
+        byte[] file = rec.stop();
+
+        Shard theater = new Shard(instance);
+        Playback pb = Replay.play(theater, file);
+        try {
+            assertEquals(nbt, theater.getBlock(40, 70, 40).nbt(), "sign-text-grade t0 fidelity");
         } finally {
             pb.halt();
         }
@@ -371,6 +399,58 @@ class ReplayTest {
             await("the twin died at the reported impact point", () -> twin.getPosition().x() == 3.5);
         } finally {
             pb.halt();
+        }
+    }
+
+    @Test
+    void trackCorrectionsAreBandedForSelfSimulatingTwins() {
+        Shard stage = new Shard(instance);
+        Entity real = new Entity(EntityType.SNOWBALL);
+        Recording rec = Replay.record(stage);
+        byte[] file;
+        try {
+            stage.spawn(real, new Pos(5.5, 70, 5.5)).join();
+            tick(); // tick 1: first sighting -> spawn op (generic descriptor: revives as a physics twin)
+            tick(); // tick 2
+            rec.emit(Channels.ENTITY_MOVES, new Channels.EntityMove(0, 5.6, 70, 5.5, 0, 0)); // inside the band
+            tick(); // tick 3
+            tick(); // tick 4
+            rec.emit(Channels.ENTITY_MOVES, new Channels.EntityMove(0, 9.5, 70, 5.5, 0, 0)); // beyond it
+            tick(); // tick 5
+        } finally {
+            file = rec.stop();
+            real.remove();
+        }
+
+        // a revived twin rides its own physics inside the band (a per-tick teleport is the chop)...
+        Shard theater = new Shard(instance);
+        Playback pb = Replay.play(theater, file);
+        try {
+            tick();
+            Entity twin = pb.entity(0);
+            assertNotNull(twin);
+            await("twin lands", () -> twin.getInstance() != null);
+            tick(); // the in-band op
+            tick(); // and its pin pass
+            assertEquals(5.5, twin.getPosition().x(), "an in-band correction lets the twin's own sim drive");
+            tick();
+            await("an out-of-band correction still snaps", () -> twin.getPosition().x() == 9.5);
+        } finally {
+            pb.halt();
+        }
+
+        // ...while a stand-in stays hard track-driven (the 1.8 bobber wire depends on it)
+        Shard visualTheater = new Shard(instance);
+        Playback visualPb = Replay.play(visualTheater, file, SpawnMode.VISUAL);
+        try {
+            tick();
+            Entity standIn = visualPb.entity(0);
+            assertNotNull(standIn);
+            await("stand-in lands", () -> standIn.getInstance() != null);
+            tick();
+            await("the stand-in takes the in-band point exactly", () -> standIn.getPosition().x() == 5.6);
+        } finally {
+            visualPb.halt();
         }
     }
 
@@ -509,6 +589,417 @@ class ReplayTest {
             await("playback resumes past the seek", () -> theater.getBlock(2, 70, 2) == Block.OAK_PLANKS);
             tick();
             assertFalse(pb.active());
+        } finally {
+            pb.halt();
+        }
+    }
+
+    // a game server's own channel, written entirely against the public seams - no core involvement
+    private record Score(String team, int points) {}
+
+    private static final class ScoreApplier implements Applier<Score> {
+        final Map<String, Integer> board = new ConcurrentHashMap<>();
+
+        @Override
+        public void apply(Playback pb, Recorded<Score> op) {
+            board.put(op.op().team(), op.op().points()); // a real game would also push a Sidebar here
+        }
+    }
+
+    private static final Recordable<Score> SCORE = Recordable.of("game:score", 1, 60, StructCodec.struct(
+                    "t", Codec.STRING, Score::team, "p", Codec.INT, Score::points, Score::new), ScoreApplier::new)
+            .folding((s, op) -> s.latest(ReplayTest.SCORE, op.op().team(), op));
+
+    @Test
+    void gameChannelsAndResultsAreFullyUserImplementable() {
+        Replay.register(SCORE);
+        DataKey<String> results = new DataKey<>("game:results", Codec.STRING);
+        Shard stage = new Shard(instance);
+        Recording rec = Replay.record(stage);
+        byte[] file;
+        try {
+            tick(); // 1
+            rec.emit(SCORE, new Score("Blue", 1));
+            tick(); // 2
+            rec.emit(SCORE, new Score("Red", 1));
+            tick(); // 3
+            rec.emit(SCORE, new Score("Blue", 2));
+            tick(); // 4
+        } finally {
+            file = rec.stop(w -> w.put(results, "Blue 2 - 1 Red")); // the outcome is metadata, not an op
+        }
+
+        assertEquals("Blue 2 - 1 Red", ShardFile.userData(file).get(results),
+                "metadata reads without touching a shard - the lobby-listing path");
+
+        Shard theater = new Shard(instance);
+        Playback pb = Replay.play(theater, file);
+        try {
+            assertEquals("Blue 2 - 1 Red", pb.data(results));
+            pb.seek(1);
+            ScoreApplier live = (ScoreApplier) pb.applier(SCORE);
+            assertNotNull(live);
+            assertEquals(1, live.board.get("Blue"));
+            assertNull(live.board.get("Red"), "Red hasn't scored yet at tick 1");
+            pb.seek(4);
+            live = (ScoreApplier) pb.applier(SCORE);
+            assertEquals(2, live.board.get("Blue"));
+            assertEquals(1, live.board.get("Red"));
+        } finally {
+            pb.halt();
+        }
+    }
+
+    @Test
+    void playbackRateScalesTheTimeline() {
+        Shard stage = new Shard(instance);
+        Recording rec = Replay.record(stage);
+        byte[] file;
+        try {
+            for (int i = 1; i <= 6; i++) {
+                tick();
+                if (i == 2) rec.emit(Channels.BLOCKS, new Channels.BlockOp(0, 3, 72, 3, "minecraft:stone"));
+            }
+        } finally {
+            file = rec.stop();
+        }
+
+        Shard theater = new Shard(instance);
+        Playback pb = Replay.play(theater, file);
+        try {
+            pb.rate(2);
+            tick(); // 0 -> 2
+            assertEquals(2, pb.tick());
+            assertEquals(Block.STONE, theater.getBlock(3, 72, 3), "the tick-2 op landed in one real tick");
+            pb.rate(0.5);
+            tick(); // the half carries
+            assertEquals(2, pb.tick());
+            tick(); // -> 3
+            assertEquals(3, pb.tick());
+            pb.rate(0);
+            tick(); // zero holds in place
+            assertEquals(3, pb.tick());
+            pb.rate(-2); // a negative rate flips into reverse
+            assertTrue(pb.reversed());
+            tick(); // -> 1: two reversed steps, the op un-crosses
+            assertEquals(1, pb.tick());
+            assertTrue(theater.getBlock(3, 72, 3).isAir(), "reverse honors the rate");
+            pb.pause(true);
+            pb.rate(1); // asking for motion resumes a paused timeline
+            assertFalse(pb.paused());
+        } finally {
+            pb.halt();
+        }
+    }
+
+    @Test
+    void bookmarksMarkMomentsAndRideBothPaths() {
+        Shard stage = new Shard(instance);
+        Recording rec = Replay.record(stage);
+        byte[] file;
+        try {
+            tick();
+            tick();
+            rec.bookmark("bed-break", CompoundBinaryTag.builder().putString("team", "Blue").build());
+            tick();
+            tick();
+            rec.bookmark("goal");
+            tick();
+        } finally {
+            file = rec.stop();
+        }
+
+        List<Replay.Bookmark> index = ShardFile.userData(file).get(Replay.BOOKMARKS);
+        assertNotNull(index, "the index reads without touching a shard");
+        assertEquals(2, index.size());
+        assertEquals(2, index.get(0).tick());
+        assertEquals("Blue", index.get(0).data().getString("team"));
+
+        Shard theater = new Shard(instance);
+        Playback pb = Replay.play(theater, file);
+        try {
+            assertEquals("goal", pb.bookmarks().get(1).name());
+            pb.seek(pb.bookmarks().get(1).tick()); // the jump-to-moment recipe
+            assertEquals(4, pb.tick());
+        } finally {
+            pb.halt();
+        }
+
+        Shard theater2 = new Shard(instance);
+        Playback inMemory = Replay.play(theater2, rec);
+        try {
+            assertEquals(2, inMemory.bookmarks().size(), "the in-memory path carries the index too");
+        } finally {
+            inMemory.halt();
+        }
+    }
+
+    @Test
+    void rewindCommitsRecordIntoTheGameFootage() {
+        Pos arena = new Pos(13, 70, 5);
+        Shard live = new Shard(instance);
+        Recording game = Replay.record(live); // the game's own replay runs through the ability
+        byte[] file;
+        try {
+            tick(); // 1: the fight builds
+            live.setBlock(arena, Block.STONE);
+            tick(); // 2: the rewind ability commits the past - a server-side bulk write, no player event
+            live.setBlocks(Map.of(arena, Block.AIR));
+            tick(); // 3
+        } finally {
+            file = game.stop();
+        }
+
+        Shard theater = new Shard(instance);
+        Playback pb = Replay.play(theater, file);
+        try {
+            pb.seek(1);
+            assertEquals(Block.STONE, theater.getBlock(arena), "the edit recorded at the write hook");
+            pb.seek(3);
+            assertTrue(theater.getBlock(arena).isAir(),
+                    "the commit recorded too - the footage shows time snapping back");
+        } finally {
+            pb.halt();
+        }
+    }
+
+    @Test
+    void understructureOptOutRecordsNoMasks() {
+        Shard stage = new Shard(instance);
+        Recording rec = Replay.record(stage).understructure(false);
+        byte[] file;
+        try {
+            tick();
+            rec.blockCovered(new Vec(1, 72, 1), Block.AIR); // the probe still calls; the knob drops it
+            rec.emit(Channels.BLOCKS, new Channels.BlockOp(0, 1, 72, 1, "minecraft:stone"));
+            tick();
+        } finally {
+            file = rec.stop();
+        }
+
+        Shard theater = new Shard(instance);
+        Playback pb = Replay.play(theater, file);
+        try {
+            List<Recorded<Channels.BlockOp>> blocks = pb.ops(Channels.BLOCKS);
+            assertEquals(1, blocks.size(), "no tick-0 understructure masks");
+            assertTrue(blocks.get(0).tick() > 0);
+            pb.seek(2);
+            assertEquals(Block.STONE, theater.getBlock(1, 72, 1), "and it plays normally");
+        } finally {
+            pb.halt();
+        }
+    }
+
+    @Test
+    void stateChannelsFoldPlayerStateForTakeOver() {
+        StateChannels.register();
+        Shard stage = new Shard(instance);
+        Recording rec = Replay.record(stage);
+        byte[] file;
+        try {
+            tick(); // 1: baseline
+            rec.emit(StateChannels.HEALTH, new StateChannels.Health("Steve", 20));
+            rec.emit(StateChannels.HUNGER, new StateChannels.Hunger("Steve", 20, 5));
+            rec.emit(StateChannels.XP, new StateChannels.Xp("Steve", 3, 0.5f));
+            rec.emit(StateChannels.INVENTORY, new StateChannels.Slot("Steve", 0,
+                    Nbt.item(ItemStack.of(Material.DIAMOND_SWORD))));
+            tick(); // 2: takes a hit, picks up gapples
+            rec.emit(StateChannels.HEALTH, new StateChannels.Health("Steve", 16));
+            rec.emit(StateChannels.INVENTORY, new StateChannels.Slot("Steve", 1,
+                    Nbt.item(ItemStack.of(Material.GOLDEN_APPLE, 3))));
+            tick(); // 3
+            tick(); // 4: another hit, the gapples are gone
+            rec.emit(StateChannels.HEALTH, new StateChannels.Health("Steve", 7));
+            rec.emit(StateChannels.INVENTORY, new StateChannels.Slot("Steve", 1, CompoundBinaryTag.empty()));
+            tick(); // 5
+        } finally {
+            file = rec.stop();
+        }
+
+        Shard theater = new Shard(instance);
+        Playback pb = Replay.play(theater, file);
+        try {
+            pb.seek(3);
+            assertEquals(16f, StateChannels.health(pb, "Steve"));
+            assertEquals(new StateChannels.Hunger("Steve", 20, 5), StateChannels.hunger(pb, "Steve"));
+            assertEquals(new StateChannels.Xp("Steve", 3, 0.5f), StateChannels.xp(pb, "Steve"));
+            Map<Integer, ItemStack> inv = StateChannels.inventory(pb, "Steve");
+            assertEquals(Material.DIAMOND_SWORD, inv.get(0).material());
+            assertEquals(3, inv.get(1).amount());
+
+            pb.seek(5);
+            assertEquals(7f, StateChannels.health(pb, "Steve"));
+            assertEquals(ItemStack.AIR, StateChannels.inventory(pb, "Steve").get(1),
+                    "a cleared slot folds to explicit air");
+
+            pb.reverse(true);
+            tick(); // -> 4
+            tick(); // -> 3: tick 4's ops un-cross
+            assertEquals(16f, StateChannels.health(pb, "Steve"), "reversal restores the previous fold");
+            assertEquals(3, StateChannels.inventory(pb, "Steve").get(1).amount());
+            tick(); // -> 2
+            tick(); // -> 1
+            tick(); // -> 0: the first ops un-cross, the state is unknown again
+            assertNull(StateChannels.health(pb, "Steve"));
+            assertTrue(StateChannels.inventory(pb, "Steve").isEmpty());
+        } finally {
+            pb.halt();
+        }
+    }
+
+    @Test
+    void timeRewindRecipePlaysTheLiveRecordingInMemory() {
+        Pos kept = new Pos(11, 70, 3), placed = new Pos(12, 70, 3);
+        Shard live = new Shard(instance);
+        live.setBlock(kept, Block.GOLD_BLOCK); // pre-fight state: in the recording's t0
+        Recording rec = Replay.record(live);
+        try {
+            tick(); // tick 1
+            rec.emit(Channels.MOVES, new Channels.Move("Steve", 1.5, 70, 1.5, 0, 0, true));
+            tick(); // tick 2: the fight overwrites the gold - real writes, the hook records ops AND masks
+            live.setBlock(kept, Block.STONE);
+            tick(); // tick 3: the fight builds on virgin ground
+            live.setBlock(placed, Block.OAK_PLANKS);
+            tick(); // tick 4
+            assertThrows(IllegalStateException.class, () -> Replay.play(live, rec),
+                    "a running recording is not a snapshot");
+        } finally {
+            rec.stop(); // the returned file is unused - the recording object IS the footage
+        }
+        assertEquals(Block.STONE, live.getBlock(kept));
+        assertEquals(Block.OAK_PLANKS, live.getBlock(placed));
+
+        // the rewind ability: a theater CHILD of the live shard plays the recording straight from memory
+        Shard theater = new Shard(live);
+        Playback pb = Replay.play(theater, rec);
+        try {
+            pb.seek(4); // to "now": the theater mirrors the present
+            assertEquals(Block.STONE, theater.getBlock(kept));
+            assertEquals(Block.OAK_PLANKS, theater.getBlock(placed));
+
+            pb.seek(2); // instant time travel, 2 ticks back (rewind + refold)
+            assertEquals(Block.STONE, theater.getBlock(kept), "tick 2's stone applied");
+            assertTrue(theater.getBlock(placed).isAir(),
+                    "the not-yet-built planks are masked off the live parent");
+            assertEquals(Block.OAK_PLANKS, live.getBlock(placed), "the live present is untouched behind the mask");
+            assertNotNull(pb.ghost("Steve"), "the past's fighter stands in the theater");
+
+            pb.reverse(true); // continuous rewind across the remaining fight edit
+            tick(); // -> 1
+            assertEquals(1, pb.tick());
+            assertEquals(Block.GOLD_BLOCK, theater.getBlock(kept),
+                    "un-crossing the overwrite restores the pre-fight gold");
+        } finally {
+            pb.halt();
+        }
+
+        // the ability commits: the rewound state lands on the live shard, the theater empties
+        // (a managed app would ShardManager.destroy it)
+        live.setBlocks(theater.diff());
+        theater.reset();
+        assertEquals(Block.GOLD_BLOCK, live.getBlock(kept), "time rewound for real");
+        assertTrue(live.getBlock(placed).isAir());
+        assertFalse(live.diff().containsKey(new Vec(12, 70, 3)), "the planks entry cleared - the rewind IS the undo");
+    }
+
+    @Test
+    void reversePlaybackUnwindsToT0AndReplays() {
+        Pos kept = new Pos(6, 70, 6), placed = new Pos(7, 70, 6); // loaded chunk: un-placing clears the entry
+        Shard stage = new Shard(instance);
+        stage.setBlock(kept, Block.GOLD_BLOCK); // t0 content
+        Entity real = new Entity(EntityType.SNOWBALL);
+        Recording rec = Replay.record(stage);
+        byte[] file;
+        try {
+            tick(); // tick 1
+            rec.emit(Channels.MOVES, new Channels.Move("Steve", 1.5, 70, 1.5, 0, 0, true));
+            rec.emit(Channels.BLOCKS, new Channels.BlockOp(0, 7, 70, 6, "minecraft:stone"));
+            tick(); // tick 2
+            rec.emit(Channels.BLOCKS, new Channels.BlockOp(0, 6, 70, 6, "minecraft:diamond_block")); // over t0 gold
+            stage.spawn(real, new Pos(4.5, 71, 4.5)).join();
+            tick(); // tick 3: the sweep sights the snowball (spawn op, seq 0)
+            rec.emit(Channels.MOVES, new Channels.Move("Steve", 3.5, 70, 3.5, 0, 0, true));
+            tick(); // tick 4
+            rec.remove(real, new Pos(4.5, 71, 4.5, 0, 0), "");
+            real.remove();
+            tick(); // tick 5
+        } finally {
+            file = rec.stop();
+        }
+
+        Shard theater = new Shard(instance);
+        Playback pb = Replay.play(theater, file);
+        try {
+            pb.seek(5); // everything applied
+            assertEquals(Block.STONE, theater.getBlock(placed));
+            assertEquals(Block.DIAMOND_BLOCK, theater.getBlock(kept));
+            assertNull(pb.entity(0), "removed");
+            assertNotNull(pb.ghost("Steve"));
+
+            pb.reverse(true);
+            tick(); // -> 4 (nothing recorded past tick 4 to un-cross)
+            assertEquals(4, pb.tick());
+            tick(); // -> 3: the removal un-crosses, the twin lives again
+            assertNotNull(pb.entity(0), "reverse across the removal re-raises the twin");
+            tick(); // -> 2: the spawn un-crosses; Steve walks back to his first point
+            assertNull(pb.entity(0), "reverse across the spawn removes the twin");
+            assertEquals(1.5, pb.ghost("Steve").getPosition().x(), "the ghost walked back");
+            assertEquals(Block.DIAMOND_BLOCK, theater.getBlock(kept), "tick 2's block still applied");
+            tick(); // -> 1: the overwrite un-crosses back to the t0 block
+            assertEquals(Block.GOLD_BLOCK, theater.getBlock(kept), "prior-less ops restore the t0 snapshot");
+            tick(); // -> 0: the place un-crosses to the parent view; Steve un-sights
+            assertEquals(0, pb.tick());
+            assertTrue(theater.getBlock(placed).isAir());
+            assertNull(pb.ghost("Steve"), "before his first move he wasn't here");
+            assertEquals(stage.diff(), theater.diff(), "fully unwound, the theater IS the t0 snapshot");
+            tick(); // holds at 0
+            assertEquals(0, pb.tick());
+
+            pb.reverse(false); // and forward replays the same footage
+            tick();
+            assertEquals(Block.STONE, theater.getBlock(placed));
+        } finally {
+            pb.halt();
+        }
+    }
+
+    @Test
+    void backwardSeekRewindsToT0AndRefolds() {
+        Shard stage = new Shard(instance);
+        stage.setBlock(new Pos(3, 70, 3), Block.GOLD_BLOCK); // t0 content
+        CompoundBinaryTag visual = Visuals.snapshot(new Entity(EntityType.SNOWBALL));
+        Recording rec = Replay.record(stage);
+        byte[] file;
+        try {
+            for (int i = 1; i <= 6; i++) {
+                tick();
+                if (i == 2) rec.emit(Channels.BLOCKS, new Channels.BlockOp(0, 1, 71, 1, "minecraft:stone"));
+                if (i == 3) rec.emit(Channels.SPAWNS,
+                        new Channels.Spawn(0, 5.5, 70, 5.5, 0, 0, 0, visual, CompoundBinaryTag.empty(), ""));
+                if (i == 4) rec.emit(Channels.BLOCKS, new Channels.BlockOp(0, 2, 71, 2, "minecraft:oak_planks"));
+                if (i == 5) rec.emit(Channels.REMOVES, new Channels.Remove(0, ""));
+            }
+        } finally {
+            file = rec.stop();
+        }
+
+        Shard theater = new Shard(instance);
+        Playback pb = Replay.play(theater, file);
+        try {
+            pb.seek(6); // everything applied: both blocks, twin spawned then removed
+            assertEquals(Block.STONE, theater.getBlock(1, 71, 1));
+            assertEquals(Block.OAK_PLANKS, theater.getBlock(2, 71, 2));
+            assertNull(pb.entity(0));
+
+            pb.seek(3); // BACKWARD: rewind to t0, refold forward
+            assertEquals(3, pb.tick());
+            assertEquals(Block.GOLD_BLOCK, theater.getBlock(3, 70, 3), "t0 re-seeded");
+            assertEquals(Block.STONE, theater.getBlock(1, 71, 1), "ops inside the window re-applied");
+            assertTrue(theater.getBlock(2, 71, 2).isAir(), "later blocks unwound");
+            assertNotNull(pb.entity(0), "the twin is alive again before its recorded removal");
+
+            pb.seek(6); // and forward again
+            assertNull(pb.entity(0), "scrubbing forward re-removes");
         } finally {
             pb.halt();
         }

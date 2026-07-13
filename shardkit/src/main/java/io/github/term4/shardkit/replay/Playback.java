@@ -8,6 +8,8 @@ import io.github.term4.shardkit.replay.channel.EntityStates;
 import io.github.term4.shardkit.replay.channel.Recordable;
 import io.github.term4.shardkit.replay.channel.Recorded;
 import io.github.term4.shardkit.replay.channel.StateFolder;
+import io.github.term4.shardkit.storage.DataKey;
+import io.github.term4.shardkit.storage.ShardFile;
 import io.github.term4.shardkit.ticking.ExecutionDomain;
 import net.kyori.adventure.nbt.BinaryTag;
 import net.kyori.adventure.nbt.BinaryTagTypes;
@@ -15,8 +17,10 @@ import net.kyori.adventure.nbt.CompoundBinaryTag;
 import net.kyori.adventure.nbt.ListBinaryTag;
 import net.minestom.server.MinecraftServer;
 import net.minestom.server.codec.Transcoder;
+import net.minestom.server.coordinate.Point;
 import net.minestom.server.entity.Entity;
 import net.minestom.server.entity.PlayerSkin;
+import net.minestom.server.instance.block.Block;
 import net.minestom.server.event.Event;
 import net.minestom.server.event.EventDispatcher;
 import net.minestom.server.event.EventNode;
@@ -47,13 +51,16 @@ public final class Playback {
     private static final Logger LOGGER = LoggerFactory.getLogger(Playback.class);
 
     private final Shard shard;
+    private final Map<Point, Block> t0; // the theater's diff right after the file's snapshot landed - rewind re-seeds it
     private final List<Channel<?>> channels = new ArrayList<>();
     // keyed by channel id: versions share their op record, so appliers look up by the CURRENT constant
     private final Map<String, Channel<?>> byType = new HashMap<>();
     private final List<String> skipped = new ArrayList<>();
     private final long length;
     private final SpawnMode spawnMode;
-    private final Runnable ticker;
+    private final ShardFile.UserDataView data; // null on the in-memory path
+    private final List<Replay.Bookmark> bookmarks;
+    private Runnable ticker;
 
     // mutated on the owner thread only; concurrent for cross-thread status reads (commands, tests)
     private final Map<String, Ghost> ghosts = new ConcurrentHashMap<>();
@@ -64,14 +71,23 @@ public final class Playback {
     private final Map<Integer, Shard> layerShards = new ConcurrentHashMap<>();
     private final Map<String, Integer> actorLayers = new ConcurrentHashMap<>();
 
-    private final EventNode<Event> shardWatch;
+    private EventNode<Event> shardWatch;
     private volatile long tick;
+    private volatile boolean reversed;
+    private volatile boolean paused;
+    private volatile double rate = 1;
+    private double carry; // owner-thread only: the sub-tick remainder of a fractional rate
     private final AtomicBoolean ended = new AtomicBoolean();
     private boolean loggedError;
 
-    Playback(@NotNull Shard shard, @NotNull CompoundBinaryTag container, @NotNull SpawnMode spawnMode) {
+    Playback(@NotNull Shard shard, @NotNull CompoundBinaryTag container, @NotNull SpawnMode spawnMode,
+             @Nullable ShardFile.UserDataView data) {
         this.shard = shard;
+        this.t0 = Map.copyOf(shard.diff());
         this.spawnMode = spawnMode;
+        this.data = data;
+        List<Replay.Bookmark> marks = data == null ? null : data.get(Replay.BOOKMARKS);
+        this.bookmarks = marks == null ? List.of() : marks;
         this.length = container.getLong("ticks");
         layerShards.put(0, shard); // the recorded root plays in the target theater
         CompoundBinaryTag channelsTag = container.getCompound("channels");
@@ -89,6 +105,29 @@ public final class Playback {
                 skipped.add(id + " v" + version + " (undecodable: " + e.getMessage() + ")");
             }
         }
+        start();
+    }
+
+    // the in-memory path: a stopped recording's op queues and t0 snapshot play as they are - no codec
+    Playback(@NotNull Shard shard, @NotNull Recording recording, @NotNull SpawnMode spawnMode) {
+        this.shard = shard;
+        this.t0 = Map.copyOf(shard.diff());
+        this.spawnMode = spawnMode;
+        this.data = null;
+        this.bookmarks = recording.bookmarks();
+        this.length = recording.tick();
+        layerShards.put(0, shard);
+        recording.forEachChannel((type, ops) -> channels.add(channel(type, ops)));
+        start();
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T> Channel<T> channel(Recordable<?> type, List<Recorded<?>> ops) {
+        return new Channel<>((Recordable<T>) type, (List<Recorded<T>>) (List<?>) ops);
+    }
+
+    // shared ctor tail; the tick hook registers last - it may fire before the ctor returns
+    private void start() {
         channels.sort(Comparator.comparingInt((Channel<?> c) -> c.type.order()).thenComparing(c -> c.type.id()));
         channels.forEach(c -> byType.put(c.type.id(), c));
         shardWatch = EventNode.all("shardkit:replay-playback@" + System.identityHashCode(this));
@@ -96,7 +135,7 @@ public final class Playback {
             if (e.shard() == shard) halt();
         });
         MinecraftServer.getGlobalEventHandler().addChild(shardWatch);
-        ticker = shard.onTick(t -> step()); // registered last: the hook may fire before the ctor returns
+        ticker = shard.onTick(t -> step());
     }
 
     // seek/halt arrive on command threads; playback state is owner-thread-only, like Recording's mutators
@@ -117,17 +156,74 @@ public final class Playback {
     }
 
     private void step() {
-        tick++;
-        for (Channel<?> channel : channels) channel.drain(this);
-        for (Channel<?> channel : channels) safely(() -> channel.applier.tick(this));
-        if (tick >= length && channels.stream().allMatch(c -> c.drained() && c.applier.settled())) end();
+        if (!paused) {
+            for (carry += rate; carry >= 1; carry--) advance();
+        }
+        for (Channel<?> channel : channels) safely(() -> channel.applier.tick(this)); // pins hold the scene
+        if (!paused && !reversed
+                && tick >= length && channels.stream().allMatch(c -> c.drained() && c.applier.settled())) {
+            end();
+        }
+    }
+
+    private void advance() {
+        if (reversed) {
+            if (tick == 0) return; // holds at t0
+            tick--;
+            // last applied, first un-applied
+            for (int i = channels.size() - 1; i >= 0; i--) channels.get(i).drainBack(this);
+        } else {
+            tick++;
+            for (Channel<?> channel : channels) channel.drain(this);
+        }
     }
 
     /**
-     * Jumps forward to {@code target}: folds the skipped ops through each channel's {@link StateFolder} and
+     * Timeline ticks advanced per theater tick: {@code |rate|} = speed (default 1; fractional = slow motion,
+     * the remainder carries between ticks), a NEGATIVE rate also flips into {@link #reverse}, {@code 0}
+     * holds in place. A positive rate keeps the current direction; asking for motion resumes a {@link #pause
+     * paused} playback (the rewind recipe holds its moment paused). Callable from any thread.
+     */
+    public void rate(double rate) {
+        if (!Double.isFinite(rate)) throw new IllegalArgumentException("finite rates only");
+        if (rate < 0) reversed = true;
+        if (rate != 0) paused = false;
+        this.rate = Math.abs(rate);
+    }
+
+    /** The current speed ({@link #reversed()} is the direction). */
+    public double rate() {
+        return rate;
+    }
+
+    /**
+     * Flips the timeline: each reversed step UN-applies its ops (position tracks walk backwards, spawns and
+     * removals invert, blocks restore their prior state, stateful acts revert), holding at tick 0. One-shot
+     * effects (swings, hurt flashes, dig cracks) play in either direction. Callable from any thread.
+     */
+    public void reverse(boolean reversed) {
+        this.reversed = reversed;
+    }
+
+    public boolean reversed() {
+        return reversed;
+    }
+
+    /** Freezes the timeline in place (a paused physics twin may bob inside its correction band). */
+    public void pause(boolean paused) {
+        this.paused = paused;
+    }
+
+    public boolean paused() {
+        return paused;
+    }
+
+    /**
+     * Jumps to {@code target}: folds the ops in the window through each channel's {@link StateFolder} and
      * applies only the survivors (each entity's latest state), so ghosts land in place without replaying every
-     * intermediate op. Backward seeking is unsupported (block ops don't unwind). Call from off-clock threads
-     * (commands); it relays onto the theater's owner thread and waits.
+     * intermediate op. A BACKWARD seek rewinds to t0 first (theater reset + re-seed, ghosts/twins/layers
+     * cleared) and refolds forward - ops don't unwind, they re-derive. Call from off-clock threads (commands);
+     * it relays onto the theater's owner thread and waits.
      */
     public void seek(long target) {
         ExecutionDomain domain = shard.domain();
@@ -143,11 +239,35 @@ public final class Playback {
 
     private void seekNow(long target) {
         if (ended.get()) throw new IllegalStateException("playback ended");
-        if (target <= tick) throw new IllegalArgumentException("seek is forward-only (at tick " + tick + ")");
+        if (target < 0) throw new IllegalArgumentException("negative tick");
+        if (target == tick) return;
+        if (target < tick) rewind();
         EntityStates states = new EntityStates();
         for (Channel<?> channel : channels) channel.fold(states, target);
         for (Channel<?> channel : channels) channel.applyLatest(this, states);
         tick = target;
+    }
+
+    // back to t0: the theater is the replay's to reset (don't co-host entities in it); husks of previously
+    // risen layers stay linked like after end() - the theater's own destroy cascades them away
+    private void rewind() {
+        ghosts.values().forEach(Entity::remove);
+        ghosts.clear();
+        entities.values().forEach(Entity::remove);
+        entities.clear();
+        removedEarly.clear();
+        hiddenActors.clear();
+        actorLayers.clear();
+        skins.clear();
+        for (Shard layer : layerShards.values()) {
+            if (layer != shard) layer.reset();
+        }
+        layerShards.clear();
+        layerShards.put(0, shard);
+        shard.reset();
+        shard.setBlocks(t0);
+        for (Channel<?> channel : channels) channel.rewind();
+        tick = 0;
     }
 
     public @NotNull Shard shard() {
@@ -273,6 +393,16 @@ public final class Playback {
         entities.put(seq, entity);
     }
 
+    /** The t0 snapshot's block at {@code pos}, or {@code null} (outside the recorded root's own diff) - reverse block fallback. */
+    public @Nullable Block t0Block(@NotNull Point pos) {
+        return t0.get(pos);
+    }
+
+    /** A remove op crossed in reverse: its early-removal veto (if any) lifts, the spawn may materialize again. */
+    public void clearEarlyRemove(int seq) {
+        removedEarly.remove(seq);
+    }
+
     /** A channel's full op list (appliers may look ahead, e.g. for a dig's end); any version of {@code type}'s id. */
     public <T> @NotNull List<Recorded<T>> ops(@NotNull Recordable<T> type) {
         @SuppressWarnings("unchecked")
@@ -284,6 +414,30 @@ public final class Playback {
     public int cursor(@NotNull Recordable<?> type) {
         Channel<?> channel = byType.get(type.id());
         return channel == null ? 0 : channel.cursor;
+    }
+
+    /**
+     * A user-data entry of the played FILE ({@link Recording#stop(java.util.function.Consumer)} wrote it -
+     * game results, metadata). {@code null} when absent, and always for in-memory playbacks (the app still
+     * holds its own objects there).
+     */
+    public <T> @Nullable T data(@NotNull DataKey<T> key) {
+        return data == null ? null : data.get(key);
+    }
+
+    /** The recorded bookmark index, in mark order - jump to one with {@link #seek}. */
+    public @NotNull List<Replay.Bookmark> bookmarks() {
+        return bookmarks;
+    }
+
+    /**
+     * The live applier folding {@code type}'s channel (any version of its id), or {@code null} - the read
+     * seam for state channels. A backward seek re-creates appliers: re-fetch, don't cache.
+     */
+    public <T> @Nullable Applier<T> applier(@NotNull Recordable<T> type) {
+        @SuppressWarnings("unchecked")
+        Channel<T> channel = (Channel<T>) byType.get(type.id());
+        return channel == null ? null : channel.applier;
     }
 
     /** Ends playback early (on the owner thread; a dead theater runs it inline): ghosts and replayed entities removed. */
@@ -318,7 +472,7 @@ public final class Playback {
     private static final class Channel<T> {
         final Recordable<T> type;
         final List<Recorded<T>> ops;
-        final Applier<T> applier;
+        Applier<T> applier;
         int cursor;
 
         Channel(Recordable<T> type, List<Recorded<T>> ops) {
@@ -327,10 +481,23 @@ public final class Playback {
             this.applier = type.applier().get();
         }
 
+        // fresh applier: per-playback applier state (worn slots, tracks) re-derives with the refold
+        void rewind() {
+            cursor = 0;
+            applier = type.applier().get();
+        }
+
         void drain(Playback pb) {
             while (cursor < ops.size() && ops.get(cursor).tick() <= pb.tick) {
                 Recorded<T> op = ops.get(cursor++);
                 pb.safely(() -> applier.apply(pb, op));
+            }
+        }
+
+        void drainBack(Playback pb) {
+            while (cursor > 0 && ops.get(cursor - 1).tick() > pb.tick) {
+                Recorded<T> op = ops.get(--cursor);
+                pb.safely(() -> applier.unapply(pb, op));
             }
         }
 

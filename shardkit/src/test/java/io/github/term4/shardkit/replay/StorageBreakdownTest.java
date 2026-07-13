@@ -83,7 +83,8 @@ class StorageBreakdownTest {
         Path replays = Path.of("..", "replays");
         if (Files.isDirectory(replays)) {
             try (Stream<Path> s = Files.list(replays)) {
-                s.filter(p -> p.getFileName().toString().endsWith(".polar")).forEach(files::add);
+                s.filter(p -> p.getFileName().toString().endsWith(".polar")
+                        || p.getFileName().toString().endsWith(".shard")).forEach(files::add);
             }
         }
         for (String extra : System.getProperty("breakdown.files", "").split(",")) {
@@ -217,23 +218,31 @@ class StorageBreakdownTest {
     }
 
     private static void report(String label, byte[] file) throws IOException {
-        PolarWorld world = PolarReader.read(file);
-        byte[] userData = world.userData();
-        byte[] frameNone = PolarWriter.write(new PolarWorld(world.version(), world.dataVersion(),
-                PolarWorld.CompressionType.NONE, world.minSection(), world.maxSection(), userData,
-                List.copyOf(world.chunks())));
-
-        CompoundBinaryTag root = BinaryTagIO.unlimitedReader().read(new ByteArrayInputStream(userData));
+        boolean shard = file.length > 1 && (file[0] & 0xFF) == 0x1F && (file[1] & 0xFF) == 0x8B; // gzip magic
+        PolarWorld world = null;
+        CompoundBinaryTag root;
+        StringBuilder out = new StringBuilder();
+        out.append("\n=== storage breakdown: ").append(label).append(" ===\n");
+        if (shard) {
+            root = BinaryTagIO.unlimitedReader().read(new ByteArrayInputStream(file), BinaryTagIO.Compression.GZIP);
+            out.append("file (gzip shard):     %,9d B  (root nbt %,d B uncompressed)%n"
+                    .formatted(file.length, nbt(root).length));
+        } else {
+            world = PolarReader.read(file);
+            byte[] userData = world.userData();
+            byte[] frameNone = PolarWriter.write(new PolarWorld(world.version(), world.dataVersion(),
+                    PolarWorld.CompressionType.NONE, world.minSection(), world.maxSection(), userData,
+                    List.copyOf(world.chunks())));
+            root = BinaryTagIO.unlimitedReader().read(new ByteArrayInputStream(userData));
+            out.append("file (zstd polar):    %,9d B%n".formatted(file.length));
+            out.append("frame uncompressed:   %,9d B  (userData %,d B; chunks+frame %,d B)%n"
+                    .formatted(frameNone.length, userData.length, frameNone.length - userData.length));
+        }
         CompoundBinaryTag container = root.getCompound("user").getCompound(Replay.OPS.id());
         long ticks = container.getLong("ticks");
         CompoundBinaryTag channelsTag = container.getCompound("channels");
 
-        StringBuilder out = new StringBuilder();
-        out.append("\n=== storage breakdown: ").append(label).append(" ===\n");
-        out.append("file (zstd polar):    %,9d B%n".formatted(file.length));
-        out.append("frame uncompressed:   %,9d B  (userData %,d B; chunks+frame %,d B)%n"
-                .formatted(frameNone.length, userData.length, frameNone.length - userData.length));
-        out.append("ops container (nbt):  %,9d B  of userData, ticks=%d%n%n".formatted(nbt(container).length, ticks));
+        out.append("ops container (nbt):  %,9d B, ticks=%d%n%n".formatted(nbt(container).length, ticks));
 
         out.append(String.format("%-14s %6s | %9s %6s %8s | %8s %8s %8s | %8s %8s%n",
                 "channel", "ops", "nbt B", "B/op", "z(nbt)", "bin B", "z(binI)", "z(binC)", "binQ B", "z(binQ)"));
@@ -277,7 +286,7 @@ class StorageBreakdownTest {
             paletteNotes.forEach(n -> out.append("  ").append(n).append('\n'));
         }
 
-        out.append("\nwhole-file rebuilds (zstd polar, ops swapped in place):\n");
+        out.append("\nwhole-file rebuilds (ops swapped in place):\n");
         out.append("  current nbt ops:      %,9d B%n".formatted(file.length));
         out.append("  binary interleaved:   %,9d B%n".formatted(rebuild(world, root, channelsTag, ticks, binI).length));
         out.append("  binary columnar:      %,9d B%n".formatted(rebuild(world, root, channelsTag, ticks, binC).length));
@@ -291,9 +300,9 @@ class StorageBreakdownTest {
         Files.writeString(dir.resolve(name + ".txt"), out.toString());
     }
 
-    /** The file re-emitted with each measured channel's ops as a raw byte blob (unmeasured channels keep NBT). */
+    /** The file re-emitted with each measured channel's ops as a raw byte blob (unmeasured channels keep NBT); {@code world} null = gzip .shard. */
     private static byte[] rebuild(PolarWorld world, CompoundBinaryTag root, CompoundBinaryTag channelsTag,
-                                  long ticks, Map<String, byte[]> variants) {
+                                  long ticks, Map<String, byte[]> variants) throws IOException {
         CompoundBinaryTag.Builder keepNbt = CompoundBinaryTag.builder();
         Bin packed = new Bin();
         for (String id : channelsTag.keySet()) {
@@ -316,6 +325,12 @@ class StorageBreakdownTest {
             if (!e.getKey().equals("user")) newRoot.put(e.getKey(), e.getValue());
         }
         newRoot.put("user", newUser.build());
+        if (world == null) {
+            try (ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+                BinaryTagIO.writer().write(newRoot.build(), out, BinaryTagIO.Compression.GZIP);
+                return out.toByteArray();
+            }
+        }
         return PolarWriter.write(new PolarWorld(world.version(), world.dataVersion(),
                 PolarWorld.CompressionType.ZSTD, world.minSection(), world.maxSection(),
                 nbt(newRoot.build()), List.copyOf(world.chunks())));

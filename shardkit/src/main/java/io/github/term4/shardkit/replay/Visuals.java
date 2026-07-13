@@ -82,6 +82,11 @@ public final class Visuals {
         return new VisualEntity(type, owner == null ? 0 : owner.getEntityId(), meta);
     }
 
+    /** Whether {@code entity} is one of these stand-ins (no physics of its own); revived twins self-simulate. */
+    public static boolean standIn(@NotNull Entity entity) {
+        return entity instanceof VisualEntity || entity instanceof VisualLiving;
+    }
+
     private static @Nullable CompoundBinaryTag encodeEntry(Metadata.Entry<?> entry) {
         CompoundBinaryTag.Builder out = CompoundBinaryTag.builder();
         int type = entry.type();

@@ -10,9 +10,10 @@ import io.github.term4.minestommechanics.mechanics.projectile.types.Snowball;
 import io.github.term4.minestommechanics.mechanics.vanilla18.Vanilla18;
 import io.github.term4.minestommechanics.vri.DroppedItemEntity;
 import io.github.term4.minestommechanics.world.MechanicsWorld;
+import io.github.term4.shardkit.replay.channel.Recorded;
 import io.github.term4.shardkit.shard.Shard;
 import io.github.term4.shardkit.storage.EntityDescriptors;
-import io.github.term4.shardkit.storage.polar.PolarShardCodec;
+import io.github.term4.shardkit.storage.ShardFile;
 import io.github.term4.shardkit.testsupport.FakePlayer;
 import io.github.term4.shardkit.testsupport.HeadlessServerTest;
 import net.kyori.adventure.nbt.BinaryTagTypes;
@@ -33,6 +34,7 @@ import test.ReplayBridge;
 import test.ShardBridge;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -74,6 +76,129 @@ class ReplayBridgeTest extends HeadlessServerTest {
     }
 
     @Test
+    void itemTwinWireStaysQuiet() throws Exception {
+        ShardBridge.installDomainTicking();
+        io.github.term4.shardkit.ticking.ExecutionDomain stageClock = io.github.term4.shardkit.ticking.ExecutionDomain.create();
+        io.github.term4.shardkit.ticking.ExecutionDomain theaterClock = io.github.term4.shardkit.ticking.ExecutionDomain.create();
+        Shard stage = new Shard(instance, stageClock);
+        FakePlayer viewer = FakePlayer.connect(instance, new Pos(0.5, 66, 0.5), "WireViewer");
+        Playback pb = null;
+        try {
+            stage.join(viewer.player);
+            // LIVE reference wire: a real drop the viewer watches
+            Recording rec = Replay.record(stage);
+            DroppedItemEntity real = DroppedItemEntity.spawn(instance, new Pos(0.5, 70, 0.5),
+                    new Vec(0.15, 0.2, 0.1), ItemStack.of(Material.GOLDEN_APPLE), null, 40,
+                    io.github.term4.minestommechanics.vri.ItemSpawnEvent.Cause.PLAYER_DROP, viewer.player);
+            assertNotNull(real);
+            long deadline = System.currentTimeMillis() + 4000;
+            while (rec.tick() < 40 && System.currentTimeMillis() < deadline) Thread.onSpinWait();
+            byte[] file = rec.stop();
+            Map<String, Integer> live = classify(viewer, real.getEntityId());
+            real.remove();
+            stage.leave(viewer.player);
+            viewer.sent.clear();
+
+            // TWIN wire: the replayed drop must look LIVE to the client - its own sim carries it, so the
+            // wire stays nearly silent (per-tick velocity/teleport corrections = the measured chop)
+            Shard theater = new Shard(instance, theaterClock);
+            theater.join(viewer.player);
+            Playback playback = pb = Replay.play(theater, file);
+            deadline = System.currentTimeMillis() + 4000;
+            while (playback.tick() < 40 && System.currentTimeMillis() < deadline) Thread.onSpinWait();
+            Entity twin = playback.entity(0);
+            assertNotNull(twin);
+            Map<String, Integer> wire = classify(viewer, twin.getEntityId());
+            System.out.println("LIVE wire: " + live + " / TWIN wire: " + wire);
+            assertTrue(wire.getOrDefault("EntityVelocityPacket", 0) <= 8,
+                    "velocity packets stay live-like, got " + wire);
+            assertTrue(wire.getOrDefault("EntityTeleportPacket", 0)
+                    + wire.getOrDefault("EntityPositionSyncPacket", 0) <= 10,
+                    "position snaps stay rare, got " + wire);
+        } finally {
+            if (pb != null) pb.halt();
+            viewer.player.remove();
+            stageClock.retire();
+            theaterClock.retire();
+        }
+    }
+
+    private static Map<String, Integer> classify(FakePlayer viewer, int entityId) {
+        Map<String, Integer> counts = new java.util.TreeMap<>();
+        for (var sendable : viewer.sent) {
+            var p = net.minestom.server.network.packet.server.SendablePacket
+                    .extractServerPacket(net.minestom.server.network.ConnectionState.PLAY, sendable);
+            Integer id = switch (p) {
+                case net.minestom.server.network.packet.server.play.EntityPositionPacket x -> x.entityId();
+                case net.minestom.server.network.packet.server.play.EntityPositionAndRotationPacket x -> x.entityId();
+                case net.minestom.server.network.packet.server.play.EntityPositionSyncPacket x -> x.entityId();
+                case net.minestom.server.network.packet.server.play.EntityRotationPacket x -> x.entityId();
+                case net.minestom.server.network.packet.server.play.EntityTeleportPacket x -> x.entityId();
+                case net.minestom.server.network.packet.server.play.EntityVelocityPacket x -> x.entityId();
+                case SpawnEntityPacket x -> x.entityId();
+                default -> null;
+            };
+            if (id != null && id == entityId) counts.merge(p.getClass().getSimpleName(), 1, Integer::sum);
+        }
+        return counts;
+    }
+
+    @Test
+    void revivedItemTwinsRideTheRecordedTrackSmoothly() {
+        ShardBridge.installDomainTicking(); // the playground's config: covered mm entities tick on the clocks
+        io.github.term4.shardkit.ticking.ExecutionDomain stageClock = io.github.term4.shardkit.ticking.ExecutionDomain.create();
+        io.github.term4.shardkit.ticking.ExecutionDomain theaterClock = io.github.term4.shardkit.ticking.ExecutionDomain.create();
+        Shard stage = new Shard(instance, stageClock);
+        FakePlayer dropper = FakePlayer.connect(instance, new Pos(0.5, 66, 0.5), "Dropper");
+        Playback pb = null;
+        try {
+            stage.join(dropper.player);
+            Recording rec = Replay.record(stage);
+            DroppedItemEntity real = DroppedItemEntity.spawn(instance, new Pos(0.5, 70, 0.5),
+                    new Vec(0.15, 0.2, 0.1), ItemStack.of(Material.GOLDEN_APPLE), null, 40,
+                    io.github.term4.minestommechanics.vri.ItemSpawnEvent.Cause.PLAYER_DROP, dropper.player);
+            assertNotNull(real);
+            long deadline = System.currentTimeMillis() + 4000;
+            while (rec.tick() < 40 && System.currentTimeMillis() < deadline) Thread.onSpinWait();
+            byte[] file = rec.stop();
+            real.remove();
+
+            // the twin re-simulates on the theater clock and FREE-RUNS (a live item's wire is silent) -
+            // divergence stays inside the resync envelope, and the rest pin trues the final position
+            Shard theater = new Shard(instance, theaterClock);
+            Playback playback = pb = Replay.play(theater, file);
+            List<Recorded<io.github.term4.shardkit.replay.core.Channels.EntityMove>> track =
+                    pb.ops(io.github.term4.shardkit.replay.core.Channels.ENTITY_MOVES);
+            List<Double> dists = java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+            Runnable unhook = theater.onTick(t -> {
+                Entity twin = playback.entity(0);
+                if (twin == null || twin.getInstance() == null) return;
+                Pos last = null;
+                for (var op : track) {
+                    if (op.tick() <= playback.tick()) last = new Pos(op.op().x(), op.op().y(), op.op().z());
+                }
+                if (last != null) dists.add(twin.getPosition().distance(last));
+            });
+            deadline = System.currentTimeMillis() + 4000;
+            while (dists.size() < 35 && System.currentTimeMillis() < deadline) Thread.onSpinWait();
+            unhook.run();
+            assertTrue(dists.size() >= 35, "the theater clock sampled the flight");
+            synchronized (dists) {
+                for (int i = 15; i < dists.size(); i++) {
+                    assertTrue(dists.get(i) < 1.15, "divergence stays inside the resync envelope (tick "
+                            + i + " drifted " + dists.get(i) + ")");
+                }
+                assertTrue(dists.get(dists.size() - 1) < 0.30, "the rested twin trues up on the track");
+            }
+        } finally {
+            if (pb != null) pb.halt();
+            dropper.player.remove();
+            stageClock.retire();
+            theaterClock.retire();
+        }
+    }
+
+    @Test
     void projectilesRecordWithTheirShooterAndReviveAsFootageOnTheGhost() {
         Shard game = new Shard(instance);
         FakePlayer fake = FakePlayer.connect(instance, new Pos(8.5, 70, 8.5), "Recorded");
@@ -98,7 +223,7 @@ class ReplayBridgeTest extends HeadlessServerTest {
 
         // the recorded spawn op: shooter attributed by name, descriptor sanitized, visual snapshot present
         Shard scratch = new Shard(instance);
-        CompoundBinaryTag ops = PolarShardCodec.load(scratch, file).get(Replay.OPS);
+        CompoundBinaryTag ops = ShardFile.load(scratch, file).get(Replay.OPS);
         assertNotNull(ops);
         ListBinaryTag spawns = ops.getCompound("channels").getCompound("replay:spawn")
                 .getList("ops", BinaryTagTypes.COMPOUND);

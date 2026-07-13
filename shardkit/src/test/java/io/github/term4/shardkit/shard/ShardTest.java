@@ -69,6 +69,46 @@ class ShardTest extends HeadlessServerTest {
     }
 
     @Test
+    void commitToBaseLandsTheBuildAndEmptiesTheDiff() {
+        Shard a = new Shard(instance);
+        Point built = new Vec(11, 70, 11), far = new Vec(5000, 70, 5000);
+        a.setBlock(built, Block.EMERALD_BLOCK);
+        a.setBlock(far, Block.GOLD_BLOCK); // far unloaded chunk: can't commit, stays a diff
+
+        a.commitToBase();
+
+        assertEquals(Block.EMERALD_BLOCK, instance.getBlock(11, 70, 11), "the build is on the real map");
+        assertEquals(1, a.overlaySize(), "committed entries cleared; the unloaded one stays");
+        assertEquals(Block.GOLD_BLOCK, a.getBlock(far));
+        Shard other = new Shard(instance);
+        assertEquals(Block.EMERALD_BLOCK, other.getBlock(11, 70, 11), "co-located shards see it through the base");
+    }
+
+    @Test
+    void writesRevertingToTheParentViewShrinkTheDiff() {
+        Shard a = new Shard(instance);
+        for (int i = 0; i < 10; i++) a.setBlock(new Vec(i, 70, 8), Block.STONE); // over base air
+        assertEquals(10, a.overlaySize());
+        for (int i = 0; i < 10; i++) a.setBlock(new Vec(i, 70, 8), Block.AIR); // break them all
+        assertEquals(0, a.overlaySize(), "a shard identical to the base has an empty diff");
+
+        a.setBlock(new Vec(8, 63, 8), Block.AIR); // break a REAL base block
+        assertEquals(1, a.overlaySize(), "explicit air masking a base block stays");
+        a.setBlock(new Vec(8, 63, 8), Block.STONE); // put it back
+        assertEquals(0, a.overlaySize());
+
+        Shard child = new Shard(a);
+        a.setBlock(new Vec(9, 70, 8), Block.GOLD_BLOCK);
+        child.setBlock(new Vec(9, 70, 8), Block.AIR); // mask the parent's block
+        assertEquals(1, child.overlaySize());
+        child.setBlock(new Vec(9, 70, 8), Block.GOLD_BLOCK); // restore the parent view
+        assertEquals(0, child.overlaySize(), "the mask clears; parent changes flow through again");
+
+        child.pinBlock(new Vec(9, 70, 8), Block.GOLD_BLOCK);
+        assertEquals(1, child.overlaySize(), "a pinned write keeps the entry even when it matches");
+    }
+
+    @Test
     void sweepCollidesWithOverlayBlocks() {
         Shard a = new Shard(instance);
         a.setBlock(new Vec(5, 68, 5), Block.STONE);
