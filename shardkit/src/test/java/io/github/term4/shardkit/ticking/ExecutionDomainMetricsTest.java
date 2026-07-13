@@ -1,6 +1,6 @@
 package io.github.term4.shardkit.ticking;
 
-import io.github.term4.shardkit.Shard;
+import io.github.term4.shardkit.shard.Shard;
 import io.github.term4.shardkit.testsupport.DetectorEntity;
 import io.github.term4.shardkit.testsupport.HeadlessServerTest;
 import net.minestom.server.coordinate.Pos;
@@ -33,7 +33,7 @@ class ExecutionDomainMetricsTest extends HeadlessServerTest {
             assertTrue(m.alive());
             assertTrue(m.ticks() >= 3);
             assertNotNull(m.threadName());
-            assertTrue(m.threadName().startsWith("shard-root:"), m.threadName());
+            assertTrue(m.threadName().startsWith("shard-domain:"), m.threadName());
             assertEquals(1, m.entityCount());
             assertEquals(1, m.hookCount());
             assertEquals(0, m.pendingArrivals());

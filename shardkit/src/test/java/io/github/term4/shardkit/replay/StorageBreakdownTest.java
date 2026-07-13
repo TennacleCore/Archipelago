@@ -1,8 +1,8 @@
 package io.github.term4.shardkit.replay;
 
 import com.github.luben.zstd.Zstd;
-import io.github.term4.shardkit.Shard;
-import io.github.term4.shardkit.polar.EntityDescriptors;
+import io.github.term4.shardkit.shard.Shard;
+import io.github.term4.shardkit.storage.EntityDescriptors;
 import io.github.term4.shardkit.replay.channel.Recordable;
 import io.github.term4.shardkit.replay.core.Channels;
 import io.github.term4.shardkit.replay.core.CoreChannels;

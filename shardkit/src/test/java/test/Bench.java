@@ -1,8 +1,8 @@
 package test;
 
 import io.github.term4.shardkit.ticking.ExecutionDomain;
-import io.github.term4.shardkit.Shard;
-import io.github.term4.shardkit.ShardManager;
+import io.github.term4.shardkit.shard.Shard;
+import io.github.term4.shardkit.shard.ShardManager;
 import io.github.term4.shardkit.Storage;
 import io.github.term4.shardkit.testsupport.DetectorEntity;
 import net.minestom.server.MinecraftServer;

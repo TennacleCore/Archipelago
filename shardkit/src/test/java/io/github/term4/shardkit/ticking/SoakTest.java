@@ -1,8 +1,8 @@
 package io.github.term4.shardkit.ticking;
 
-import io.github.term4.shardkit.Shard;
-import io.github.term4.shardkit.ShardManager;
-import io.github.term4.shardkit.ShardView;
+import io.github.term4.shardkit.shard.Shard;
+import io.github.term4.shardkit.shard.ShardManager;
+import io.github.term4.shardkit.shard.ShardView;
 import io.github.term4.shardkit.event.ticking.DomainQuarantineEvent;
 import io.github.term4.shardkit.replay.Recording;
 import io.github.term4.shardkit.replay.Replay;
@@ -60,7 +60,7 @@ class SoakTest extends HeadlessServerTest {
         List<DetectorEntity> all = new CopyOnWriteArrayList<>();
         for (int i = 0; i < 6; i++) {
             // a mixed pool: transfers constantly cross the server-ticked/domain-ticked boundary
-            Shard s = i % 3 == 2 ? shards.create(instance) : shards.create(instance, domains.root().handle);
+            Shard s = i % 3 == 2 ? shards.create(instance) : shards.create(instance, domains.create().handle);
             pool.add(s);
             for (int j = 0; j < 4; j++) {
                 DetectorEntity e = new DetectorEntity();

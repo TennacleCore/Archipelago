@@ -1,6 +1,6 @@
 package io.github.term4.shardkit.replay;
 
-import io.github.term4.shardkit.polar.Nbt;
+import io.github.term4.shardkit.storage.Nbt;
 import io.github.term4.shardkit.ticking.DomainEntity;
 import io.github.term4.shardkit.ticking.DomainLivingEntity;
 import net.kyori.adventure.nbt.BinaryTag;

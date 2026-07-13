@@ -8,12 +8,13 @@ import io.github.term4.minestommechanics.vri.DroppedItemEntity;
 import io.github.term4.minestommechanics.world.MechanicsWorld;
 import io.github.term4.minestommechanics.world.WorldPolicy;
 import io.github.term4.shardkit.ticking.ExecutionDomain;
-import io.github.term4.shardkit.Shard;
-import io.github.term4.shardkit.ShardView;
+import io.github.term4.shardkit.shard.Shard;
+import io.github.term4.shardkit.shard.ShardView;
 import io.github.term4.shardkit.event.ShardCreateEvent;
 import io.github.term4.shardkit.event.ShardDestroyEvent;
 import io.github.term4.shardkit.event.ShardJoinEvent;
 import io.github.term4.shardkit.event.ShardLeaveEvent;
+import io.github.term4.shardkit.event.ShardReclockEvent;
 import io.github.term4.shardkit.event.ShardTransferEvent;
 import io.github.term4.shardkit.ticking.DomainTicked;
 import io.github.term4.shardkit.world.WorldAccess;
@@ -114,6 +115,11 @@ public final class ShardBridge {
         MinecraftServer.getGlobalEventHandler().addListener(ShardJoinEvent.class, e -> clockGate(e.player()));
         MinecraftServer.getGlobalEventHandler().addListener(ShardLeaveEvent.class, e -> clockGate(e.player()));
         MinecraftServer.getGlobalEventHandler().addListener(ShardTransferEvent.class, e -> clockGate(e.entity()));
+        // a re-clock changes every member's/entity's clock with no join/transfer - gate them all
+        MinecraftServer.getGlobalEventHandler().addListener(ShardReclockEvent.class, e -> {
+            e.shard().members().forEach(ShardBridge::clockGate);
+            e.shard().entities().forEach(ShardBridge::clockGate);
+        });
     }
 
     private static final Tag<Runnable> TICK_HOOK = Tag.Transient("bridge:tick-hook");

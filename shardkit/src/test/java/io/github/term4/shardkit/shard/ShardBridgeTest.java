@@ -1,4 +1,4 @@
-package io.github.term4.shardkit;
+package io.github.term4.shardkit.shard;
 
 import io.github.term4.minestommechanics.MinestomMechanics;
 import io.github.term4.minestommechanics.api.event.ExplosionEvent;
@@ -6,8 +6,8 @@ import io.github.term4.minestommechanics.mechanics.explosion.ExplosionSystem;
 import io.github.term4.minestommechanics.mechanics.vanilla18.Explosion;
 import io.github.term4.minestommechanics.vri.DroppedItemEntity;
 import io.github.term4.minestommechanics.world.MechanicsWorld;
-import io.github.term4.shardkit.polar.EntityDescriptors;
-import io.github.term4.shardkit.polar.PolarShardCodec;
+import io.github.term4.shardkit.storage.EntityDescriptors;
+import io.github.term4.shardkit.storage.polar.PolarShardCodec;
 import io.github.term4.shardkit.testsupport.HeadlessServerTest;
 import io.github.term4.shardkit.testsupport.MechanicsBoot;
 import net.minestom.server.MinecraftServer;

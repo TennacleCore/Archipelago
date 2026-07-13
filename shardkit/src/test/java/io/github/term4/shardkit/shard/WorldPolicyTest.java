@@ -1,4 +1,4 @@
-package io.github.term4.shardkit;
+package io.github.term4.shardkit.shard;
 
 import io.github.term4.shardkit.testsupport.FakePlayer;
 import io.github.term4.shardkit.testsupport.HeadlessServerTest;

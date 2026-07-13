@@ -1,4 +1,4 @@
-package io.github.term4.shardkit.polar;
+package io.github.term4.shardkit.storage;
 
 import net.minestom.server.codec.Codec;
 import org.jetbrains.annotations.NotNull;

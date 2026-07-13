@@ -1,7 +1,8 @@
-package io.github.term4.shardkit;
+package io.github.term4.shardkit.shard;
 
 import io.github.term4.shardkit.event.ShardJoinEvent;
 import io.github.term4.shardkit.event.ShardLeaveEvent;
+import io.github.term4.shardkit.event.ShardReclockEvent;
 import io.github.term4.shardkit.event.ShardTransferEvent;
 import io.github.term4.shardkit.ticking.DomainTicked;
 import io.github.term4.shardkit.ticking.ExecutionDomain;
@@ -29,6 +30,7 @@ import net.minestom.server.instance.Weather;
 import net.minestom.server.instance.WorldBorder;
 import net.minestom.server.instance.block.Block;
 import net.minestom.server.network.packet.client.play.ClientPlayerBlockPlacementPacket;
+import net.minestom.server.network.packet.server.SendablePacket;
 import net.minestom.server.network.packet.server.ServerPacket;
 import net.minestom.server.network.packet.server.play.BlockChangePacket;
 import net.minestom.server.network.packet.server.play.MultiBlockChangePacket;
@@ -86,7 +88,11 @@ public final class Shard implements WorldAccess {
     final Set<Entity> entities = ConcurrentHashMap.newKeySet();
     private final ShardView memberView = ShardView.newMemberView(this);
     private final TagHandler tags = TagHandler.newHandler();
-    private final @Nullable ExecutionDomain domain;
+    private volatile @Nullable ExecutionDomain domain;
+    private final List<LongConsumer> tickHooks = new CopyOnWriteArrayList<>();
+    /** Removal handle of the one underlying registration driving {@link #tickHooks} on the current clock. */
+    private @Nullable Runnable tickDriver;
+    private volatile @Nullable ShardLight light;
     /** ShardManager.destroy guard: the cascade and the quarantine sweep may both reach a shard. */
     volatile boolean destroyed;
 
@@ -131,6 +137,32 @@ public final class Shard implements WorldAccess {
         return domain;
     }
 
+    /**
+     * Re-clocks this shard: covered members/entities hand off to {@code domain} through the mailbox,
+     * {@link #onTick} hooks migrate, and {@link ShardReclockEvent} fires (combat-state bridges re-base their
+     * stamps there). {@code null} = STASIS ({@link ExecutionDomain#stasis()}): removing the executor freezes
+     * the shard - clock, hooks and entities stop dead - it never silently reroutes work to the server; member
+     * PLAYERS alone fall back to server ticking (a frozen connection is a dead client). Same for a domain that
+     * retired or FAILED: the shard sits in stasis until re-clocked here or destroyed - never re-clock onto a
+     * failed domain, bind a fresh one. Serialize calls per shard (like {@link #transfer}).
+     */
+    public void domain(@Nullable ExecutionDomain domain) {
+        ExecutionDomain target = domain != null ? domain : ExecutionDomain.stasis();
+        ExecutionDomain old;
+        synchronized (this) {
+            old = this.domain;
+            if (old == target) return;
+            this.domain = target;
+            if (tickDriver != null) {
+                tickDriver.run();
+                tickDriver = startTickDriver();
+            }
+        }
+        for (Player p : members) adoptTicking(p);
+        for (Entity e : entities) adoptTicking(e);
+        EventDispatcher.call(new ShardReclockEvent(this, old, target));
+    }
+
     /** The layer this shard's diff is relative to, or {@code null} (a root over the base map). */
     public @Nullable Shard parent() {
         return parent;
@@ -142,23 +174,67 @@ public final class Shard implements WorldAccess {
     }
 
     /**
-     * THIS shard's clock: its domain's tick, or the base instance's age when server-ticked. The kind is fixed
-     * at creation - a domain shard's state never rides the server clock. Stamp AND judge tick-stamped state
-     * against this one clock; never compare across shards.
+     * Recomputes chain-effective light for this shard's viewers (sent as follow-up UpdateLight overlays,
+     * Minestom's own engine on a scratch neighborhood). Off by default: base light usually reads fine, and 1.8
+     * clients relight locally from block data - enable on shards whose diffs reshape lighting for modern clients.
+     */
+    public void relight(boolean enabled) {
+        this.light = enabled ? new ShardLight(this) : null;
+    }
+
+    @Nullable ShardLight light() {
+        return light;
+    }
+
+    // a write changed this level's view and every unmasked descendant's; each level's own light refreshes.
+    // no mask pruning: shards without light cost nothing, and light bleeds past exact positions anyway
+    private void lightChanged(Set<Long> chunks) {
+        ShardLight l = light;
+        if (l != null) l.changed(chunks);
+        for (Shard child : children) child.lightChanged(chunks);
+    }
+
+    Set<Long> overlayChunks() {
+        return overlay.chunkKeys();
+    }
+
+    boolean overlayTouches(int chunkX, int chunkZ) {
+        return overlay.touches(chunkX, chunkZ);
+    }
+
+    /**
+     * THIS shard's clock: its domain's tick, or the base instance's age when server-ticked. Stamp AND judge
+     * tick-stamped state against this one clock; never compare across shards, and re-base stamps on
+     * {@link #domain(ExecutionDomain) re-clock} ({@link ShardReclockEvent}).
      */
     public long ticks() {
-        return domain != null ? domain.ticks() : base.getWorldAge();
+        ExecutionDomain d = domain;
+        return d != null ? d.ticks() : base.getWorldAge();
     }
 
     /**
      * Per-tick hook on this shard's clock, called with {@link #ticks()} - a domain shard's own thread, a plain
-     * shard's server scheduler. Returns the removal handle.
+     * shard's server scheduler. Survives a {@link #domain(ExecutionDomain) re-clock}. Returns the removal handle.
      */
     public @NotNull Runnable onTick(@NotNull LongConsumer hook) {
-        if (domain != null) return domain.onTick(hook);
-        Task task = MinecraftServer.getSchedulerManager().scheduleTask(() -> hook.accept(ticks()),
+        synchronized (this) {
+            tickHooks.add(hook);
+            if (tickDriver == null) tickDriver = startTickDriver();
+        }
+        return () -> tickHooks.remove(hook);
+    }
+
+    // one underlying registration on the CURRENT clock fans out to the shard's hooks; swapped on re-clock
+    private Runnable startTickDriver() {
+        ExecutionDomain d = domain;
+        if (d != null) return d.onTick(this::fireTickHooks);
+        Task task = MinecraftServer.getSchedulerManager().scheduleTask(() -> fireTickHooks(ticks()),
                 TaskSchedule.tick(1), TaskSchedule.tick(1));
         return task::cancel;
+    }
+
+    private void fireTickHooks(long tick) {
+        for (LongConsumer hook : tickHooks) hook.accept(tick);
     }
 
     /** Admits {@code player}: binds them to this shard, drops any explicit {@link ShardView}, applies the member view. */
@@ -195,10 +271,17 @@ public final class Shard implements WorldAccess {
                 fanBlock(pos, new BlockChangePacket(pos, revert)); // descendants saw this layer too, where unmasked
             });
             overlay.clear();
+            refreshLight(); // recomputed without the diff = parent-view light; untouched chunks restore base
             for (Entity e : entities) e.remove();
             entities.clear();
             return null;
         });
+    }
+
+    private void refreshLight() {
+        ShardLight l = light;
+        if (l != null) l.refreshLit();
+        for (Shard child : children) child.refreshLight();
     }
 
     public @NotNull Set<Player> members() { return membersView; }
@@ -268,6 +351,7 @@ public final class Shard implements WorldAccess {
     @Override public void setBlock(@NotNull Point pos, @NotNull Block block) {
         overlay.write(pos, block);
         fanBlock(pos, new BlockChangePacket(pos, block));
+        lightChanged(Set.of(CoordConversion.chunkIndex(pos.blockX() >> 4, pos.blockZ() >> 4)));
     }
 
     // a shard write has no native broadcast: it reaches this shard's block viewers plus every descendant's,
@@ -284,6 +368,9 @@ public final class Shard implements WorldAccess {
         onDomain(() -> {
             blocks.forEach(overlay::write);
             fanBatch(blocks);
+            Set<Long> chunks = new HashSet<>();
+            for (Point pos : blocks.keySet()) chunks.add(CoordConversion.chunkIndex(pos.blockX() >> 4, pos.blockZ() >> 4));
+            if (!chunks.isEmpty()) lightChanged(chunks);
             return null;
         });
     }
@@ -404,11 +491,13 @@ public final class Shard implements WorldAccess {
         return d == null ? op.get() : d.relay(op);
     }
 
-    // only opt-out-covered classes move to the domain; anything else would double-tick after a chunk crossing
+    // only opt-out-covered classes move to the domain; anything else would double-tick after a chunk crossing.
+    // players never attach to a clock that can't tick them (stasis/failed) - a frozen connection is a dead client
     private void adoptTicking(Entity entity) {
         if (!DomainTicked.covers(entity)) return;
-        if (domain != null) {
-            domain.attach(entity);
+        ExecutionDomain d = domain;
+        if (d != null && (d.live() || !(entity instanceof Player))) {
+            d.attach(entity);
         } else if (ExecutionDomain.of(entity) != null) {
             ExecutionDomain.detach(entity);
         }
@@ -516,6 +605,43 @@ public final class Shard implements WorldAccess {
         return flat;
     }
 
+    /**
+     * This shard's whole CHAIN collapsed into one independent shard over the base: effective blocks, effective
+     * sky, and every layer's own entities via {@code cloner} ({@link #fork} semantics; root layer's clones
+     * spawn first). Sources untouched. BRANCHES never merge - siblings are alternative realities of the same
+     * coordinates; flatten each leaf's chain. One tick-atomic snapshot on this shard's clock (a cross-clock
+     * ancestor's entities read best-effort - one tree one clock is the recommended default).
+     */
+    public @NotNull Shard flatten(@Nullable Function<Entity, Entity> cloner) {
+        return onDomain(() -> {
+            Shard flat = new Shard(base);
+            Map<Point, Block> blocks = new HashMap<>();
+            effectiveDiff(blocks);
+            flat.setBlocks(blocks);
+            long time = effectiveTimeOverride();
+            if (time >= 0) flat.setTime(time);
+            Weather weather = effectiveWeatherOverride();
+            if (weather != null) flat.setWeather(weather);
+            if (cloner != null) {
+                List<Shard> chain = new ArrayList<>();
+                for (Shard s = this; s != null; s = s.parent) chain.add(s);
+                for (int i = chain.size() - 1; i >= 0; i--) {
+                    for (Entity entity : chain.get(i).entities) {
+                        if (entity.isRemoved()) continue;
+                        Entity clone = cloner.apply(entity);
+                        if (clone != null) flat.spawn(clone, entity.getPosition());
+                    }
+                }
+            }
+            return flat;
+        });
+    }
+
+    /** {@link #flatten(Function)} without entities: blocks + sky only. */
+    public @NotNull Shard flatten() {
+        return flatten(null);
+    }
+
     private boolean sameClock(Shard other) {
         if (domain == null || other.domain == null) return domain == other.domain;
         return domain.sharesClock(other.domain);
@@ -605,7 +731,7 @@ public final class Shard implements WorldAccess {
         for (Player p : watchers()) p.playSound(sound, pos.x(), pos.y(), pos.z());
     }
 
-    private void sendToBlockViewers(ServerPacket packet) {
+    void sendToBlockViewers(SendablePacket packet) {
         for (Player m : members) {
             if (blockViewer(m)) m.sendPacket(packet);
         }
@@ -618,7 +744,7 @@ public final class Shard implements WorldAccess {
         return p.getInstance() == base && ShardView.of(p).blocks() == this;
     }
 
-    private boolean hasBlockViewers() {
+    boolean hasBlockViewers() {
         for (Player m : members) {
             if (blockViewer(m)) return true;
         }
@@ -632,14 +758,16 @@ public final class Shard implements WorldAccess {
     void sendChunkOverlay(Player player, int chunkX, int chunkZ) {
         if (parent == null) {
             overlay.forEachInChunk(chunkX, chunkZ, (pos, block) -> player.sendPacket(new BlockChangePacket(pos, block)));
-            return;
+        } else {
+            Map<Point, Block> effective = new HashMap<>();
+            collectChunk(chunkX, chunkZ, effective);
+            effective.forEach((pos, block) -> player.sendPacket(new BlockChangePacket(pos, block)));
         }
-        Map<Point, Block> effective = new HashMap<>();
-        collectChunk(chunkX, chunkZ, effective);
-        effective.forEach((pos, block) -> player.sendPacket(new BlockChangePacket(pos, block)));
+        ShardLight l = light;
+        if (l != null) l.sendTo(player, chunkX, chunkZ);
     }
 
-    private void collectChunk(int chunkX, int chunkZ, Map<Point, Block> out) {
+    void collectChunk(int chunkX, int chunkZ, Map<Point, Block> out) {
         if (parent != null) parent.collectChunk(chunkX, chunkZ, out);
         overlay.forEachInChunk(chunkX, chunkZ, out::put);
     }
@@ -696,8 +824,9 @@ public final class Shard implements WorldAccess {
     @Override public long worldAge() { return base.getWorldAge(); }
 
     @Override public void scheduleNextTick(@NotNull Consumer<WorldAccess> task) {
-        if (domain != null) {
-            domain.execute(() -> task.accept(this));
+        ExecutionDomain d = domain;
+        if (d != null) {
+            d.execute(() -> task.accept(this));
             return;
         }
         base.scheduleNextTick(in -> task.accept(this));

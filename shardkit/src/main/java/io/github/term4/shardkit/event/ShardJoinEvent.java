@@ -1,6 +1,6 @@
 package io.github.term4.shardkit.event;
 
-import io.github.term4.shardkit.Shard;
+import io.github.term4.shardkit.shard.Shard;
 import net.minestom.server.entity.Player;
 import net.minestom.server.event.trait.PlayerEvent;
 import org.jetbrains.annotations.NotNull;

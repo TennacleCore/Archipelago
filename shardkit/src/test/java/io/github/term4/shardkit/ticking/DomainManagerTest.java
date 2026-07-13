@@ -1,6 +1,6 @@
 package io.github.term4.shardkit.ticking;
 
-import io.github.term4.shardkit.Shard;
+import io.github.term4.shardkit.shard.Shard;
 import io.github.term4.shardkit.event.ticking.DomainQuarantineEvent;
 import io.github.term4.shardkit.testsupport.DetectorEntity;
 import net.minestom.server.MinecraftServer;
@@ -36,8 +36,8 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * The per-root-clock engine: independent roots (a stalled or hung root never slows a sibling), children inline
- * parent-first, reparent/promote moving execution, and the watchdog's interrupt + fail-stop quarantine.
+ * The per-domain-clock engine: independent domains (a stalled or hung domain never slows another), the
+ * ownership mailbox, and the watchdog's interrupt + fail-stop quarantine.
  */
 class DomainManagerTest {
 
@@ -64,36 +64,36 @@ class DomainManagerTest {
         assertTrue(done.get(), what);
     }
 
-    /** Spins {@code root} until {@code released} and waits for the watchdog to quarantine its tree. */
-    private static void quarantine(Domain root, AtomicBoolean released) {
+    /** Spins {@code domain} until {@code released} and waits for the watchdog to quarantine it. */
+    private static void quarantine(Domain domain, AtomicBoolean released) {
         CompletableFuture<ExecutionDomain> quarantined = new CompletableFuture<>();
         EventNode<Event> node = EventNode.all("test:quarantine");
         node.addListener(DomainQuarantineEvent.class, e -> quarantined.complete(e.domain()));
         MinecraftServer.getGlobalEventHandler().addChild(node);
         try {
-            root.execute(() -> {
+            domain.execute(() -> {
                 while (!released.get()) LockSupport.parkNanos(1_000_000);
             });
-            assertEquals(root.handle, quarantined.orTimeout(4, TimeUnit.SECONDS).join(), "the watchdog reported the tree");
+            assertEquals(domain.handle, quarantined.orTimeout(4, TimeUnit.SECONDS).join(), "the watchdog reported the domain");
         } finally {
             MinecraftServer.getGlobalEventHandler().removeChild(node);
         }
     }
 
     @Test
-    void rootsTickIndependentlyOnTheirOwnThreads() {
+    void domainsTickIndependentlyOnTheirOwnThreads() {
         DomainManager domains = new DomainManager();
         DetectorEntity e0 = new DetectorEntity(), e1 = new DetectorEntity();
         try {
-            Domain r0 = domains.root(), r1 = domains.root();
+            Domain r0 = domains.create(), r1 = domains.create();
             domains.attach(r0, e0);
             domains.attach(r1, e1);
             e0.setInstance(instance, new Pos(0.5, 70, 0.5)).join();
             e1.setInstance(instance, new Pos(2.5, 70, 2.5)).join();
-            await("both roots tick", () -> e0.ticks.get() >= 5 && e1.ticks.get() >= 5);
-            assertTrue(e0.thread.startsWith("shard-root:"), e0.thread);
-            assertTrue(e1.thread.startsWith("shard-root:"), e1.thread);
-            assertNotEquals(e0.thread, e1.thread, "each root has its own clock thread");
+            await("both domains tick", () -> e0.ticks.get() >= 5 && e1.ticks.get() >= 5);
+            assertTrue(e0.thread.startsWith("shard-domain:"), e0.thread);
+            assertTrue(e1.thread.startsWith("shard-domain:"), e1.thread);
+            assertNotEquals(e0.thread, e1.thread, "each domain has its own clock thread");
         } finally {
             e0.remove();
             e1.remove();
@@ -102,16 +102,16 @@ class DomainManagerTest {
     }
 
     @Test
-    void aHungRootNeverSlowsItsSiblings() {
+    void aHungDomainNeverSlowsItsSiblings() {
         DomainManager domains = new DomainManager();
         DetectorEntity ea = new DetectorEntity(), eb = new DetectorEntity();
         try {
-            Domain a = domains.root(), b = domains.root();
+            Domain a = domains.create(), b = domains.create();
             domains.attach(a, ea);
             domains.attach(b, eb);
             ea.setInstance(instance, new Pos(0.5, 70, 0.5)).join();
             eb.setInstance(instance, new Pos(2.5, 70, 2.5)).join();
-            await("both roots tick", () -> ea.ticks.get() >= 2 && eb.ticks.get() >= 2);
+            await("both domains tick", () -> ea.ticks.get() >= 2 && eb.ticks.get() >= 2);
 
             CompletableFuture<Void> stallOver = new CompletableFuture<>();
             a.execute(() -> {
@@ -134,83 +134,23 @@ class DomainManagerTest {
     }
 
     @Test
-    void childrenTickInlineAfterTheirParentOnTheRootsThread() {
-        DomainManager domains = new DomainManager();
-        try {
-            Domain root = domains.root();
-            Domain child = domains.child(root);
-            List<String> order = Collections.synchronizedList(new ArrayList<>());
-            String[] threads = new String[2];
-            root.onTick(t -> {
-                order.add("root");
-                threads[0] = Thread.currentThread().getName();
-            });
-            child.onTick(t -> {
-                order.add("child");
-                threads[1] = Thread.currentThread().getName();
-            });
-            await("both hooks run", () -> order.size() >= 6);
-
-            assertEquals(threads[0], threads[1], "the child shares its root's thread");
-            List<String> snapshot;
-            synchronized (order) {
-                snapshot = new ArrayList<>(order.subList(0, 6));
-            }
-            for (int i = 0; i + 1 < 6; i += 2) {
-                assertEquals("root", snapshot.get(i), "parent strictly before children");
-                assertEquals("child", snapshot.get(i + 1));
-            }
-        } finally {
-            domains.shutdown();
-        }
-    }
-
-    @Test
-    void reparentMovesExecutionAndPromoteGrantsAClock() {
-        DomainManager domains = new DomainManager();
-        try {
-            Domain r0 = domains.root(), r1 = domains.root();
-            Domain child = domains.child(r0);
-            String[] childThread = new String[1];
-            String[] rootThreads = new String[2];
-            child.onTick(t -> childThread[0] = Thread.currentThread().getName());
-            r0.onTick(t -> rootThreads[0] = Thread.currentThread().getName());
-            r1.onTick(t -> rootThreads[1] = Thread.currentThread().getName());
-            await("all tick", () -> childThread[0] != null && rootThreads[0] != null && rootThreads[1] != null);
-            assertEquals(rootThreads[0], childThread[0], "starts on r0's thread");
-
-            domains.reparent(child, r1);
-            await("execution followed the new root", () -> rootThreads[1].equals(childThread[0]));
-            assertEquals(r1, child.root());
-
-            domains.promote(child);
-            await("a promoted root ticks on its own fresh clock",
-                    () -> child.isRoot() && childThread[0].startsWith("shard-root:")
-                            && !childThread[0].equals(rootThreads[0]) && !childThread[0].equals(rootThreads[1]));
-            assertNull(child.parent());
-        } finally {
-            domains.shutdown();
-        }
-    }
-
-    @Test
-    void watchdogInterruptFreesABlockedRoot() {
+    void watchdogInterruptFreesABlockedDomain() {
         DomainManager domains = new DomainManager(200, 10_000);
         DetectorEntity e = new DetectorEntity();
         try {
-            Domain root = domains.root();
-            domains.attach(root, e);
+            Domain domain = domains.create();
+            domains.attach(domain, e);
             e.setInstance(instance, new Pos(0.5, 70, 0.5)).join();
-            await("root ticks", () -> e.ticks.get() >= 2);
+            await("the domain ticks", () -> e.ticks.get() >= 2);
 
-            root.execute(() -> {
+            domain.execute(() -> {
                 try {
                     Thread.sleep(60_000); // an interruptible hang: deadlockable lock, stuck future, sleep...
                 } catch (InterruptedException freedByWatchdog) {
                 }
             });
             long before = e.ticks.get();
-            await("the watchdog interrupt freed the root and ticking resumed", () -> e.ticks.get() >= before + 3);
+            await("the watchdog interrupt freed the clock and ticking resumed", () -> e.ticks.get() >= before + 3);
         } finally {
             e.remove();
             domains.shutdown();
@@ -234,14 +174,14 @@ class DomainManagerTest {
             e.setInstance(instance, new Pos(4.5, 70, 4.5)).join();
             server.start();
             await("the server drives it", () -> e.ticks.get() >= 3);
-            Domain d = domains.root();
+            Domain d = domains.create();
             for (int round = 0; round < 12; round++) {
                 domains.attach(d, e);
                 long taken = e.ticks.get();
-                await("the domain takes over", () -> e.ticks.get() > taken && e.thread.startsWith("shard-root:"));
+                await("the domain takes over", () -> e.ticks.get() > taken && e.thread.startsWith("shard-domain:"));
                 DomainManager.detach(e);
                 long back = e.ticks.get();
-                await("the server takes back", () -> e.ticks.get() > back && !e.thread.startsWith("shard-root:"));
+                await("the server takes back", () -> e.ticks.get() > back && !e.thread.startsWith("shard-domain:"));
             }
             assertEquals(0, e.overlaps.get(), "an adopted entity was ticked by two threads at once");
         } finally {
@@ -268,7 +208,7 @@ class DomainManagerTest {
         try {
             e.setInstance(instance, new Pos(6.5, 70, 6.5)).join();
             server.start();
-            Domain[] targets = {domains.root(), domains.root(), domains.root()};
+            Domain[] targets = {domains.create(), domains.create(), domains.create()};
             // re-transfers issued faster than the clocks drain their hops: every release must chase the
             // CURRENT owner or it races the real owner's in-flight tick
             for (int i = 0; i < 900; i++) domains.attach(targets[i % 3], e);
@@ -289,29 +229,29 @@ class DomainManagerTest {
     }
 
     @Test
-    void quarantinedTreesStillReleaseTheirEntities() {
+    void quarantinedDomainsStillReleaseTheirEntities() {
         DomainManager domains = new DomainManager(150, 600);
         DetectorEntity evacuee = new DetectorEntity(), rebound = new DetectorEntity();
         try {
-            Domain root = domains.root(), refuge = domains.root();
-            domains.attach(root, evacuee);
-            domains.attach(root, rebound);
+            Domain doomed = domains.create(), refuge = domains.create();
+            domains.attach(doomed, evacuee);
+            domains.attach(doomed, rebound);
             evacuee.setInstance(instance, new Pos(0.5, 70, 0.5)).join();
             rebound.setInstance(instance, new Pos(2.5, 70, 2.5)).join();
             await("ticking", () -> evacuee.ticks.get() >= 2 && rebound.ticks.get() >= 2);
 
             AtomicBoolean released = new AtomicBoolean();
-            quarantine(root, released);
+            quarantine(doomed, released);
 
             DomainManager.detach(evacuee); // the quarantine evacuation path - dropping it would freeze the entity forever
-            assertNull(Domain.of(evacuee), "detach must work on a quarantined tree");
+            assertNull(Domain.of(evacuee), "detach must work on a quarantined domain");
             long before = evacuee.ticks.get();
             evacuee.tick(System.currentTimeMillis()); // server-tickable again (headless stand-in)
             assertEquals(before + 1, evacuee.ticks.get());
 
-            domains.attach(refuge, rebound); // ...and so must moving survivors to a live tree
+            domains.attach(refuge, rebound); // ...and so must moving survivors to a live domain
             await("the refuge clock drives the survivor",
-                    () -> Domain.of(rebound) == refuge && rebound.thread.startsWith("shard-root:"));
+                    () -> Domain.of(rebound) == refuge && rebound.thread.startsWith("shard-domain:"));
             released.set(true);
         } finally {
             evacuee.remove();
@@ -324,7 +264,7 @@ class DomainManagerTest {
     void queuedTasksAreNeverLostWhenTheirDomainDies() throws InterruptedException {
         DomainManager domains = new DomainManager();
         try {
-            Domain d = domains.root();
+            Domain d = domains.create();
             CountDownLatch inStall = new CountDownLatch(1);
             d.execute(() -> {
                 inStall.countDown();
@@ -344,7 +284,7 @@ class DomainManagerTest {
     void relayEscapesAQuarantinedSpinner() {
         DomainManager domains = new DomainManager(150, 600);
         try {
-            Domain d = domains.root();
+            Domain d = domains.create();
             AtomicBoolean released = new AtomicBoolean();
             quarantine(d, released);
             // the zombie never drains its queue; the relay must reclaim its task instead of hanging the caller
@@ -356,28 +296,11 @@ class DomainManagerTest {
     }
 
     @Test
-    void attachRightAfterChildCreationLands() {
-        DomainManager domains = new DomainManager();
-        DetectorEntity e = new DetectorEntity();
-        try {
-            Domain parent = domains.root();
-            Domain sub = domains.child(parent);
-            domains.attach(sub, e); // before the parent's clock ever cycled
-            e.setInstance(instance, new Pos(0.5, 70, 0.5)).join();
-            await("the parent's clock ticks the sub-domain entity",
-                    () -> e.ticks.get() >= 2 && e.thread.startsWith("shard-root:"));
-        } finally {
-            e.remove();
-            domains.shutdown();
-        }
-    }
-
-    @Test
     void aQueuedHopSurvivesTheTargetRetiring() throws InterruptedException {
         DomainManager domains = new DomainManager();
         DetectorEntity e = new DetectorEntity();
         try {
-            Domain a = domains.root(), b = domains.root();
+            Domain a = domains.create(), b = domains.create();
             domains.attach(a, e);
             e.setInstance(instance, new Pos(0.5, 70, 0.5)).join();
             await("a drives it", () -> e.ticks.get() >= 2);
@@ -411,7 +334,7 @@ class DomainManagerTest {
         DetectorEntity stray = new DetectorEntity();
         Set<String> threads = ConcurrentHashMap.newKeySet();
         try {
-            Domain a = domains.root(), b = domains.root();
+            Domain a = domains.create(), b = domains.create();
             domains.attach(b, stray);
             stray.setInstance(instance, new Pos(0.5, 70, 0.5)).join();
             await("b drives it", () -> stray.ticks.get() >= 2);
@@ -433,12 +356,12 @@ class DomainManagerTest {
     void aTickCountAlwaysSpansItsWallTimeAndStallsNeverBurst() throws InterruptedException {
         DomainManager domains = new DomainManager();
         try {
-            Domain d = domains.root();
+            Domain d = domains.create();
             long start = d.ticks();
             long t0 = System.nanoTime();
             await("40 ticks pass", () -> d.ticks() >= start + 40);
             long elapsed = System.nanoTime() - t0;
-            assertTrue(elapsed >= 38 * RootClock.PERIOD_NANOS,
+            assertTrue(elapsed >= 38 * DomainClock.PERIOD_NANOS,
                     "40 ticks must span >= their wall time, took " + elapsed / 1_000_000 + "ms");
 
             CompletableFuture<Void> stallOver = new CompletableFuture<>();
@@ -464,9 +387,9 @@ class DomainManagerTest {
     void msptMeasuresPerDomainTickCost() {
         DomainManager domains = new DomainManager();
         try {
-            Domain idle = domains.root(), busy = domains.root();
+            Domain idle = domains.create(), busy = domains.create();
             busy.onTick(t -> LockSupport.parkNanos(10_000_000)); // ~10ms of tick cost
-            await("the busy tree's cost registers", () -> domains.mspt(busy) >= 5.0);
+            await("the busy domain's cost registers", () -> domains.mspt(busy) >= 5.0);
             assertTrue(domains.mspt(idle) < domains.mspt(busy),
                     "cost is per-clock: idle=" + domains.mspt(idle) + " busy=" + domains.mspt(busy));
         } finally {
@@ -478,7 +401,7 @@ class DomainManagerTest {
     void relayRunsInlineOnItsOwnClockAndFailsLoudFromAForeignOne() {
         DomainManager domains = new DomainManager();
         try {
-            Domain a = domains.root(), b = domains.root();
+            Domain a = domains.create(), b = domains.create();
             CompletableFuture<Object> outcome = new CompletableFuture<>();
             a.onTick(t -> {
                 if (outcome.isDone()) return;
@@ -501,7 +424,7 @@ class DomainManagerTest {
     void anErrorInATickNeverKillsTheClock() {
         DomainManager domains = new DomainManager();
         try {
-            Domain d = domains.root();
+            Domain d = domains.create();
             AtomicLong ticks = new AtomicLong();
             d.onTick(t -> {
                 if (ticks.incrementAndGet() == 2) throw new AssertionError("entity code gone wrong");
@@ -516,15 +439,15 @@ class DomainManagerTest {
     }
 
     @Test
-    void watchdogQuarantinesAnUninterruptibleRootAndWritesACrashReport() throws IOException {
+    void watchdogQuarantinesAnUninterruptibleDomainAndWritesACrashReport() throws IOException {
         DomainManager domains = new DomainManager(150, 600);
         try {
-            Domain root = domains.root();
-            String clockThread = domains.threadName(root);
+            Domain domain = domains.create();
+            String clockThread = domains.threadName(domain);
             AtomicBoolean released = new AtomicBoolean();
             AtomicLong hookTicks = new AtomicLong();
-            root.onTick(t -> hookTicks.incrementAndGet());
-            quarantine(root, released); // the park loop ignores interrupts: a true hang
+            domain.onTick(t -> hookTicks.incrementAndGet());
+            quarantine(domain, released); // the park loop ignores interrupts: a true hang
 
             Path dir = Path.of(System.getProperty("shardkit.crash-dir"));
             try (var files = Files.list(dir)) {

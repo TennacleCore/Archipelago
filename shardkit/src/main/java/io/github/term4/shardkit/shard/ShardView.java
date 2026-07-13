@@ -1,4 +1,4 @@
-package io.github.term4.shardkit;
+package io.github.term4.shardkit.shard;
 
 import io.github.term4.shardkit.world.WorldAccess;
 import io.github.term4.shardkit.world.WorldPolicy;
@@ -202,6 +202,7 @@ public final class ShardView {
         if (to != null && in == to.instance()) collectChainDiff(to, lca, positions);
         Shard newView = to != null && in == to.instance() ? to : null;
         for (Point pos : positions) sendViewAt(player, newView, pos);
+        ShardLight.onViewSwap(player, from != null && in == from.instance() ? from : null, newView);
     }
 
     private static void collectChainDiff(Shard shard, @Nullable Shard stop, Set<Point> out) {

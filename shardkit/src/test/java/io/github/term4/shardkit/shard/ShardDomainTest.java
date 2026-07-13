@@ -1,4 +1,4 @@
-package io.github.term4.shardkit;
+package io.github.term4.shardkit.shard;
 
 import io.github.term4.shardkit.testsupport.DetectorEntity;
 import io.github.term4.shardkit.testsupport.HeadlessServerTest;
@@ -32,7 +32,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class ShardDomainTest extends HeadlessServerTest {
 
     @Test
-    void domainShardsTickMarkedEntitiesOnTheirRootClock() {
+    void domainShardsTickMarkedEntitiesOnTheirDomainClock() {
         ExecutionDomain domain = ExecutionDomain.create();
         DetectorEntity marked = new DetectorEntity();
         Entity plain = new Entity(EntityType.ARMOR_STAND);
@@ -41,7 +41,7 @@ class ShardDomainTest extends HeadlessServerTest {
             shard.spawn(marked, new Pos(0.5, 70, 0.5)).join();
             shard.spawn(plain, new Pos(2.5, 70, 2.5)).join();
             await("the marked entity ticks on the shard's clock",
-                    () -> marked.ticks.get() >= 3 && marked.thread.startsWith("shard-root:"));
+                    () -> marked.ticks.get() >= 3 && marked.thread.startsWith("shard-domain:"));
             assertNull(ExecutionDomain.of(plain), "unmarked classes stay server-ticked (no silent double-tick risk)");
         } finally {
             marked.remove();
@@ -60,12 +60,12 @@ class ShardDomainTest extends HeadlessServerTest {
             Shard plain = new Shard(instance);
 
             a.spawn(e, new Pos(0.5, 70, 0.5)).join();
-            await("a's clock drives it", () -> e.ticks.get() >= 3 && e.thread.startsWith("shard-root:"));
+            await("a's clock drives it", () -> e.ticks.get() >= 3 && e.thread.startsWith("shard-domain:"));
             String aThread = e.thread;
 
             b.transfer(e);
             await("b's clock drives it after the transfer",
-                    () -> ExecutionDomain.of(e) == db && e.thread.startsWith("shard-root:") && !e.thread.equals(aThread));
+                    () -> ExecutionDomain.of(e) == db && e.thread.startsWith("shard-domain:") && !e.thread.equals(aThread));
 
             plain.transfer(e);
             await("a domainless shard hands it back to the server", () -> ExecutionDomain.of(e) == null);
@@ -83,7 +83,7 @@ class ShardDomainTest extends HeadlessServerTest {
             Shard shard = new Shard(instance, domain);
             CompletableFuture<String> ran = new CompletableFuture<>();
             shard.scheduleNextTick(w -> ran.complete(Thread.currentThread().getName()));
-            assertTrue(ran.orTimeout(4, TimeUnit.SECONDS).join().startsWith("shard-root:"));
+            assertTrue(ran.orTimeout(4, TimeUnit.SECONDS).join().startsWith("shard-domain:"));
         } finally {
             domain.retire();
         }
@@ -137,7 +137,7 @@ class ShardDomainTest extends HeadlessServerTest {
             });
             await("the hook rides the shard's clock", () -> seen.size() >= 3);
             stop.run();
-            assertTrue(thread[0].startsWith("shard-root:"), thread[0]);
+            assertTrue(thread[0].startsWith("shard-domain:"), thread[0]);
             List<Long> snapshot;
             synchronized (seen) {
                 snapshot = new ArrayList<>(seen);
@@ -151,6 +151,75 @@ class ShardDomainTest extends HeadlessServerTest {
             assertTrue(seen.size() <= stopped + 1, "the handle removed the hook"); // <= : one fire may be in flight
         } finally {
             domain.retire();
+        }
+    }
+
+    @Test
+    void destroyFromAForeignClockHandsOffInsteadOfThrowing() {
+        // a domain player's commands run on THEIR clock: /shard destroy <other> lands exactly here
+        ExecutionDomain da = ExecutionDomain.create(), db = ExecutionDomain.create();
+        ShardManager manager = new ShardManager();
+        DetectorEntity e = new DetectorEntity();
+        try {
+            Shard a = manager.create(instance, "foreign-a", da);
+            Shard b = manager.create(instance, "foreign-b", db);
+            b.spawn(e, new Pos(0.5, 70, 0.5)).join();
+            await("b ticks its entity", () -> e.ticks.get() >= 2);
+
+            da.execute(() -> manager.destroy(b));
+            await("the destroy handed off to b's own clock and completed", () -> manager.byName("foreign-b") == null);
+            assertTrue(e.isRemoved(), "shard entities died with the shard");
+            assertEquals(a, manager.byName("foreign-a"), "the caller's shard is untouched");
+        } finally {
+            e.remove();
+            Shard a = manager.byName("foreign-a");
+            if (a != null) manager.destroy(a);
+            da.retire();
+            db.retire();
+        }
+    }
+
+    @Test
+    void reclockMovesTheShardAcrossClocksAndOutOfStasis() {
+        ExecutionDomain da = ExecutionDomain.create(), db = ExecutionDomain.create();
+        DetectorEntity e = new DetectorEntity();
+        List<String> hookThreads = Collections.synchronizedList(new ArrayList<>());
+        try {
+            Shard shard = new Shard(instance, da);
+            Runnable stopHook = shard.onTick(t -> hookThreads.add(Thread.currentThread().getName()));
+            shard.spawn(e, new Pos(0.5, 70, 0.5)).join();
+            await("a drives entity and hooks", () -> e.ticks.get() >= 2 && !hookThreads.isEmpty());
+            String aThread = e.thread;
+
+            shard.domain(db); // live re-clock: entities and hooks follow
+            await("b drives the entity", () -> ExecutionDomain.of(e) == db
+                    && e.thread.startsWith("shard-domain:") && !e.thread.equals(aThread));
+            await("the hook migrated to b's clock", () -> !hookThreads.isEmpty()
+                    && hookThreads.get(hookThreads.size() - 1).equals(e.thread));
+
+            db.retire(); // the domain dies, the shard does NOT: stasis (frozen clock, inline ops)
+            await("the entity is back on the server", () -> ExecutionDomain.of(e) == null);
+            shard.setBlock(new Pos(1.5, 70, 1.5), Block.STONE); // inline, no throw
+
+            ExecutionDomain fresh = ExecutionDomain.create();
+            shard.domain(fresh); // stasis ends by reassignment
+            await("the fresh clock revives the shard", () -> ExecutionDomain.of(e) == fresh
+                    && e.thread.startsWith("shard-domain:"));
+            stopHook.run();
+
+            shard.domain(null); // null = deliberate STASIS: the entity freezes, never reroutes to the server
+            await("the entity is parked on a clockless domain", () -> {
+                ExecutionDomain owner = ExecutionDomain.of(e);
+                return owner != null && !owner.live();
+            });
+            long parked = e.ticks.get();
+            LockSupport.parkNanos(150_000_000);
+            assertEquals(parked, e.ticks.get(), "stasis means FROZEN");
+            fresh.retire();
+        } finally {
+            e.remove();
+            da.retire();
+            db.retire();
         }
     }
 

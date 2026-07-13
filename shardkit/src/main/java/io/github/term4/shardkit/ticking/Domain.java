@@ -1,6 +1,9 @@
 package io.github.term4.shardkit.ticking;
 
+import io.github.term4.shardkit.event.ticking.DomainTickEvent;
+import net.minestom.server.MinecraftServer;
 import net.minestom.server.entity.Entity;
+import net.minestom.server.event.ListenerHandle;
 import net.minestom.server.tag.Tag;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -22,10 +25,10 @@ import java.util.function.LongConsumer;
 import java.util.function.Supplier;
 
 /**
- * One execution node and tree member: owned entities, per-tick hooks and a task queue, all ticked on the ROOT's
- * thread - a root owns a {@link RootClock}, children tick inline after their parent. Structure changes go through
- * the {@link DomainManager}, applied between that tree's ticks, never mid-subtree. Public face:
- * {@link ExecutionDomain}, one canonical handle per node.
+ * One execution node: owned entities, per-tick hooks and a task queue, ticked by its own {@link DomainClock}.
+ * Flat by design - hierarchy is a SHARD concept (shards share a domain handle); domains only own entities and
+ * hand them off. Ownership changes go through the {@link DomainManager}, applied between the owning clock's
+ * ticks. Public face: {@link ExecutionDomain}, one canonical handle per node.
  */
 final class Domain {
 
@@ -37,10 +40,13 @@ final class Domain {
     /** Adopted from the global dispatcher: not ticked until the dispatcher's queued eviction had a tick to drain. */
     record Arrival(Entity entity, long readyNanos) {}
 
+    private static final ListenerHandle<DomainTickEvent> TICK_EVENT =
+            MinecraftServer.getGlobalEventHandler().getHandle(DomainTickEvent.class);
+
     final ExecutionDomain handle = new ExecutionDomain(this);
     private final DomainManager manager;
-    volatile @Nullable Domain parent;
-    final List<Domain> children = new CopyOnWriteArrayList<>();
+    /** A deliberately clockless domain: attached entities freeze (stasis) instead of falling back to the server. */
+    final boolean stasis;
     final Set<Entity> entities = ConcurrentHashMap.newKeySet();
     final Queue<Arrival> arrivals = new ConcurrentLinkedQueue<>();
     private final Queue<Runnable> tasks = new ConcurrentLinkedQueue<>();
@@ -49,28 +55,14 @@ final class Domain {
     private boolean loggedError;
     private boolean loggedBacklog;
 
-    Domain(DomainManager manager) {
+    Domain(DomainManager manager, boolean stasis) {
         this.manager = manager;
+        this.stasis = stasis;
     }
 
     /** The domain owning {@code entity}, or {@code null} (server-ticked). */
     static @Nullable Domain of(@NotNull Entity entity) {
         return entity.getTag(TAG);
-    }
-
-    boolean isRoot() {
-        return parent == null;
-    }
-
-    @Nullable Domain parent() {
-        return parent;
-    }
-
-    /** The root whose thread ticks this domain (itself when a root). */
-    @NotNull Domain root() {
-        Domain d = this;
-        for (Domain p = parent; p != null; p = p.parent) d = p;
-        return d;
     }
 
     @NotNull DomainManager manager() {
@@ -86,37 +78,37 @@ final class Domain {
         return ticks;
     }
 
-    /** Whether the current thread is this domain's root clock thread. */
+    /** Whether the current thread is this domain's clock thread. */
     boolean onThread() {
-        RootClock clock = RootClock.current();
-        return clock != null && clock.root() == root();
+        DomainClock clock = DomainClock.current();
+        return clock != null && clock.domain() == this;
     }
 
     /** Whether the current thread is ANY domain clock thread (relay / join-deadlock guards). */
     static boolean onClockThread() {
-        return RootClock.current() != null;
+        return DomainClock.current() != null;
     }
 
-    /** Whether this domain's tree has a live clock (false once retired or quarantined). */
+    /** Whether this domain has a live clock (false once retired or quarantined). */
     boolean live() {
-        return manager.hasClock(root());
+        return manager.hasClock(this);
     }
 
     /**
-     * Runs {@code task} on this domain's next tick (its root's thread) - the cross-domain hand-off. Runs inline
-     * when the tree has no live clock. The queue is unbounded by design: it drains fully each tick, a stalled
-     * tree's growth window ends at quarantine (tasks then run inline), and a producer outpacing the drain gets
+     * Runs {@code task} on this domain's next tick - the cross-domain hand-off. Runs inline when the domain
+     * has no live clock. The queue is unbounded by design: it drains fully each tick, a stalled domain's
+     * growth window ends at quarantine (tasks then run inline), and a producer outpacing the drain gets
      * one WARN - bounding would mean dropping or rerouting shard work, both off the table.
      */
     void execute(@NotNull Runnable task) {
         tasks.add(task);
-        // claimed back atomically: a dead tree's queue is never drained, and a caller may be waiting on this
+        // claimed back atomically: a dead domain's queue is never drained, and a caller may be waiting on this
         if (!live() && tasks.remove(task)) task.run();
     }
 
     /**
      * Runs {@code task} on this domain's thread and waits - the synchronous snapshot/batch relay. Runs inline
-     * when already on the owner or the tree has no live clock; throws from any OTHER clock thread (two live
+     * when already on the owner or the domain has no live clock; throws from any OTHER clock thread (two live
      * clocks joining each other would deadlock). If the clock dies with the relay still queued, the task is
      * reclaimed and runs on the caller instead of hanging it.
      */
@@ -164,9 +156,10 @@ final class Domain {
         return tickHooks.size();
     }
 
-    /** Clock entry (roots only): this domain, then children, inline on the root's thread. */
+    /** Clock entry: hooks, then owned entities, on this domain's thread. */
     void tick(long time) {
         long now = ++ticks;
+        if (TICK_EVENT.hasListener()) safely(() -> TICK_EVENT.call(new DomainTickEvent(handle, now)), time);
         drainTasks(time);
         for (LongConsumer hook : tickHooks) safely(() -> hook.accept(now), time);
         admitArrivals();
@@ -192,11 +185,11 @@ final class Domain {
             if (e.getInstance() == null) continue; // async spawn not landed yet
             safely(() -> e.tick(time), time);
         }
-        for (Domain child : children) child.tick(time);
     }
 
-    // bounded drain: a task that re-executes itself runs NEXT tick, not forever inside this one
-    private void drainTasks(long time) {
+    // bounded drain: a task that re-executes itself runs NEXT tick, not forever inside this one.
+    // also the retire/shutdown final cycle: relayed work must complete even while the domain is not ticking
+    void drainTasks(long time) {
         int pending = tasks.size();
         if (pending >= 10_000 && !loggedBacklog) {
             loggedBacklog = true;
@@ -207,12 +200,6 @@ final class Domain {
             if (task == null) break;
             safely(task, time);
         }
-    }
-
-    /** Retire/shutdown final cycle: relayed work must complete even while the tree is not ticking. */
-    void drainTasksTree(long time) {
-        drainTasks(time);
-        for (Domain child : children) child.drainTasksTree(time);
     }
 
     private void admitArrivals() {
@@ -226,7 +213,7 @@ final class Domain {
         }
     }
 
-    // one bad entity/task must never take the whole tree's tick with it - Errors included
+    // one bad entity/task must never take the whole domain's tick with it - Errors included
     private void safely(Runnable op, long time) {
         try {
             op.run();

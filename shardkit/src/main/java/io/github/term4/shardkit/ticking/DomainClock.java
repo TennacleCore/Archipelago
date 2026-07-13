@@ -10,23 +10,23 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.locks.LockSupport;
 
 /**
- * One ROOT's clock: a free-running virtual-thread loop at the server tick rate, parked between ticks (a blocked
- * root costs its carrier nothing). No clock waits for any other - a stall stays in its tree. Structural ops
- * ({@link #submit}) drain first each cycle; overruns drop behind, never burst.
+ * One domain's clock: a free-running virtual-thread loop at the server tick rate, parked between ticks (a
+ * blocked clock costs its carrier nothing). No clock waits for any other - a stall stays in its domain.
+ * Ownership ops ({@link #submit}) drain first each cycle; overruns drop behind, never burst.
  */
-final class RootClock {
+final class DomainClock {
 
     static final long PERIOD_NANOS = 1_000_000_000L / ServerFlag.SERVER_TICKS_PER_SECOND;
 
-    private static final Logger LOGGER = LoggerFactory.getLogger(RootClock.class);
-    private static final ThreadLocal<RootClock> CURRENT = new ThreadLocal<>();
+    private static final Logger LOGGER = LoggerFactory.getLogger(DomainClock.class);
+    private static final ThreadLocal<DomainClock> CURRENT = new ThreadLocal<>();
 
     /** The clock owning the current thread, or {@code null} (a server/foreign thread). */
-    static @Nullable RootClock current() {
+    static @Nullable DomainClock current() {
         return CURRENT.get();
     }
 
-    private final Domain root;
+    private final Domain domain;
     private final Thread thread;
     private final Queue<Runnable> ops = new ConcurrentLinkedQueue<>();
 
@@ -48,33 +48,33 @@ final class RootClock {
     private volatile long baseNanos;
     private volatile long baseTicks;
 
-    RootClock(Domain root) {
-        this.root = root;
+    DomainClock(Domain domain) {
+        this.domain = domain;
         this.baseNanos = System.nanoTime();
         this.thread = Thread.ofVirtual()
-                .name("shard-root:" + Integer.toHexString(System.identityHashCode(root)))
+                .name("shard-domain:" + Integer.toHexString(System.identityHashCode(domain)))
                 .unstarted(this::run);
         thread.start();
     }
 
-    Domain root() {
-        return root;
+    Domain domain() {
+        return domain;
     }
 
     Thread thread() {
         return thread;
     }
 
-    /** Runs {@code op} on this clock's thread at the next cycle, before the tree ticks - the structural seam. */
+    /** Runs {@code op} on this clock's thread at the next cycle, before the domain ticks - the ownership seam. */
     void submit(Runnable op) {
         ops.add(op);
         LockSupport.unpark(thread);
     }
 
-    /** Ticks this tree is behind the wall clock - the honesty/saturation metric. */
+    /** Ticks this domain is behind the wall clock - the honesty/saturation metric. */
     long lag() {
         long expected = baseTicks + (System.nanoTime() - baseNanos) / PERIOD_NANOS;
-        return Math.max(0, expected - root.ticks());
+        return Math.max(0, expected - domain.ticks());
     }
 
     /** Smoothed per-tick cost in ms (~16-tick horizon); lag() is lateness, this is the saturation gauge. */
@@ -116,14 +116,14 @@ final class RootClock {
             if (next < System.nanoTime()) { // overran: drop behind, and lag re-bases so it reads CURRENT stall, not history
                 next = System.nanoTime() + PERIOD_NANOS;
                 baseNanos = System.nanoTime();
-                baseTicks = root.ticks();
+                baseTicks = domain.ticks();
             }
             tickStartNanos = System.nanoTime();
             try {
                 Runnable op;
                 while ((op = ops.poll()) != null) safely(op);
-                root.tick(System.currentTimeMillis());
-            } catch (Throwable e) { // Errors included: a dead loop hangs every later relay into this tree
+                domain.tick(System.currentTimeMillis());
+            } catch (Throwable e) { // Errors included: a dead loop hangs every later relay into this domain
                 logOnce(e);
             } finally {
                 long costNanos = System.nanoTime() - tickStartNanos;
@@ -138,14 +138,14 @@ final class RootClock {
                 Thread.interrupted();
             }
         }
-        // final cycle: stranded ops/relays complete before the hand-off hook; a quarantined tree keeps its
-        // structural queue frozen (a stale attach would tag an entity into the abandoned tree)
+        // final cycle: stranded ops/relays complete before the hand-off hook; a quarantined domain keeps its
+        // ownership queue frozen (a stale attach would tag an entity into the abandoned domain)
         try {
             if (!quarantined) {
                 Runnable op;
                 while ((op = ops.poll()) != null) safely(op);
             }
-            root.drainTasksTree(System.currentTimeMillis());
+            domain.drainTasks(System.currentTimeMillis());
         } catch (Throwable e) {
             logOnce(e);
         }

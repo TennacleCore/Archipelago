@@ -10,8 +10,8 @@ import java.util.function.Supplier;
 /**
  * The clock a shard runs on: a free-running thread ticking attached entities and hooks at the server tick rate,
  * independent of every other domain - one stalled game never slows another. Create one per game and bind shards
- * to it ({@link io.github.term4.shardkit.Shard#Shard(net.minestom.server.instance.Instance, ExecutionDomain)
- * Shard(Instance, ExecutionDomain)}); {@link io.github.term4.shardkit.ShardManager#destroy ShardManager.destroy}
+ * to it ({@link io.github.term4.shardkit.shard.Shard#Shard(net.minestom.server.instance.Instance, ExecutionDomain)
+ * Shard(Instance, ExecutionDomain)}); {@link io.github.term4.shardkit.shard.ShardManager#destroy ShardManager.destroy}
  * retires it with the shard.
  *
  * <p>A domain is a FAILURE DOMAIN: its work never reroutes to another thread. A tick hung past the watchdog's
@@ -33,6 +33,19 @@ public final class ExecutionDomain {
 
     /** A new domain with its own clock, on the engine. */
     public static @NotNull ExecutionDomain create() {
+        return engine0().create().handle;
+    }
+
+    /**
+     * A domain with NO clock: attaching an entity FREEZES it (nothing ever ticks it) until it moves to a live
+     * domain or {@link #detach detaches}. {@code Shard.domain(null)} parks a shard here - stasis, not a silent
+     * fallback to the server clock.
+     */
+    public static @NotNull ExecutionDomain stasis() {
+        return engine0().stasis().handle;
+    }
+
+    private static DomainManager engine0() {
         DomainManager engine = engineManager;
         if (engine == null) {
             synchronized (ENGINE_LOCK) {
@@ -42,7 +55,7 @@ public final class ExecutionDomain {
                 engine = engineManager;
             }
         }
-        return engine.root().handle;
+        return engine;
     }
 
     /** Engine watchdog thresholds (defaults 5s interrupt, 15s fail-stop); call before the first {@link #create}. */
@@ -117,9 +130,18 @@ public final class ExecutionDomain {
         return node.onThread();
     }
 
-    /** Whether this domain and {@code other} tick on the same clock - tick stamps stay valid across such moves. */
+    /**
+     * Whether the current thread is ANY domain clock thread. A domain player's packets (and so their commands)
+     * process on their owning clock - code targeting ANOTHER live domain from here must {@link #execute
+     * hand off} instead of {@link #relay relaying} (two live clocks never join each other).
+     */
+    public static boolean onClockThread() {
+        return Domain.onClockThread();
+    }
+
+    /** Whether this domain and {@code other} tick on the same clock (domains are flat: the same domain). */
     public boolean sharesClock(@NotNull ExecutionDomain other) {
-        return node.root() == other.node.root();
+        return node == other.node;
     }
 
     /** Whether this domain has a live clock (false once retired or failed). */
@@ -134,7 +156,7 @@ public final class ExecutionDomain {
 
     /** One pull of this domain's raw counters. */
     public @NotNull Metrics metrics() {
-        RootClock clock = node.manager().clocks.get(node.root());
+        DomainClock clock = node.manager().clocks.get(node);
         return new Metrics(node.ticks(),
                 clock == null ? 0 : clock.lag(),
                 clock == null ? 0 : clock.msptLast(),
@@ -142,7 +164,7 @@ public final class ExecutionDomain {
                 clock == null ? 0 : clock.msptMax(),
                 clock == null ? 0 : clock.deadlineMisses(),
                 node.taskBacklog(), node.arrivals.size(), node.entities.size(), node.hookCount(),
-                clock == null ? null : clock.thread().getName(), clock != null, RootClock.PERIOD_NANOS);
+                clock == null ? null : clock.thread().getName(), clock != null, DomainClock.PERIOD_NANOS);
     }
 
     /** One pull of the engine's raw counters. */

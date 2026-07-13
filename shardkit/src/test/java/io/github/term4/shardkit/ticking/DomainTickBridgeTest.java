@@ -9,8 +9,8 @@ import io.github.term4.minestommechanics.util.tick.TickPhase;
 import io.github.term4.minestommechanics.util.tick.TickSystem;
 import io.github.term4.minestommechanics.vri.DroppedItemEntity;
 import io.github.term4.minestommechanics.world.MechanicsWorld;
-import io.github.term4.shardkit.Shard;
-import io.github.term4.shardkit.ShardManager;
+import io.github.term4.shardkit.shard.Shard;
+import io.github.term4.shardkit.shard.ShardManager;
 import io.github.term4.shardkit.testsupport.FakePlayer;
 import io.github.term4.shardkit.testsupport.HeadlessServerTest;
 import io.github.term4.shardkit.testsupport.MechanicsBoot;
@@ -64,7 +64,7 @@ class DomainTickBridgeTest extends HeadlessServerTest {
             joined[0] = player;
             shard.join(player);
             await("the world pass owns the player on the shard's clock", () -> worldPasses.stream()
-                    .anyMatch(p -> p.owned() && p.thread().startsWith("shard-root:")));
+                    .anyMatch(p -> p.owned() && p.thread().startsWith("shard-domain:")));
             assertTrue(MechanicsWorld.externalTick(player) >= 0, "the player's clock is the domain's");
             assertFalse(new TickContext(MechanicsWorld.of(instance), 1, 20, false).owns(player),
                     "the main pass leaves domain players alone");

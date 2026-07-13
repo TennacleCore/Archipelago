@@ -1,7 +1,7 @@
 package io.github.term4.shardkit.replay.core;
 
-import io.github.term4.shardkit.Shard;
-import io.github.term4.shardkit.polar.Nbt;
+import io.github.term4.shardkit.shard.Shard;
+import io.github.term4.shardkit.storage.Nbt;
 import io.github.term4.shardkit.replay.Recording;
 import io.github.term4.shardkit.replay.channel.Dispatcher;
 import io.github.term4.shardkit.replay.channel.EventDispatcher;

@@ -1,7 +1,10 @@
-package io.github.term4.shardkit.polar;
+package io.github.term4.shardkit.storage.polar;
 
 import com.github.luben.zstd.Zstd;
-import io.github.term4.shardkit.Shard;
+import io.github.term4.shardkit.shard.Shard;
+import io.github.term4.shardkit.storage.DataKey;
+import io.github.term4.shardkit.storage.EntityDescriptors;
+import io.github.term4.shardkit.storage.Nbt;
 import net.hollowcube.polar.PolarChunk;
 import net.hollowcube.polar.PolarReader;
 import net.hollowcube.polar.PolarSection;

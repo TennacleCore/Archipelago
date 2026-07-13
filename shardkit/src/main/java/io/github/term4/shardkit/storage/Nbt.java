@@ -1,4 +1,4 @@
-package io.github.term4.shardkit.polar;
+package io.github.term4.shardkit.storage;
 
 import net.kyori.adventure.nbt.BinaryTag;
 import net.kyori.adventure.nbt.BinaryTagTypes;

@@ -1,8 +1,8 @@
 package io.github.term4.shardkit.replay;
 
 import io.github.term4.shardkit.ticking.ExecutionDomain;
-import io.github.term4.shardkit.Shard;
-import io.github.term4.shardkit.ShardManager;
+import io.github.term4.shardkit.shard.Shard;
+import io.github.term4.shardkit.shard.ShardManager;
 import io.github.term4.shardkit.replay.core.Channels;
 import io.github.term4.shardkit.replay.core.CoreChannels;
 import io.github.term4.shardkit.testsupport.FakePlayer;

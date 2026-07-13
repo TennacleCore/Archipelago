@@ -1,4 +1,4 @@
-package io.github.term4.shardkit;
+package io.github.term4.shardkit.shard;
 
 import io.github.term4.shardkit.event.ShardCreateEvent;
 import io.github.term4.shardkit.event.ShardDestroyEvent;
@@ -22,9 +22,9 @@ import java.util.function.Function;
 
 /**
  * Creates, names and destroys shards. Optional - a bare {@code new Shard(instance)} works too; the manager adds
- * the registry, lifecycle events, and FAIL-STOP: a shard whose domain tree the watchdog abandons is destroyed
- * on the spot (members evicted to the base world, from the watchdog thread) - a failed shard is dead, its work
- * never reroutes to another thread. Construct after {@code MinecraftServer.init()}.
+ * the registry, lifecycle events, and the FAIL-STOP fallout: shards whose domain the watchdog abandons drop
+ * into STASIS (frozen; member players hand back to server ticking) - work never reroutes, and the app decides
+ * to re-clock fresh, destroy, or leave them. Construct after {@code MinecraftServer.init()}.
  */
 public final class ShardManager {
 
@@ -33,10 +33,16 @@ public final class ShardManager {
     private final Set<Shard> shards = ConcurrentHashMap.newKeySet();
 
     public ShardManager() {
+        // fail-stop = the DOMAIN dies; its shards drop into STASIS (frozen entities on the dead clock) - the
+        // app recovers with a FRESH clock (shard.domain(...)), destroys, or leaves them. Member players alone
+        // hand back to server ticking: their connections must keep living
         MinecraftServer.getGlobalEventHandler().addListener(DomainQuarantineEvent.class, e -> {
             for (Shard shard : List.copyOf(shards)) {
                 ExecutionDomain domain = shard.domain();
-                if (domain != null && domain.sharesClock(e.domain())) destroy(shard);
+                if (domain == null || !domain.sharesClock(e.domain())) continue;
+                for (Player p : shard.members()) {
+                    if (ExecutionDomain.of(p) != null) ExecutionDomain.detach(p);
+                }
             }
         });
     }
@@ -81,6 +87,12 @@ public final class ShardManager {
         return register(top.flattenOnto(bottom, cloner), name);
     }
 
+    /** {@link Shard#flatten(Function) chain flatten} registered under {@code name}. */
+    public @NotNull Shard flatten(@NotNull Shard top, @NotNull String name,
+                                  @Nullable Function<Entity, Entity> cloner) {
+        return register(top.flatten(cloner), name);
+    }
+
     private Shard register(Shard shard, @Nullable String name) {
         if (name != null && byName.putIfAbsent(name, shard) != null) {
             shard.reset(); // a fork already spawned its clones - drop them
@@ -102,27 +114,38 @@ public final class ShardManager {
     /**
      * Evicts members, strips the shard from observers' views, drops the diff + entities, retires the domain,
      * unregisters, fires {@link ShardDestroyEvent}. Cascades: children die with their parent (one tree, one
-     * fate - their relative diffs are meaningless without it). Idempotent.
+     * fate - their relative diffs are meaningless without it). Idempotent. Callable from ANY thread: a foreign
+     * clock (a domain player's command runs on THEIR shard's clock) hands the destroy to the owner and returns.
      */
     public void destroy(@NotNull Shard shard) {
+        ExecutionDomain domain = shard.domain();
+        // a foreign-clock caller must never relay into this shard's clock (two live clocks never join)
+        if (domain != null && ExecutionDomain.onClockThread() && !domain.onThread() && domain.live()) {
+            domain.execute(() -> destroy(shard));
+            return;
+        }
         if (shard.destroyed) return;
         shard.destroyed = true;
-        for (Shard child : List.copyOf(shard.children)) destroy(child);
-        for (Player p : List.copyOf(shard.members())) shard.leave(p);
-        for (Player o : List.copyOf(shard.observers())) {
-            ShardView view = ShardView.explicit(o);
-            ShardView.set(o, view != null ? view.without(shard) : null); // a view of OTHER shards survives
-        }
-        shard.reset();
-        Shard parent = shard.parent();
-        if (parent != null) parent.children.remove(shard);
-        String name = names.remove(shard);
-        if (name != null) byName.remove(name, shard);
-        shards.remove(shard);
-        // shards may share a domain (a tree on one clock): retire it only with its last registered user
-        ExecutionDomain domain = shard.domain();
-        if (domain != null && shards.stream().noneMatch(s -> s.domain() != null && s.domain().sharesClock(domain))) {
-            domain.retire();
+        try {
+            for (Shard child : List.copyOf(shard.children)) destroy(child);
+            for (Player p : List.copyOf(shard.members())) shard.leave(p);
+            for (Player o : List.copyOf(shard.observers())) {
+                ShardView view = ShardView.explicit(o);
+                ShardView.set(o, view != null ? view.without(shard) : null); // a view of OTHER shards survives
+            }
+            shard.reset();
+            Shard parent = shard.parent();
+            if (parent != null) parent.children.remove(shard);
+            String name = names.remove(shard);
+            if (name != null) byName.remove(name, shard);
+            shards.remove(shard);
+            // shards may share a domain (a tree on one clock): retire it only with its last registered user
+            if (domain != null && shards.stream().noneMatch(s -> s.domain() != null && s.domain().sharesClock(domain))) {
+                domain.retire();
+            }
+        } catch (Throwable t) {
+            shard.destroyed = false; // a failed destroy must leave the shard destroyable
+            throw t;
         }
         EventDispatcher.call(new ShardDestroyEvent(shard));
     }

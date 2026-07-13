@@ -10,7 +10,7 @@ import io.github.term4.minestommechanics.mechanics.projectile.entities.Projectil
 import io.github.term4.minestommechanics.mechanics.projectile.types.SplashPotion;
 import io.github.term4.minestommechanics.mechanics.projectile.types.Snowball;
 import io.github.term4.minestommechanics.mechanics.vanilla18.Vanilla18;
-import io.github.term4.shardkit.Shard;
+import io.github.term4.shardkit.shard.Shard;
 import io.github.term4.shardkit.replay.Playback;
 import io.github.term4.shardkit.replay.Recording;
 import io.github.term4.shardkit.replay.Replay;

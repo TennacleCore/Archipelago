@@ -1,4 +1,4 @@
-package io.github.term4.shardkit;
+package io.github.term4.shardkit.shard;
 
 import net.minestom.server.entity.Player;
 import net.minestom.server.instance.Instance;

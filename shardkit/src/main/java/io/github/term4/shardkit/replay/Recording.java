@@ -1,11 +1,11 @@
 package io.github.term4.shardkit.replay;
 
-import io.github.term4.shardkit.Shard;
+import io.github.term4.shardkit.shard.Shard;
 import io.github.term4.shardkit.event.ShardDestroyEvent;
 import io.github.term4.shardkit.event.replay.RecordingStopEvent;
-import io.github.term4.shardkit.polar.EntityDescriptors;
-import io.github.term4.shardkit.polar.Nbt;
-import io.github.term4.shardkit.polar.PolarShardCodec;
+import io.github.term4.shardkit.storage.EntityDescriptors;
+import io.github.term4.shardkit.storage.Nbt;
+import io.github.term4.shardkit.storage.polar.PolarShardCodec;
 import io.github.term4.shardkit.replay.channel.Dispatcher;
 import io.github.term4.shardkit.replay.channel.Recordable;
 import io.github.term4.shardkit.replay.channel.Recorded;

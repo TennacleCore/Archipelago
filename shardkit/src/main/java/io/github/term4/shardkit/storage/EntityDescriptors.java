@@ -1,6 +1,6 @@
-package io.github.term4.shardkit.polar;
+package io.github.term4.shardkit.storage;
 
-import io.github.term4.shardkit.Shard;
+import io.github.term4.shardkit.shard.Shard;
 import io.github.term4.shardkit.ticking.DomainEntity;
 import io.github.term4.shardkit.ticking.DomainLivingEntity;
 import io.github.term4.shardkit.ticking.DomainTicked;
@@ -99,7 +99,8 @@ public final class EntityDescriptors {
     /** Descriptors whose id had no reviver at load, re-emitted on save so this app never DROPS a foreign app's entities. */
     private static final Tag<List<CompoundBinaryTag>> UNREVIVED = Tag.Transient("shardkit:unrevived");
 
-    static ListBinaryTag write(Shard shard) {
+    /** Every owned entity's descriptor + position, ready for any container ({@link #read} is the load half). */
+    public static ListBinaryTag write(Shard shard) {
         ListBinaryTag.Builder<CompoundBinaryTag> out = ListBinaryTag.builder(BinaryTagTypes.COMPOUND);
         for (Entity entity : shard.entities()) {
             if (entity instanceof Player || entity.isRemoved()) continue;
@@ -192,7 +193,8 @@ public final class EntityDescriptors {
         return entity;
     }
 
-    static void read(Shard shard, ListBinaryTag entities) {
+    /** Revives {@link #write}'s descriptors into {@code shard}; unrevivable ones stash for lossless resave. */
+    public static void read(Shard shard, ListBinaryTag entities) {
         List<CompoundBinaryTag> unrevived = new ArrayList<>();
         for (BinaryTag tag : entities) {
             CompoundBinaryTag desc = (CompoundBinaryTag) tag;

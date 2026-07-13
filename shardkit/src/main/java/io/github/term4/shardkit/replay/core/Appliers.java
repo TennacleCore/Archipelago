@@ -1,8 +1,8 @@
 package io.github.term4.shardkit.replay.core;
 
-import io.github.term4.shardkit.Shard;
-import io.github.term4.shardkit.polar.EntityDescriptors;
-import io.github.term4.shardkit.polar.Nbt;
+import io.github.term4.shardkit.shard.Shard;
+import io.github.term4.shardkit.storage.EntityDescriptors;
+import io.github.term4.shardkit.storage.Nbt;
 import io.github.term4.shardkit.replay.Ghost;
 import io.github.term4.shardkit.replay.Playback;
 import io.github.term4.shardkit.replay.Replay;

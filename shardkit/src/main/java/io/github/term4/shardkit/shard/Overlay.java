@@ -1,4 +1,4 @@
-package io.github.term4.shardkit;
+package io.github.term4.shardkit.shard;
 
 import net.minestom.server.coordinate.CoordConversion;
 import net.minestom.server.coordinate.Point;
@@ -7,6 +7,7 @@ import net.minestom.server.instance.block.Block;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiConsumer;
 
@@ -43,6 +44,14 @@ final class Overlay {
         int size = 0;
         for (Map<Integer, Block> chunk : chunks.values()) size += chunk.size();
         return size;
+    }
+
+    Set<Long> chunkKeys() {
+        return chunks.keySet();
+    }
+
+    boolean touches(int chunkX, int chunkZ) {
+        return chunks.containsKey(CoordConversion.chunkIndex(chunkX, chunkZ));
     }
 
     void clear() {

@@ -1,10 +1,10 @@
 package io.github.term4.shardkit.replay;
 
-import io.github.term4.shardkit.Shard;
-import io.github.term4.shardkit.ShardManager;
+import io.github.term4.shardkit.shard.Shard;
+import io.github.term4.shardkit.shard.ShardManager;
 import io.github.term4.shardkit.event.replay.PlaybackStopEvent;
 import io.github.term4.shardkit.event.replay.RecordingStopEvent;
-import io.github.term4.shardkit.polar.PolarShardCodec;
+import io.github.term4.shardkit.storage.polar.PolarShardCodec;
 import io.github.term4.shardkit.replay.core.Channels;
 import io.github.term4.shardkit.replay.core.CoreChannels;
 import io.github.term4.shardkit.ticking.ExecutionDomain;

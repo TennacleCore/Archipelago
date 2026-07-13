@@ -1,6 +1,6 @@
 package io.github.term4.shardkit.replay;
 
-import io.github.term4.shardkit.Shard;
+import io.github.term4.shardkit.shard.Shard;
 import io.github.term4.shardkit.event.ShardDestroyEvent;
 import io.github.term4.shardkit.event.replay.PlaybackStopEvent;
 import io.github.term4.shardkit.replay.channel.Applier;

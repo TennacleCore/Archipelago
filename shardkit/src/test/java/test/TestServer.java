@@ -20,13 +20,13 @@ import io.github.term4.minestommechanics.vri.DroppedItemEntity;
 import io.github.term4.minestommechanics.vri.Vri;
 import io.github.term4.minestommechanics.vri.VriConfig;
 import io.github.term4.minestommechanics.world.MechanicsWorld;
-import io.github.term4.shardkit.Shard;
-import io.github.term4.shardkit.ShardManager;
-import io.github.term4.shardkit.ShardView;
+import io.github.term4.shardkit.shard.Shard;
+import io.github.term4.shardkit.shard.ShardManager;
+import io.github.term4.shardkit.shard.ShardView;
 import io.github.term4.shardkit.Storage;
 import io.github.term4.shardkit.event.replay.PlaybackStopEvent;
-import io.github.term4.shardkit.polar.EntityDescriptors;
-import io.github.term4.shardkit.polar.PolarShardCodec;
+import io.github.term4.shardkit.storage.EntityDescriptors;
+import io.github.term4.shardkit.storage.polar.PolarShardCodec;
 import io.github.term4.shardkit.replay.Playback;
 import io.github.term4.shardkit.replay.Recording;
 import io.github.term4.shardkit.replay.Replay;
@@ -126,7 +126,7 @@ public final class TestServer {
             p.getInventory().addItemStack(ItemStack.of(Material.OAK_PLANKS, 64));
             p.getInventory().addItemStack(ItemStack.of(Material.LADDER, 64));
             p.getInventory().addItemStack(ItemStack.of(Material.IRON_PICKAXE));
-            p.sendMessage("/shard create <name> | child <parent> <new> | join <name> | fork <name> <new> | flatten <top> <bottom> <new> | save <name> | load <saved> <new> | leave | reset <name> | destroy <name> | list | tree | spectate <name|off> | sky <name> <day|night|rain|clear>  -  /gm <mode>");
+            p.sendMessage("/shard create <name> | child <parent> <new> | join <name> | fork <name> <new> | flatten <top> [bottom] <new> | save <name> | load <saved> <new> | leave | reset <name> | destroy <name> | list | tree | relight <name> <on|off> | spectate <name|off> | sky <name> <day|night|rain|clear>  -  /gm <mode>");
         });
 
         // members build into their shard's overlay, never the map; also installs the world-scoped base
@@ -155,7 +155,7 @@ public final class TestServer {
         Argument<String> skyValue = ArgumentType.Word("value").from("day", "night", "rain", "clear");
 
         shard.setDefaultExecutor((sender, ctx) ->
-                sender.sendMessage("usage: /shard create <name> | child <parent> <new> | join <name> | fork <name> <new> | flatten <top> <bottom> <new> | save <name> | load <saved> <new> | leave | reset <name> | destroy <name> | list | tree | spectate <name|off> | sky <name> <day|night|rain|clear> | tps | stall <name> <ms> | spin <name> <ms>"));
+                sender.sendMessage("usage: /shard create <name> | child <parent> <new> | join <name> | fork <name> <new> | flatten <top> [bottom] <new> | save <name> | load <saved> <new> | leave | reset <name> | destroy <name> | list | tree | relight <name> <on|off> | spectate <name|off> | sky <name> <day|night|rain|clear> | tps | stall <name> <ms> | spin <name> <ms>"));
 
         shard.addSyntax((sender, ctx) -> {
             String n = ctx.get(name);
@@ -179,8 +179,10 @@ public final class TestServer {
             if (g == null) { sender.sendMessage("[shard] no shard named '" + ctx.get(name) + "'"); return; }
             String n = ctx.get(forkName);
             if (shards.byName(n) != null) { sender.sendMessage("[shard] '" + n + "' already exists"); return; }
-            shards.fork(g, n, ShardBridge::copyEntity); // diff + sky + entities (mechanics stamps + shardkit's default cloner)
-            sender.sendMessage("[shard] forked '" + ctx.get(name) + "' -> '" + n + "' - /shard join " + n);
+            offClock(() -> {
+                shards.fork(g, n, ShardBridge::copyEntity); // diff + sky + entities (mechanics stamps + shardkit's default cloner)
+                sender.sendMessage("[shard] forked '" + ctx.get(name) + "' -> '" + n + "' - /shard join " + n);
+            });
         }, fork, name, forkName);
 
         // layers: relative diffs on the parent's clock; /shard join between layers = the combat-continuous switch
@@ -202,9 +204,23 @@ public final class TestServer {
             if (top == null || bottom == null) { sender.sendMessage("[shard] both shards must exist"); return; }
             String n = ctx.get(forkName);
             if (shards.byName(n) != null) { sender.sendMessage("[shard] '" + n + "' already exists"); return; }
-            shards.flatten(top, bottom, n, ShardBridge::copyEntity);
-            sender.sendMessage("[shard] '" + ctx.get(name) + "' onto '" + ctx.get(bottomName) + "' -> '" + n + "' (top wins) - /shard join " + n);
+            offClock(() -> {
+                shards.flatten(top, bottom, n, ShardBridge::copyEntity);
+                sender.sendMessage("[shard] '" + ctx.get(name) + "' onto '" + ctx.get(bottomName) + "' -> '" + n + "' (top wins) - /shard join " + n);
+            });
         }, flatten, name, bottomName, forkName);
+
+        // chain flatten: the whole layer chain collapsed into one independent shard (branches never merge)
+        shard.addSyntax((sender, ctx) -> {
+            Shard top = shards.byName(ctx.get(name));
+            if (top == null) { sender.sendMessage("[shard] no shard named '" + ctx.get(name) + "'"); return; }
+            String n = ctx.get(forkName);
+            if (shards.byName(n) != null) { sender.sendMessage("[shard] '" + n + "' already exists"); return; }
+            offClock(() -> {
+                shards.flatten(top, n, ShardBridge::copyEntity);
+                sender.sendMessage("[shard] chain of '" + ctx.get(name) + "' -> '" + n + "' - /shard join " + n);
+            });
+        }, flatten, name, forkName);
 
         // save/load = the polar codec round-trip: blocks (NBT included) + sky + stamped/generic entities;
         // "blocks" mode = map template, no entity payload. Dirs resolve through Storage (code/sysprop/properties)
@@ -215,15 +231,17 @@ public final class TestServer {
             Shard g = shards.byName(ctx.get(name));
             if (g == null) { sender.sendMessage("[shard] no shard named '" + ctx.get(name) + "'"); return; }
             boolean entities = !ctx.has(saveMode);
-            try {
-                Files.createDirectories(saveDir);
-                Path file = saveDir.resolve(ctx.get(name) + ".polar");
-                PolarShardCodec.save(g, file, null, entities);
-                sender.sendMessage("[shard] saved '" + ctx.get(name) + "' -> " + file + " (" + Files.size(file)
-                        + " bytes, diff " + g.overlaySize() + (entities ? ")" : ", blocks only)"));
-            } catch (IOException e) {
-                sender.sendMessage("[shard] save failed: " + e.getMessage());
-            }
+            offClock(() -> {
+                try {
+                    Files.createDirectories(saveDir);
+                    Path file = saveDir.resolve(ctx.get(name) + ".polar");
+                    PolarShardCodec.save(g, file, null, entities);
+                    sender.sendMessage("[shard] saved '" + ctx.get(name) + "' -> " + file + " (" + Files.size(file)
+                            + " bytes, diff " + g.overlaySize() + (entities ? ")" : ", blocks only)"));
+                } catch (IOException e) {
+                    sender.sendMessage("[shard] save failed: " + e.getMessage());
+                }
+            });
         };
         shard.addSyntax(doSave, save, name);
         shard.addSyntax(doSave, save, name, saveMode);
@@ -234,15 +252,17 @@ public final class TestServer {
             if (!Files.exists(file)) { sender.sendMessage("[shard] no save named '" + ctx.get(name) + "'"); return; }
             String n = ctx.get(forkName);
             if (shards.byName(n) != null) { sender.sendMessage("[shard] '" + n + "' already exists"); return; }
-            Shard g = shards.create(world, n, ExecutionDomain.create());
-            try {
-                PolarShardCodec.load(g, file);
-                sender.sendMessage("[shard] loaded '" + ctx.get(name) + "' -> '" + n + "' (diff " + g.overlaySize()
-                        + ") - /shard join " + n);
-            } catch (Exception e) {
-                shards.destroy(g);
-                sender.sendMessage("[shard] load failed: " + e.getMessage());
-            }
+            offClock(() -> {
+                Shard g = shards.create(world, n, ExecutionDomain.create());
+                try {
+                    PolarShardCodec.load(g, file);
+                    sender.sendMessage("[shard] loaded '" + ctx.get(name) + "' -> '" + n + "' (diff " + g.overlaySize()
+                            + ") - /shard join " + n);
+                } catch (Exception e) {
+                    shards.destroy(g);
+                    sender.sendMessage("[shard] load failed: " + e.getMessage());
+                }
+            });
         }, load, name, forkName);
 
         shard.addSyntax((sender, ctx) -> {
@@ -256,8 +276,10 @@ public final class TestServer {
         shard.addSyntax((sender, ctx) -> {
             Shard g = shards.byName(ctx.get(name));
             if (g == null) { sender.sendMessage("[shard] no shard named '" + ctx.get(name) + "'"); return; }
-            g.reset();
-            sender.sendMessage("[shard] '" + ctx.get(name) + "' diff dropped");
+            offClock(() -> {
+                g.reset();
+                sender.sendMessage("[shard] '" + ctx.get(name) + "' diff dropped");
+            });
         }, reset, name);
 
         shard.addSyntax((sender, ctx) -> {
@@ -270,6 +292,18 @@ public final class TestServer {
         shard.addSyntax((sender, ctx) -> shards.shards().forEach(g -> sender.sendMessage(
                 "- " + label(shards, g) + " members=" + g.members().size()
                         + " observers=" + g.observers().size() + " diff=" + g.overlaySize())), list);
+
+        // chain-effective light as per-viewer UpdateLight overlays (modern clients; 1.8 self-relights)
+        var relight = ArgumentType.Literal("relight");
+        Argument<String> relightState = ArgumentType.Word("state").from("on", "off");
+        shard.addSyntax((sender, ctx) -> {
+            Shard g = shards.byName(ctx.get(name));
+            if (g == null) { sender.sendMessage("[shard] no shard named '" + ctx.get(name) + "'"); return; }
+            boolean on = "on".equals(ctx.get(relightState));
+            g.relight(on);
+            sender.sendMessage("[shard] relight " + (on ? "ON" : "off") + " for '" + ctx.get(name)
+                    + "' - place a torch/glowstone or roof something in and watch the light (modern client)");
+        }, relight, name, relightState);
 
         var tree = ArgumentType.Literal("tree");
         shard.addSyntax((sender, ctx) -> {
@@ -384,8 +418,10 @@ public final class TestServer {
             if (recording != null) { sender.sendMessage("[replay] already recording - /replay stop <name> first"); return; }
             Shard g = shards.byName(ctx.get(name));
             if (g == null) { sender.sendMessage("[shard] no shard named '" + ctx.get(name) + "'"); return; }
-            recording = Replay.record(g);
-            sender.sendMessage("[replay] recording '" + ctx.get(name) + "' - build/move, then /replay stop <name>");
+            offClock(() -> {
+                recording = Replay.record(g); // the t0 snapshot relays
+                sender.sendMessage("[replay] recording '" + ctx.get(name) + "' - build/move, then /replay stop <name>");
+            });
         }, ArgumentType.Literal("record"), name);
         replay.addSyntax((sender, ctx) -> {
             if (recording == null) { sender.sendMessage("[replay] nothing is recording"); return; }
@@ -415,29 +451,34 @@ public final class TestServer {
             }
             String n = ctx.get(forkName);
             if (shards.byName(n) != null) { sender.sendMessage("[shard] '" + n + "' already exists"); return; }
-            Shard target = shards.create(world, n, ExecutionDomain.create());
             SpawnMode spawns = ctx.has(playMode) ? SpawnMode.VISUAL : SpawnMode.REVIVED;
-            try {
-                playback = Replay.play(target, file, spawns);
-            } catch (IllegalArgumentException e) {
-                shards.destroy(target);
-                sender.sendMessage("[replay] " + e.getMessage());
-                return;
-            }
-            String skipped = playback.skipped().isEmpty() ? "" : " (skipped channels: " + playback.skipped() + ")";
-            sender.sendMessage("[replay] playing '" + ctx.get(replayName) + "' [" + spawns + "]: " + playback.length()
-                    + " ticks, " + playback.counts() + skipped + " - /shard spectate or join the shard to watch");
+            offClock(() -> {
+                Shard target = shards.create(world, n, ExecutionDomain.create());
+                try {
+                    playback = Replay.play(target, file, spawns);
+                } catch (IllegalArgumentException e) {
+                    shards.destroy(target);
+                    sender.sendMessage("[replay] " + e.getMessage());
+                    return;
+                }
+                String skipped = playback.skipped().isEmpty() ? "" : " (skipped channels: " + playback.skipped() + ")";
+                sender.sendMessage("[replay] playing '" + ctx.get(replayName) + "' [" + spawns + "]: " + playback.length()
+                        + " ticks, " + playback.counts() + skipped + " - /shard spectate or join the shard to watch");
+            });
         };
         replay.addSyntax(doPlay, ArgumentType.Literal("play"), replayName, forkName);
         replay.addSyntax(doPlay, ArgumentType.Literal("play"), replayName, forkName, playMode);
         replay.addSyntax((sender, ctx) -> {
             if (playback == null) { sender.sendMessage("[replay] nothing is playing"); return; }
-            try {
-                playback.seek(ctx.get(seekTick));
-                sender.sendMessage("[replay] at tick " + playback.tick() + "/" + playback.length());
-            } catch (RuntimeException e) {
-                sender.sendMessage("[replay] " + e.getMessage());
-            }
+            long target = ctx.get(seekTick);
+            offClock(() -> {
+                try {
+                    playback.seek(target); // relays onto the theater's clock
+                    sender.sendMessage("[replay] at tick " + playback.tick() + "/" + playback.length());
+                } catch (RuntimeException e) {
+                    sender.sendMessage("[replay] " + e.getMessage());
+                }
+            });
         }, ArgumentType.Literal("seek"), seekTick);
         replay.addSyntax((sender, ctx) -> {
             if (playback == null) { sender.sendMessage("[replay] nothing is playing"); return; }
@@ -451,6 +492,13 @@ public final class TestServer {
             }
         });
         MinecraftServer.getCommandManager().register(replay);
+    }
+
+    // a domain player's commands run on THEIR shard's clock; ops that relay into another live shard
+    // (snapshots: fork/flatten/save/load/reset, replay record/play/seek) must hop off it first
+    private static void offClock(Runnable body) {
+        if (ExecutionDomain.onClockThread()) Thread.startVirtualThread(body);
+        else body.run();
     }
 
     private static String label(ShardManager shards, Shard shard) {

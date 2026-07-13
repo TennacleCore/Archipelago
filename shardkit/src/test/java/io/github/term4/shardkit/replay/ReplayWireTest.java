@@ -1,6 +1,6 @@
 package io.github.term4.shardkit.replay;
 
-import io.github.term4.shardkit.Shard;
+import io.github.term4.shardkit.shard.Shard;
 import io.github.term4.shardkit.replay.core.CoreChannels;
 import io.github.term4.shardkit.testsupport.FakePlayer;
 import io.github.term4.shardkit.testsupport.HeadlessServerTest;

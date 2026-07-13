@@ -1,4 +1,4 @@
-package io.github.term4.shardkit;
+package io.github.term4.shardkit.shard;
 
 import io.github.term4.shardkit.event.ShardDestroyEvent;
 import io.github.term4.shardkit.testsupport.DetectorEntity;
@@ -248,6 +248,34 @@ class ShardTreeTest extends HeadlessServerTest {
     }
 
     @Test
+    void chainFlattenCollapsesEveryLayerAndGathersTheChainsEntities() {
+        Point under = new Vec(1901, 70, 1900), over = new Vec(1902, 70, 1900), broken = new Vec(1903, 70, 1900);
+        Shard root = new Shard(instance);
+        root.setBlock(under, Block.GOLD_BLOCK);
+        root.setBlock(broken, Block.STONE);
+        root.setTime(13000);
+        Entity inRoot = new Entity(EntityType.ARMOR_STAND);
+        root.spawn(inRoot, new Pos(1901.5, 70, 1900.5));
+
+        Shard leaf = new Shard(root);
+        leaf.setBlock(over, Block.DIAMOND_BLOCK);
+        leaf.setBlock(broken, Block.AIR); // explicit-air mask carries into the flatten
+        Entity inLeaf = new Entity(EntityType.ARMOR_STAND);
+        leaf.spawn(inLeaf, new Pos(1902.5, 70, 1900.5));
+
+        Shard flat = leaf.flatten(Shard::copyEntity);
+        assertNull(flat.parent(), "a chain flatten stands alone");
+        Map<Point, Block> diff = flat.diff();
+        assertEquals(Block.GOLD_BLOCK, diff.get(under), "the root layer rides along");
+        assertEquals(Block.DIAMOND_BLOCK, diff.get(over));
+        assertEquals(Block.AIR, diff.get(broken), "the leaf's mask wins over the root's block");
+        assertEquals(13000, flat.timeOverride(), "the nearest sky override carries");
+        assertEquals(2, flat.entities().size(), "every LAYER's entities gathered, not just the leaf's");
+        assertEquals(1, root.entities().size(), "sources untouched");
+        assertEquals(1, leaf.entities().size());
+    }
+
+    @Test
     void destroyCascadesThroughTheSubtreeOnce() {
         ShardManager manager = new ShardManager();
         Shard parent = manager.create(instance, "tree-parent");
@@ -286,7 +314,7 @@ class ShardTreeTest extends HeadlessServerTest {
             child.spawn(inChild, new Pos(2.5, 70, 2.5)).join();
             await("both layers tick", () -> inParent.ticks.get() >= 3 && inChild.ticks.get() >= 3);
             assertEquals(inParent.thread, inChild.thread, "one tree, one clock");
-            assertTrue(inChild.thread.startsWith("shard-root:"), inChild.thread);
+            assertTrue(inChild.thread.startsWith("shard-domain:"), inChild.thread);
         } finally {
             inParent.remove();
             inChild.remove();

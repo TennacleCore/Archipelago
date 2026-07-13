@@ -1,7 +1,7 @@
 package io.github.term4.shardkit.ticking;
 
-import io.github.term4.shardkit.Shard;
-import io.github.term4.shardkit.ShardManager;
+import io.github.term4.shardkit.shard.Shard;
+import io.github.term4.shardkit.shard.ShardManager;
 import io.github.term4.shardkit.testsupport.FakePlayer;
 import io.github.term4.shardkit.testsupport.HeadlessServerTest;
 import net.minestom.server.coordinate.Point;

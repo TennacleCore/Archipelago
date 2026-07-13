@@ -64,7 +64,7 @@ final class Watchdog {
             LockSupport.parkNanos(intervalNanos);
             try {
                 long now = System.nanoTime();
-                for (RootClock clock : manager.clocks.values()) {
+                for (DomainClock clock : manager.clocks.values()) {
                     long start = clock.tickStartNanos;
                     if (start == 0 || clock.quarantined) continue;
                     long stuckMs = (now - start) / 1_000_000;
@@ -84,17 +84,17 @@ final class Watchdog {
         }
     }
 
-    private void quarantine(RootClock clock, long stuckMs) {
+    private void quarantine(DomainClock clock, long stuckMs) {
         clock.quarantined = true;
         clock.running = false; // a late-waking zombie exits without ever ticking again
-        manager.clocks.remove(clock.root());
+        manager.clocks.remove(clock.domain());
         QUARANTINES.incrementAndGet();
         StackTraceElement[] frames = clock.thread().getStackTrace();
         String fingerprint = fingerprint(frames);
         int seen = FINGERPRINTS.merge(fingerprint, 1, Integer::sum);
         int zombies = ZOMBIES.incrementAndGet();
         Path report = writeCrashReport(clock, stuckMs, zombies, frames, fingerprint, seen);
-        LOGGER.error("{} FAILED after {}ms - tree abandoned, {} zombie carrier(s) held until JVM restart ({})\n{}",
+        LOGGER.error("{} FAILED after {}ms - domain abandoned, {} zombie carrier(s) held until JVM restart ({})\n{}",
                 clock.thread().getName(), stuckMs, zombies,
                 report != null ? "crash report: " + report : "crash report write FAILED", stack(frames));
         if (seen > 1) {
@@ -102,21 +102,21 @@ final class Watchdog {
                     + "this code path will hang; disable the source (stack in the crash report)", fingerprint, seen);
         }
         try {
-            EventDispatcher.call(new DomainQuarantineEvent(clock.root().handle));
+            EventDispatcher.call(new DomainQuarantineEvent(clock.domain().handle));
         } catch (Throwable e) {
             LOGGER.warn("quarantine listener failed", e);
         }
     }
 
-    /** Post-mortem file per failed tree, under {@link Storage} key {@code crash-dir} (default {@code shardkit-crashes/}). */
-    private @Nullable Path writeCrashReport(RootClock clock, long stuckMs, int zombies,
+    /** Post-mortem file per failed domain, under {@link Storage} key {@code crash-dir} (default {@code shardkit-crashes/}). */
+    private @Nullable Path writeCrashReport(DomainClock clock, long stuckMs, int zombies,
                                             StackTraceElement[] frames, String fingerprint, int seen) {
         try {
             Path dir = Storage.dir("crash-dir", "shardkit-crashes");
             Files.createDirectories(dir);
             Path file = dir.resolve("domain-" + LocalDateTime.now().format(STAMP) + "-"
                     + clock.thread().getName().replace(':', '_') + ".log");
-            StringBuilder out = new StringBuilder("shardkit domain tree FAILED (fail-stop)\n");
+            StringBuilder out = new StringBuilder("shardkit domain FAILED (fail-stop)\n");
             out.append("thread: ").append(clock.thread().getName()).append('\n')
                     .append("stuck: ").append(stuckMs).append("ms (interrupt at ").append(interruptAfterMs)
                     .append("ms, fail at ").append(quarantineAfterMs).append("ms)\n")
@@ -125,10 +125,10 @@ final class Watchdog {
                     .append("fingerprint: ").append(fingerprint)
                     .append(seen > 1 ? " (seen " + seen + "x this JVM - deterministic poison)" : " (first this JVM)")
                     .append('\n')
-                    .append("tree:\n");
-            describe(clock.root(), 1, out);
+                    .append("domain:\n");
+            describe(clock.domain(), out);
             out.append("stack (the tick it died in):\n").append(stack(frames))
-                    .append("never re-clock this tree (a waking zombie would double-tick it) - rebuild fresh;")
+                    .append("never re-clock this domain (a waking zombie would double-tick it) - rebuild fresh;")
                     .append(" the stack above names the poison\n");
             Files.writeString(file, out.toString());
             return file;
@@ -145,11 +145,10 @@ final class Watchdog {
         return Integer.toHexString(key.toString().hashCode());
     }
 
-    private static void describe(Domain d, int depth, StringBuilder out) {
-        out.append("  ".repeat(depth)).append("- domain@").append(Integer.toHexString(System.identityHashCode(d)))
+    private static void describe(Domain d, StringBuilder out) {
+        out.append("  - domain@").append(Integer.toHexString(System.identityHashCode(d)))
                 .append(" ticks=").append(d.ticks()).append(" entities=").append(d.entities.size())
                 .append(" arrivals=").append(d.arrivals.size()).append('\n');
-        for (Domain child : d.children) describe(child, depth + 1, out);
     }
 
     private static String stack(StackTraceElement[] frames) {

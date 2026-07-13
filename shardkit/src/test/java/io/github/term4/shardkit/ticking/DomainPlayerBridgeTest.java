@@ -2,7 +2,7 @@ package io.github.term4.shardkit.ticking;
 
 import io.github.term4.minestommechanics.platform.player.OptimizedPlayer;
 import io.github.term4.minestommechanics.world.MechanicsWorld;
-import io.github.term4.shardkit.Shard;
+import io.github.term4.shardkit.shard.Shard;
 import io.github.term4.shardkit.testsupport.FakePlayer;
 import io.github.term4.shardkit.testsupport.HeadlessServerTest;
 import io.github.term4.shardkit.world.WorldAccess;
@@ -60,7 +60,7 @@ class DomainPlayerBridgeTest extends HeadlessServerTest {
             Shard shard = new Shard(instance, domain);
             shard.join(player);
             await("the shard's clock drives the player",
-                    () -> player.ticks.get() >= 3 && player.thread.startsWith("shard-root:"));
+                    () -> player.ticks.get() >= 3 && player.thread.startsWith("shard-domain:"));
             long before = player.ticks.get();
             await("and keeps driving it", () -> player.ticks.get() >= before + 3);
 
