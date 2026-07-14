@@ -1,6 +1,6 @@
-rootProject.name = "ShardKit"
+rootProject.name = "Archipelago"
 
-include("shardkit")
+include("archipelago")
 
 // dev loop: build against the sibling mechanics checkout when present - no publishToMavenLocal,
 // no stale-jar-under-a-running-JVM hazards; absent (CI/other machines) the mavenLocal/Central artifact resolves

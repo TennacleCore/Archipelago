@@ -1,0 +1,15 @@
+shardkit domain FAILED (fail-stop)
+thread: shard-domain:b5b3c37
+stuck: 16019ms (interrupt at 5000ms, fail at 15000ms)
+zombie carriers this JVM: 1 (a hung tick cannot be killed; each holds one carrier until restart)
+fingerprint: 3edf3326 (first this JVM)
+domain:
+  - domain@b5b3c37 ticks=18416 entities=1 arrivals=0
+stack (the tick it died in):
+  at test.TestServer.lambda$register$35(TestServer.java:440)
+  at io.github.term4.shardkit.ticking.Domain.safely(Domain.java:219)
+  at io.github.term4.shardkit.ticking.Domain.drainTasks(Domain.java:201)
+  at io.github.term4.shardkit.ticking.Domain.tick(Domain.java:163)
+  at io.github.term4.shardkit.ticking.DomainClock.run(DomainClock.java:125)
+  at java.base/java.lang.VirtualThread.run(VirtualThread.java:456)
+never re-clock this domain (a waking zombie would double-tick it) - rebuild fresh; the stack above names the poison
