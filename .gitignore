@@ -41,3 +41,6 @@ bin/
 
 ### Markdown (scratch docs / session handoffs; already-tracked .md stay tracked) ###
 *.md
+/replays/
+/shard-saves/
+/shardkit-crashes/
