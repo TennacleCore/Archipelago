@@ -106,6 +106,9 @@ final class Watchdog {
         } catch (Throwable e) {
             LOGGER.warn("quarantine listener failed", e);
         }
+        // hand-offs stranded between their live() check and the removal above; off-thread so a blocking task
+        // can't stall the watchdog loop
+        Thread.startVirtualThread(clock.domain()::drainAbandoned);
     }
 
     /** Post-mortem file per failed domain, under {@link Storage} key {@code crash-dir} (default {@code archipelago-crashes/}). */

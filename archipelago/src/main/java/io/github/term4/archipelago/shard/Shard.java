@@ -72,6 +72,10 @@ import java.util.function.Supplier;
  * through child -> parent -> base, an explicit-air entry masks the ancestor block, and ancestor writes stay
  * live for every descendant's viewers where unmasked. Run one tree on one clock (the one-arg child ctor's
  * default) unless you know what crossing clocks costs.
+ *
+ * <p>Threading: block writes run on the CALLER's thread - gameplay writes belong on the shard's clock (domain
+ * hooks and entity ticks already land there). Snapshots and batch writes relay between domain ticks, and that
+ * relay is the only cross-thread write consistency the shard guarantees.
  */
 public final class Shard implements WorldAccess {
 
@@ -180,6 +184,8 @@ public final class Shard implements WorldAccess {
      * clients relight locally from block data - enable on shards whose diffs reshape lighting for modern clients.
      */
     public void relight(boolean enabled) {
+        ShardLight old = this.light;
+        if (old != null) old.close(); // stops its flush tick hook (and with it the driver, if last)
         this.light = enabled ? new ShardLight(this) : null;
     }
 
@@ -249,7 +255,16 @@ public final class Shard implements WorldAccess {
             tickHooks.add(hook);
             if (tickDriver == null) tickDriver = startTickDriver();
         }
-        return () -> tickHooks.remove(hook);
+        return () -> {
+            synchronized (this) {
+                if (!tickHooks.remove(hook)) return;
+                // last hook out stops the driver - otherwise the scheduler task retains the shard forever
+                if (tickHooks.isEmpty() && tickDriver != null) {
+                    tickDriver.run();
+                    tickDriver = null;
+                }
+            }
+        };
     }
 
     // one underlying registration on the CURRENT clock fans out to the shard's hooks; swapped on re-clock
@@ -387,6 +402,19 @@ public final class Shard implements WorldAccess {
             return;
         }
         pinBlock(pos, block);
+    }
+
+    /**
+     * Drops this layer's diff entry at {@code pos} - the position reverts to the parent view. Works under an
+     * unloaded chunk too (no viewer holds it; chunk load shows the parent view), where {@link #setBlock} would
+     * have to read an unloadable parent block.
+     */
+    public void clearBlock(@NotNull Point pos) {
+        if (base.isChunkLoaded(pos)) {
+            setBlock(pos, parent != null ? parent.getBlock(pos) : base.getBlock(pos));
+            return;
+        }
+        overlay.remove(pos);
     }
 
     /**

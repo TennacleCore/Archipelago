@@ -99,6 +99,10 @@ final class BlockRouting {
             // thread; an attached member is already on it and runs inline
             var packet = e.getPacket();
             Runnable work = () -> {
+                // the queue hop is a tick wide: re-check what can change under it (disconnect, destroy, demotion)
+                if (!player.isOnline() || edited.destroyed) return;
+                Shard nowBound = player.getTag(WorldAccess.ENTITY_TAG) instanceof Shard d ? d : null;
+                if (edited != nowBound && !(edited == ShardView.of(player).blocks() && WorldPolicy.canEdit(player, edited))) return;
                 if (place) place(edited, player, (ClientPlayerBlockPlacementPacket) packet);
                 else dig(edited, player, (ClientPlayerActionPacket) packet);
                 player.sendPacket(new AcknowledgeBlockChangePacket(sequence));

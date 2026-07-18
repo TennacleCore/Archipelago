@@ -1,7 +1,7 @@
 package test;
 
-import io.github.term4.minestommechanics.api.event.ProjectileHitEvent;
-import io.github.term4.minestommechanics.api.event.ProjectileLaunchEvent;
+import io.github.term4.minestommechanics.api.event.projectile.ProjectileHitEvent;
+import io.github.term4.minestommechanics.api.event.projectile.ProjectileLaunchEvent;
 import io.github.term4.minestommechanics.mechanics.projectile.entities.ProjectileEntity;
 import io.github.term4.minestommechanics.util.Directions;
 import io.github.term4.archipelago.replay.Recording;

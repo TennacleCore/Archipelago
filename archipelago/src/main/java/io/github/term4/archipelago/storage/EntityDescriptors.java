@@ -1,6 +1,8 @@
 package io.github.term4.archipelago.storage;
 
 import io.github.term4.archipelago.shard.Shard;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import io.github.term4.archipelago.ticking.DomainEntity;
 import io.github.term4.archipelago.ticking.DomainLivingEntity;
 import io.github.term4.archipelago.ticking.DomainTicked;
@@ -41,6 +43,8 @@ import java.util.function.Supplier;
  */
 public final class EntityDescriptors {
 
+    private static final Logger LOGGER = LoggerFactory.getLogger(EntityDescriptors.class);
+
     private EntityDescriptors() {}
 
     private static final Map<String, Function<CompoundBinaryTag, Entity>> REVIVERS = new ConcurrentHashMap<>();
@@ -75,9 +79,10 @@ public final class EntityDescriptors {
         return entity;
     }
 
-    /** Registers the load-side factory for {@code id} descriptors ({@link WorldAccess#ENTITY_SAVE} stamps). */
-    public static void reviveEntity(@NotNull String id, @NotNull Function<CompoundBinaryTag, Entity> reviver) {
-        REVIVERS.put(id, reviver);
+    /** Registers the load-side factory for {@code id} descriptors ({@link WorldAccess#ENTITY_SAVE} stamps); replacement WARNs. Returns the removal handle. */
+    public static @NotNull Runnable reviveEntity(@NotNull String id, @NotNull Function<CompoundBinaryTag, Entity> reviver) {
+        if (REVIVERS.put(id, reviver) != null) LOGGER.warn("entity reviver '{}' replaced", id);
+        return () -> REVIVERS.remove(id, reviver);
     }
 
     private static final List<Function<Entity, CompoundBinaryTag>> DESCRIBERS = new CopyOnWriteArrayList<>();
@@ -86,8 +91,9 @@ public final class EntityDescriptors {
      * Save-side twin of {@link #reviveEntity}: maps another library's {@code ENTITY_SAVE} mirror into saves.
      * First non-null wins, after the native stamp, before the generic tiers.
      */
-    public static void describeEntity(@NotNull Function<Entity, @Nullable CompoundBinaryTag> describer) {
+    public static @NotNull Runnable describeEntity(@NotNull Function<Entity, @Nullable CompoundBinaryTag> describer) {
         DESCRIBERS.add(describer);
+        return () -> DESCRIBERS.remove(describer);
     }
 
     /** Revives ONE saved entity descriptor through the registered revivers (replay/playback systems), or {@code null}. */
@@ -193,7 +199,8 @@ public final class EntityDescriptors {
         return entity;
     }
 
-    /** Revives {@link #write}'s descriptors into {@code shard}; unrevivable ones stash for lossless resave. */
+    /** Revives {@link #write}'s descriptors into {@code shard}; unrevivable ones stash for lossless resave.
+     *  Spawns settle ASYNC (chunk loads); a failed spawn logs instead of vanishing silently. */
     public static void read(Shard shard, ListBinaryTag entities) {
         List<CompoundBinaryTag> unrevived = new ArrayList<>();
         for (BinaryTag tag : entities) {
@@ -205,7 +212,13 @@ public final class EntityDescriptors {
                 continue;
             }
             ListBinaryTag pos = desc.getList("pos", BinaryTagTypes.DOUBLE);
-            if (pos.size() == 3) shard.spawn(entity, new Pos(pos.getDouble(0), pos.getDouble(1), pos.getDouble(2)));
+            if (pos.size() == 3) {
+                shard.spawn(entity, new Pos(pos.getDouble(0), pos.getDouble(1), pos.getDouble(2)))
+                        .exceptionally(t -> {
+                            LOGGER.warn("revived entity failed to spawn ({})", desc.getString("id"), t);
+                            return null;
+                        });
+            }
         }
         if (unrevived.isEmpty()) shard.removeTag(UNREVIVED);
         else shard.setTag(UNREVIVED, List.copyOf(unrevived));

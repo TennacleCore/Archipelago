@@ -60,7 +60,7 @@ public final class Playback {
     private final SpawnMode spawnMode;
     private final ShardFile.UserDataView data; // null on the in-memory path
     private final List<Replay.Bookmark> bookmarks;
-    private Runnable ticker;
+    private volatile Runnable ticker;
 
     // mutated on the owner thread only; concurrent for cross-thread status reads (commands, tests)
     private final Map<String, Ghost> ghosts = new ConcurrentHashMap<>();
@@ -75,6 +75,9 @@ public final class Playback {
     private volatile long tick;
     private volatile boolean reversed;
     private volatile boolean paused;
+    /** Fast-forward ceiling: ~51s of timeline per theater tick; anything faster is a {@link #seek}. */
+    public static final int MAX_RATE = 1024;
+
     private volatile double rate = 1;
     private double carry; // owner-thread only: the sub-tick remainder of a fractional rate
     private final AtomicBoolean ended = new AtomicBoolean();
@@ -136,6 +139,8 @@ public final class Playback {
         });
         MinecraftServer.getGlobalEventHandler().addChild(shardWatch);
         ticker = shard.onTick(t -> step());
+        // a zero-length playback can end inside its first tick, on the clock thread, BEFORE the handle exists
+        if (ended.get()) ticker.run();
     }
 
     // seek/halt arrive on command threads; playback state is owner-thread-only, like Recording's mutators
@@ -183,12 +188,15 @@ public final class Playback {
      * the remainder carries between ticks), a NEGATIVE rate also flips into {@link #reverse}, {@code 0}
      * holds in place. A positive rate keeps the current direction; asking for motion resumes a {@link #pause
      * paused} playback (the rewind recipe holds its moment paused). Callable from any thread.
+     *
+     * <p>Magnitude is clamped to {@value #MAX_RATE}: a step advances {@code |rate|} timeline ticks inside ONE
+     * theater tick, so an unbounded rate would stall the clock into watchdog quarantine - {@link #seek} jumps.
      */
     public void rate(double rate) {
         if (!Double.isFinite(rate)) throw new IllegalArgumentException("finite rates only");
         if (rate < 0) reversed = true;
         if (rate != 0) paused = false;
-        this.rate = Math.abs(rate);
+        this.rate = Math.min(Math.abs(rate), MAX_RATE);
     }
 
     /** The current speed ({@link #reversed()} is the direction). */
@@ -447,14 +455,18 @@ public final class Playback {
 
     private void end() {
         if (!ended.compareAndSet(false, true)) return; // a manual halt may race the shard-death auto-halt
-        ticker.run(); // the onTick removal handle
+        Runnable t = ticker; // null when a zero-length playback ends inside its first tick; start() re-runs then
+        if (t != null) t.run();
         MinecraftServer.getGlobalEventHandler().removeChild(shardWatch);
-        ghosts.values().forEach(Entity::remove);
-        entities.values().forEach(Entity::remove);
-        for (Shard layer : layerShards.values()) {
-            if (layer != shard) layer.reset(); // husks stay linked; the theater's own destroy cascades them away
+        try {
+            ghosts.values().forEach(Entity::remove);
+            entities.values().forEach(Entity::remove);
+            for (Shard layer : layerShards.values()) {
+                if (layer != shard) layer.reset(); // husks stay linked; the theater's own destroy cascades them away
+            }
+        } finally {
+            EventDispatcher.call(new PlaybackStopEvent(this)); // the stop event fires even off a broken teardown
         }
-        EventDispatcher.call(new PlaybackStopEvent(this));
     }
 
     // one bad op must never stall the rest of the replay

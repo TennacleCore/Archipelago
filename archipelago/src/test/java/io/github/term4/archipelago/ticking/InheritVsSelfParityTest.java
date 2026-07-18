@@ -1,7 +1,7 @@
 package io.github.term4.archipelago.ticking;
 
 import io.github.term4.minestommechanics.MinestomMechanics;
-import io.github.term4.minestommechanics.api.event.AttackEvent;
+import io.github.term4.minestommechanics.api.event.attack.AttackEvent;
 import io.github.term4.minestommechanics.mechanics.attack.AttackSnapshot;
 import io.github.term4.minestommechanics.mechanics.damage.DamageSystem;
 import io.github.term4.minestommechanics.mechanics.projectile.ProjectileSnapshot;
@@ -9,7 +9,7 @@ import io.github.term4.minestommechanics.mechanics.projectile.ProjectileSystem;
 import io.github.term4.minestommechanics.mechanics.projectile.entities.ProjectileEntity;
 import io.github.term4.minestommechanics.mechanics.projectile.types.SplashPotion;
 import io.github.term4.minestommechanics.mechanics.projectile.types.Snowball;
-import io.github.term4.minestommechanics.mechanics.vanilla18.Vanilla18;
+import io.github.term4.minestommechanics.presets.vanilla18.Vanilla18;
 import io.github.term4.archipelago.shard.Shard;
 import io.github.term4.archipelago.replay.Playback;
 import io.github.term4.archipelago.replay.Recording;

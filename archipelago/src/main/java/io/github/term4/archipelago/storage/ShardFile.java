@@ -38,6 +38,7 @@ import java.util.function.BiConsumer;
 import java.util.function.BinaryOperator;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 /**
  * The lib format ({@code .shard}): a shard IS its diff. One gzip'd NBT compound - a string-state palette (version
@@ -70,18 +71,25 @@ public final class ShardFile {
     /** {@code withBefore} also records what each position showed beneath the diff (unloaded-chunk = unknown). */
     public static byte @NotNull [] save(@NotNull Shard shard, @Nullable Consumer<UserDataWriter> userData,
                                         boolean withBefore) {
-        Content content = snapshot(shard);
-        if (withBefore) {
+        // one relay for the whole capture: diff and the before column read the same instant, not one tick apart
+        Content content = onOwner(shard, () -> {
+            Content snap = snapshot(shard);
+            if (!withBefore) return snap;
             Map<Point, Block> before = new HashMap<>();
             Shard parent = shard.parent();
-            for (Point pos : content.diff().keySet()) {
+            for (Point pos : snap.diff().keySet()) {
                 if (!shard.instance().isChunkLoaded(pos)) continue; // unknown
                 before.put(pos, parent != null ? parent.getBlock(pos) : shard.instance().getBlock(pos));
             }
-            content = new Content(content.minY(), content.maxY(), content.diff(), before,
-                    content.time(), content.weather(), content.user(), null);
-        }
+            return new Content(snap.minY(), snap.maxY(), snap.diff(), before,
+                    snap.time(), snap.weather(), snap.user(), null);
+        });
         return content.encode(userData);
+    }
+
+    private static <T> T onOwner(Shard shard, Supplier<T> op) {
+        var domain = shard.domain();
+        return domain != null ? domain.relay(op) : op.get();
     }
 
     public static void save(@NotNull Shard shard, @NotNull Path path) throws IOException {
@@ -95,12 +103,21 @@ public final class ShardFile {
     /** Atomic file save: written beside {@code path}, then moved into place - a crash never leaves a torn file. */
     public static void save(@NotNull Shard shard, @NotNull Path path, @Nullable Consumer<UserDataWriter> userData,
                             boolean withBefore) throws IOException {
-        Path tmp = path.resolveSibling(path.getFileName() + ".tmp");
-        Files.write(tmp, save(shard, userData, withBefore));
+        moveIntoPlace(path, save(shard, userData, withBefore));
+    }
+
+    /** Unique sibling per call (concurrent saves to one path must not share a temp), cleaned up on failure. */
+    public static void moveIntoPlace(Path path, byte[] bytes) throws IOException {
+        Path tmp = path.resolveSibling(path.getFileName() + "." + Long.toUnsignedString(System.nanoTime(), 36) + ".tmp");
         try {
-            Files.move(tmp, path, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
-        } catch (AtomicMoveNotSupportedException e) {
-            Files.move(tmp, path, StandardCopyOption.REPLACE_EXISTING);
+            Files.write(tmp, bytes);
+            try {
+                Files.move(tmp, path, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            } catch (AtomicMoveNotSupportedException e) {
+                Files.move(tmp, path, StandardCopyOption.REPLACE_EXISTING);
+            }
+        } finally {
+            Files.deleteIfExists(tmp);
         }
     }
 
@@ -118,6 +135,11 @@ public final class ShardFile {
     /** Just the file's user-data section, no shard touched - listing saved games/replays by their metadata. */
     public static @NotNull UserDataView userData(byte @NotNull [] data) {
         return new UserDataView(decode(data).user());
+    }
+
+    /** {@link #userData(byte[])} over an already-{@link #decode decoded} file (validate-then-load without a second decode). */
+    public static @NotNull UserDataView userData(@NotNull Content content) {
+        return new UserDataView(content.user());
     }
 
     /**
@@ -213,15 +235,20 @@ public final class ShardFile {
         Block[] palette = parsePalette(tag);
         int[] xs = tag.getIntArray("x"), ys = tag.getIntArray("y"), zs = tag.getIntArray("z");
         int[] states = column(tag, "state");
+        // a corrupt file must fail as "corrupt", not as an index error deep in the load
+        if (xs.length != states.length || ys.length != states.length || zs.length != states.length) {
+            throw new IllegalArgumentException("corrupt shard file: column lengths disagree");
+        }
         Map<Point, Block> diff = new HashMap<>();
-        for (int i = 0; i < states.length; i++) diff.put(new Vec(xs[i], ys[i], zs[i]), palette[states[i]]);
+        for (int i = 0; i < states.length; i++) diff.put(new Vec(xs[i], ys[i], zs[i]), palette[checkedIndex(states[i], palette.length)]);
         applyNbt(tag, xs, ys, zs, diff);
         Map<Point, Block> before = null;
         if (tag.get("before") != null) {
             before = new HashMap<>();
             int[] beforeCol = column(tag, "before");
+            if (beforeCol.length != states.length) throw new IllegalArgumentException("corrupt shard file: before column length");
             for (int i = 0; i < beforeCol.length; i++) {
-                if (beforeCol[i] != NO_BEFORE) before.put(new Vec(xs[i], ys[i], zs[i]), palette[beforeCol[i]]);
+                if (beforeCol[i] != NO_BEFORE) before.put(new Vec(xs[i], ys[i], zs[i]), palette[checkedIndex(beforeCol[i], palette.length)]);
             }
         }
         CompoundBinaryTag sky = tag.getCompound("sky");
@@ -607,6 +634,7 @@ public final class ShardFile {
         for (BinaryTag tag : root.getList("nbt", BinaryTagTypes.COMPOUND)) {
             CompoundBinaryTag entry = (CompoundBinaryTag) tag;
             int i = entry.getInt("i");
+            if (i < 0 || i >= xs.length) throw new IllegalArgumentException("corrupt shard file: nbt index " + i);
             Point at = new Vec(xs[i], ys[i], zs[i]);
             Block block = diff.get(at);
             if (block == null) continue;
@@ -624,15 +652,23 @@ public final class ShardFile {
         return before != null ? before : Map.of();
     }
 
+    /** Decompressed ceiling: op logs run tens of MB; past this it's a gzip bomb, not a shard file. */
+    private static final long MAX_DECODED_BYTES = 1L << 30;
+
     private static CompoundBinaryTag read(byte[] data) {
         CompoundBinaryTag root;
         try {
-            root = BinaryTagIO.unlimitedReader().read(new ByteArrayInputStream(data), BinaryTagIO.Compression.GZIP);
+            root = BinaryTagIO.reader(MAX_DECODED_BYTES).read(new ByteArrayInputStream(data), BinaryTagIO.Compression.GZIP);
         } catch (IOException e) {
             throw new UncheckedIOException("not a shard file?", e);
         }
         if (root.getInt("v") != FORMAT) throw new IllegalArgumentException("unknown shard file version " + root.getInt("v"));
         return root;
+    }
+
+    private static int checkedIndex(int id, int size) {
+        if (id < 0 || id >= size) throw new IllegalArgumentException("corrupt shard file: palette index " + id);
+        return id;
     }
 
     private static Block[] parsePalette(CompoundBinaryTag root) {

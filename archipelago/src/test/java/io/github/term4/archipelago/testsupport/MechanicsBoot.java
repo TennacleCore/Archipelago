@@ -4,9 +4,9 @@ import io.github.term4.minestommechanics.MinestomMechanics;
 import io.github.term4.minestommechanics.mechanics.attribute.AttributeSystem;
 import io.github.term4.minestommechanics.mechanics.damage.DamageSystem;
 import io.github.term4.minestommechanics.mechanics.knockback.KnockbackSystem;
-import io.github.term4.minestommechanics.mechanics.vanilla18.Attributes;
-import io.github.term4.minestommechanics.mechanics.vanilla18.Damage;
-import io.github.term4.minestommechanics.mechanics.vanilla18.Knockback;
+import io.github.term4.minestommechanics.presets.vanilla18.Attributes;
+import io.github.term4.minestommechanics.presets.vanilla18.Damage;
+import io.github.term4.minestommechanics.presets.vanilla18.Knockback;
 import test.ShardBridge;
 
 /** The vanilla18 combat systems + bridge, installed once per JVM - shared by every bridge test class. */

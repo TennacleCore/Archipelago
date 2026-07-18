@@ -686,9 +686,26 @@ class ReplayTest {
             pb.pause(true);
             pb.rate(1); // asking for motion resumes a paused timeline
             assertFalse(pb.paused());
+            pb.rate(Double.MAX_VALUE); // step() advances |rate| times per theater tick - unclamped, this stalls the clock
+            assertEquals((double) Playback.MAX_RATE, pb.rate(), "impractical rates clamp");
+            assertThrows(IllegalArgumentException.class, () -> pb.rate(Double.NaN));
         } finally {
             pb.halt();
         }
+    }
+
+    /** A plain shard save (no op log) must throw BEFORE mutating the target. */
+    @Test
+    void playRejectsAPlainSaveWithoutTouchingTheTarget() {
+        Shard stage = new Shard(instance);
+        stage.setBlock(new Pos(5, 71, 5), Block.STONE);
+        byte[] plainSave = ShardFile.save(stage);
+
+        Shard theater = new Shard(instance);
+        theater.setBlock(new Pos(9, 71, 9), Block.DIRT);
+        assertThrows(IllegalArgumentException.class, () -> Replay.play(theater, plainSave));
+        assertEquals(Block.DIRT, theater.getBlock(9, 71, 9), "the failed play left the target's overlay alone");
+        assertTrue(theater.getBlock(5, 71, 5).isAir(), "and no t0 snapshot landed");
     }
 
     @Test

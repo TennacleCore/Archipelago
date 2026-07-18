@@ -88,6 +88,32 @@ class DomainTickBridgeTest extends HeadlessServerTest {
         }
     }
 
+    /** A PLAIN shard adopted onto a live domain mid-life must gain the mm world pass - its entities leave the main pass the moment they become domain-owned. */
+    @Test
+    void plainShardReclockedOntoADomainGainsTheWorldPass() {
+        ShardBridge.installDomainTicking();
+        ExecutionDomain domain = ExecutionDomain.create();
+        ShardManager shards = new ShardManager();
+        List<String> passes = new CopyOnWriteArrayList<>();
+        MechanicsWorld[] world = new MechanicsWorld[1];
+        TickSystem.Registration probe = TickSystem.register(TickPhase.PRE_DISPATCH, ctx -> {
+            if (ctx.external() && ctx.world() == world[0]) passes.add(Thread.currentThread().getName());
+        });
+        Shard shard = shards.create(instance, "lateclock"); // plain: no domain at create
+        world[0] = ShardBridge.adapt(shard);
+        try {
+            LockSupport.parkNanos(150_000_000);
+            assertTrue(passes.isEmpty(), "no world pass while plain (the main pass owns everything)");
+            shard.domain(domain);
+            await("the world pass appears on the domain clock", () -> passes.stream()
+                    .anyMatch(t -> t.startsWith("shard-domain:")));
+        } finally {
+            probe.cancel();
+            shards.destroy(shard);
+            domain.retire();
+        }
+    }
+
     @Test
     void joiningADomainShardResetsTickStampedCombatState() {
         ShardBridge.installDomainTicking();

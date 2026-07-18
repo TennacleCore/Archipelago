@@ -1,9 +1,9 @@
 package io.github.term4.archipelago.shard;
 
 import io.github.term4.minestommechanics.MinestomMechanics;
-import io.github.term4.minestommechanics.api.event.ExplosionEvent;
+import io.github.term4.minestommechanics.api.event.explosion.ExplosionEvent;
 import io.github.term4.minestommechanics.mechanics.explosion.ExplosionSystem;
-import io.github.term4.minestommechanics.mechanics.vanilla18.Explosion;
+import io.github.term4.minestommechanics.presets.vanilla18.Explosion;
 import io.github.term4.minestommechanics.vri.DroppedItemEntity;
 import io.github.term4.minestommechanics.world.MechanicsWorld;
 import io.github.term4.archipelago.storage.EntityDescriptors;

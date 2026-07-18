@@ -106,9 +106,11 @@ public final class Replay {
         if (RECORDABLES.isEmpty()) {
             throw new IllegalStateException("no recordables registered - CoreChannels.register() or Replay.register(...)");
         }
-        ShardFile.UserDataView data = ShardFile.load(target, file);
-        CompoundBinaryTag ops = data.get(OPS);
+        // validate before touching the target - a plain shard save must throw with the target unchanged
+        ShardFile.Content content = ShardFile.decode(file);
+        CompoundBinaryTag ops = ShardFile.userData(content).get(OPS);
         if (ops == null) throw new IllegalArgumentException("no replay op log in this file (a plain shard save?)");
+        ShardFile.UserDataView data = ShardFile.load(target, content);
         Playback playback = new Playback(target, ops, spawns, data);
         EventDispatcher.call(new PlaybackStartEvent(playback));
         return playback;

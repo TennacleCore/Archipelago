@@ -101,10 +101,7 @@ public final class ShardBridge {
                 || entity instanceof ProjectileEntity || entity instanceof DroppedItemEntity);
         // mm's per-tick systems follow a domain-bound shard onto its clock (PRE_DISPATCH ordering holds:
         // Domain.tick runs hooks before entities)
-        MinecraftServer.getGlobalEventHandler().addListener(ShardCreateEvent.class, e -> {
-            if (e.shard().domain() == null) return; // plain shards ride the main pass
-            e.shard().setTag(TICK_HOOK, e.shard().onTick(t -> TickSystem.tickWorld(adapt(e.shard()), t)));
-        });
+        MinecraftServer.getGlobalEventHandler().addListener(ShardCreateEvent.class, e -> hookDomainTick(e.shard()));
         MinecraftServer.getGlobalEventHandler().addListener(ShardDestroyEvent.class, e -> {
             Runnable stop = e.shard().getTag(TICK_HOOK);
             if (stop != null) stop.run();
@@ -115,11 +112,19 @@ public final class ShardBridge {
         MinecraftServer.getGlobalEventHandler().addListener(ShardJoinEvent.class, e -> clockGate(e.player()));
         MinecraftServer.getGlobalEventHandler().addListener(ShardLeaveEvent.class, e -> clockGate(e.player()));
         MinecraftServer.getGlobalEventHandler().addListener(ShardTransferEvent.class, e -> clockGate(e.entity()));
-        // a re-clock changes every member's/entity's clock with no join/transfer - gate them all
+        // a re-clock changes every member's/entity's clock with no join/transfer - gate them all. It is also the
+        // moment a PLAIN shard can become domain-bound: its entities leave the main pass, so the world pass must exist.
         MinecraftServer.getGlobalEventHandler().addListener(ShardReclockEvent.class, e -> {
+            hookDomainTick(e.shard());
             e.shard().members().forEach(ShardBridge::clockGate);
             e.shard().entities().forEach(ShardBridge::clockGate);
         });
+    }
+
+    /** One tick hook per domain-bound shard (plain shards ride the main pass); survives later re-clocks with the driver. */
+    private static void hookDomainTick(Shard shard) {
+        if (shard.domain() == null || shard.getTag(TICK_HOOK) != null) return;
+        shard.setTag(TICK_HOOK, shard.onTick(t -> TickSystem.tickWorld(adapt(shard), t)));
     }
 
     private static final Tag<Runnable> TICK_HOOK = Tag.Transient("bridge:tick-hook");
@@ -157,11 +162,16 @@ public final class ShardBridge {
     /** The {@link MechanicsWorld} view of {@code shard} (one cached adapter per shard). */
     public static @NotNull MechanicsWorld adapt(@NotNull Shard shard) {
         MechanicsWorld cached = shard.getTag(ADAPTER);
-        if (cached == null) {
-            cached = new Adapter(shard);
-            shard.setTag(ADAPTER, cached); // benign race: last write wins, both delegate to the same shard
+        if (cached != null) return cached;
+        // one adapter EVER: TickContext.owns compares world identity, so a raced second wrapper orphans entities
+        synchronized (ShardBridge.class) {
+            cached = shard.getTag(ADAPTER);
+            if (cached == null) {
+                cached = new Adapter(shard);
+                shard.setTag(ADAPTER, cached);
+            }
+            return cached;
         }
-        return cached;
     }
 
     private static final class Adapter implements MechanicsWorld {

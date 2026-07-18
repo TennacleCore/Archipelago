@@ -391,12 +391,13 @@ final class Appliers {
                 write(in, prev, pos, Nbt.block(prev.op().block()));
                 return;
             }
-            // no earlier op: back to the t0 snapshot (root layer) or the parent view (the entry clears)
+            // no earlier op: back to the t0 snapshot (root layer) or the parent view (the entry clears -
+            // under an unloaded chunk too, or the un-applied overlay state survives the reversal)
             Block t0 = b.layer() == 0 ? pb.t0Block(pos) : null;
             if (t0 != null) {
                 in.pinBlock(pos, t0);
-            } else if (in.instance().isChunkLoaded(pos)) {
-                in.setBlock(pos, in.parent() != null ? in.parent().getBlock(pos) : in.instance().getBlock(pos));
+            } else {
+                in.clearBlock(pos);
             }
         }
     }

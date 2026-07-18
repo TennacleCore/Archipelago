@@ -14,6 +14,7 @@ import org.jetbrains.annotations.Nullable;
 
 import java.util.Collection;
 import java.util.Collections;
+import java.util.WeakHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -28,23 +29,42 @@ import java.util.function.Function;
  */
 public final class ShardManager {
 
+    // ONE process-wide quarantine listener over weakly-held managers - a per-manager global listener would leak
+    // every manager (and its shards) for the JVM's life
+    private static final Set<ShardManager> MANAGERS = Collections.newSetFromMap(new WeakHashMap<>());
+    private static boolean listenerInstalled;
+
     private final Map<String, Shard> byName = new ConcurrentHashMap<>();
     private final Map<Shard, String> names = new ConcurrentHashMap<>();
     private final Set<Shard> shards = ConcurrentHashMap.newKeySet();
 
     public ShardManager() {
-        // fail-stop = the DOMAIN dies; its shards drop into STASIS (frozen entities on the dead clock) - the
-        // app recovers with a FRESH clock (shard.domain(...)), destroys, or leaves them. Member players alone
-        // hand back to server ticking: their connections must keep living
-        MinecraftServer.getGlobalEventHandler().addListener(DomainQuarantineEvent.class, e -> {
-            for (Shard shard : List.copyOf(shards)) {
+        synchronized (ShardManager.class) {
+            if (!listenerInstalled) {
+                listenerInstalled = true;
+                MinecraftServer.getGlobalEventHandler().addListener(DomainQuarantineEvent.class, ShardManager::onQuarantine);
+            }
+            MANAGERS.add(this);
+        }
+    }
+
+    // fail-stop = the DOMAIN dies; its shards drop into STASIS (frozen entities on the dead clock) - the
+    // app recovers with a FRESH clock (shard.domain(...)), destroys, or leaves them. Member players alone
+    // hand back to server ticking: their connections must keep living
+    private static void onQuarantine(DomainQuarantineEvent e) {
+        List<ShardManager> live;
+        synchronized (ShardManager.class) {
+            live = List.copyOf(MANAGERS);
+        }
+        for (ShardManager manager : live) {
+            for (Shard shard : List.copyOf(manager.shards)) {
                 ExecutionDomain domain = shard.domain();
                 if (domain == null || !domain.sharesClock(e.domain())) continue;
                 for (Player p : shard.members()) {
                     if (ExecutionDomain.of(p) != null) ExecutionDomain.detach(p);
                 }
             }
-        });
+        }
     }
 
     public @NotNull Shard create(@NotNull Instance base) {
@@ -96,13 +116,21 @@ public final class ShardManager {
     /** Adopts an externally constructed shard (e.g. a {@code ShardFile.loadTree} layer) into the registry. */
     public @NotNull Shard register(@NotNull Shard shard, @Nullable String name) {
         if (name != null && byName.putIfAbsent(name, shard) != null) {
-            shard.reset(); // a fork already spawned its clones - drop them
+            discard(shard);
             throw new IllegalArgumentException("shard name already in use: " + name);
         }
         if (name != null) names.put(shard, name);
         shards.add(shard);
+        // a throwing create listener can't unwind this: Minestom routes listener throwables to the exception manager
         EventDispatcher.call(new ShardCreateEvent(shard));
         return shard;
+    }
+
+    /** Unwinds a never-registered shard: fork clones dropped, the parent link severed (the ctor attached it). */
+    private static void discard(Shard shard) {
+        shard.reset();
+        Shard parent = shard.parent();
+        if (parent != null) parent.children.remove(shard);
     }
 
     public @Nullable Shard byName(@NotNull String name) { return byName.get(name); }
@@ -125,9 +153,12 @@ public final class ShardManager {
             domain.execute(() -> destroy(shard));
             return;
         }
-        if (shard.destroyed) return;
-        shard.destroyed = true;
+        synchronized (shard) { // atomic claim: concurrent destroys race the flag, only one tears down
+            if (shard.destroyed) return;
+            shard.destroyed = true;
+        }
         try {
+            shard.relight(false); // the light flush hook would otherwise keep the dead shard ticking
             for (Shard child : List.copyOf(shard.children)) destroy(child);
             for (Player p : List.copyOf(shard.members())) shard.leave(p);
             for (Player o : List.copyOf(shard.observers())) {

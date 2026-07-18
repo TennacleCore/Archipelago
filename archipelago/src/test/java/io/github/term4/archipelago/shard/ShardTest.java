@@ -327,6 +327,20 @@ class ShardTest extends HeadlessServerTest {
         }
     }
 
+    /** A name-conflicted registration must unwind fully - the constructor already attached the child to its parent. */
+    @Test
+    void nameConflictDetachesTheRejectedChild() {
+        ShardManager manager = new ShardManager();
+        Shard parent = manager.create(instance, "reg-parent");
+        try {
+            manager.child(parent, "reg-child");
+            assertThrows(IllegalArgumentException.class, () -> manager.child(parent, "reg-child"));
+            assertEquals(1, parent.children().size(), "the rejected child detached from its parent");
+        } finally {
+            manager.destroy(parent);
+        }
+    }
+
     @Test
     void resetDropsTheDiff() {
         Shard a = new Shard(instance);

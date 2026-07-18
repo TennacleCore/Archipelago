@@ -2,6 +2,7 @@ package io.github.term4.archipelago.shard;
 
 import io.github.term4.archipelago.world.WorldAccess;
 import io.github.term4.archipelago.world.WorldPolicy;
+import net.minestom.server.coordinate.CoordConversion;
 import net.minestom.server.coordinate.Point;
 import net.minestom.server.entity.Entity;
 import net.minestom.server.entity.Player;
@@ -207,8 +208,18 @@ public final class ShardView {
         if (from != null && in == from.instance()) collectChainDiff(from, lca, positions);
         if (to != null && in == to.instance()) collectChainDiff(to, lca, positions);
         Shard newView = to != null && in == to.instance() ? to : null;
+        // light first: its unlit fallback re-sends BASE chunks whole, which would clobber the block sends below
+        Set<Long> resent = ShardLight.onViewSwap(player, from != null && in == from.instance() ? from : null, newView);
+        if (newView != null && !resent.isEmpty()) {
+            // a full base resend reverts the WHOLE chain's overlay in that chunk - shared-ancestor diffs the
+            // LCA cut excluded included - so recover every chain position living in a resent chunk
+            Set<Point> chain = new HashSet<>();
+            collectChainDiff(newView, null, chain);
+            for (Point pos : chain) {
+                if (resent.contains(CoordConversion.chunkIndex(pos.chunkX(), pos.chunkZ()))) positions.add(pos);
+            }
+        }
         for (Point pos : positions) sendViewAt(player, newView, pos);
-        ShardLight.onViewSwap(player, from != null && in == from.instance() ? from : null, newView);
     }
 
     private static void collectChainDiff(Shard shard, @Nullable Shard stop, Set<Point> out) {

@@ -54,12 +54,12 @@ dependencies {
     compileOnly("net.minestom:minestom:$minestomVersion")
     compileOnly("org.slf4j:slf4j-api:2.0.18") // minestom's runtime always carries the binding
     // optional: only the polar/replay packages touch it - add polar to your app to use saves/replays
-    compileOnly("dev.hollowcube:polar:dev")
+    compileOnly("dev.hollowcube:polar:1.16.0")
 
     testImplementation("net.minestom:minestom:$minestomVersion")
     // the integration DEMO only - the published archipelago artifact never depends on mechanics
     testImplementation("io.github.term4:minestom-mechanics:0.2.0")
-    testImplementation("dev.hollowcube:polar:dev")
+    testImplementation("dev.hollowcube:polar:1.16.0")
     testImplementation("com.github.luben:zstd-jni:1.5.7-7") // storage harnesses compress candidate payloads
     testImplementation("org.tinylog:tinylog-api:2.8.0-M1")
     testImplementation("org.tinylog:tinylog-impl:2.8.0-M1")
@@ -72,7 +72,6 @@ dependencies {
 
 tasks.test {
     useJUnitPlatform()
-    failOnNoDiscoveredTests = false
     // synchronous player spawns + relaxed thread asserts (like Minestom's Env); must be set before ServerFlag loads
     systemProperty("minestom.inside-test", "true")
     systemProperty("breakdown.files", System.getProperty("breakdown.files", "")) // extra replay files for the harness

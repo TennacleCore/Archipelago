@@ -99,11 +99,25 @@ final class Domain {
      * has no live clock. The queue is unbounded by design: it drains fully each tick, a stalled domain's
      * growth window ends at quarantine (tasks then run inline), and a producer outpacing the drain gets
      * one WARN - bounding would mean dropping or rerouting shard work, both off the table.
+     *
+     * <p>Post-death execution (inline here, or the quarantine drain) runs OFF the owner thread - the fail-stop
+     * recovery contract. A stuck zombie may still sit inside its final tick, so consistency then is best-effort.
      */
     void execute(@NotNull Runnable task) {
         tasks.add(task);
         // claimed back atomically: a dead domain's queue is never drained, and a caller may be waiting on this
         if (!live() && tasks.remove(task)) task.run();
+    }
+
+    /** Runs what the quarantine window stranded: tasks queued while the clock was alive that it never drained. */
+    void drainAbandoned() {
+        for (Runnable task; (task = tasks.poll()) != null; ) {
+            try {
+                task.run();
+            } catch (Throwable t) {
+                LOGGER.warn("abandoned-domain task failed", t);
+            }
+        }
     }
 
     /**

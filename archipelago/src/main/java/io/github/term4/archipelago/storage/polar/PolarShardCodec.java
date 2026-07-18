@@ -33,10 +33,8 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.UncheckedIOException;
-import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -44,7 +42,10 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ForkJoinPool;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 /**
  * The polar EXCHANGE ADAPTER: {@code ShardFile} ({@code .shard}) is the lib format - this codec exists to talk
@@ -75,21 +76,36 @@ public final class PolarShardCodec {
     /** {@code entities} false = blocks/sky/user data only (a map template; loading spawns nothing). */
     public static byte @NotNull [] save(@NotNull Shard shard, @Nullable Consumer<UserDataWriter> userData, boolean entities) {
         DimensionType dim = shard.dimension();
-        return encode(dim.minY(), dim.maxY(), shard.diff(), writeUserData(shard, userData, entities));
+        Capture c = capture(shard, userData, entities);
+        return encode(dim.minY(), dim.maxY(), c.diff(), c.user());
     }
 
     /**
      * {@link #save(Shard, Consumer, boolean)} with the encode (palette build + polar zstd, pure CPU) off-thread.
-     * Diff, sky, entities and user data snapshot on the calling thread, so the bytes are consistent with the
-     * moment of the call.
+     * Diff, sky, entities and user data snapshot together on the shard's clock, so the bytes are one instant.
      */
     public static @NotNull CompletableFuture<byte[]> saveAsync(@NotNull Shard shard,
                                                                @Nullable Consumer<UserDataWriter> userData,
                                                                boolean entities) {
+        return saveAsync(shard, userData, entities, ForkJoinPool.commonPool());
+    }
+
+    /** {@link #saveAsync(Shard, Consumer, boolean)} encoding on {@code executor} - a save-heavy server bounds its own I/O pool instead of loading the common pool. */
+    public static @NotNull CompletableFuture<byte[]> saveAsync(@NotNull Shard shard,
+                                                               @Nullable Consumer<UserDataWriter> userData,
+                                                               boolean entities, @NotNull Executor executor) {
         DimensionType dim = shard.dimension();
-        Map<Point, Block> diff = shard.diff();
-        byte[] user = writeUserData(shard, userData, entities);
-        return CompletableFuture.supplyAsync(() -> encode(dim.minY(), dim.maxY(), diff, user));
+        Capture c = capture(shard, userData, entities);
+        return CompletableFuture.supplyAsync(() -> encode(dim.minY(), dim.maxY(), c.diff(), c.user()), executor);
+    }
+
+    private record Capture(Map<Point, Block> diff, byte[] user) {}
+
+    // one relay: separate diff/entity reads could straddle a tick and save an incoherent instant
+    private static Capture capture(Shard shard, @Nullable Consumer<UserDataWriter> userData, boolean entities) {
+        var domain = shard.domain();
+        Supplier<Capture> snap = () -> new Capture(shard.diff(), writeUserData(shard, userData, entities));
+        return domain != null ? domain.relay(snap) : snap.get();
     }
 
     private static byte[] encode(int minY, int maxY, Map<Point, Block> diff, byte[] userData) {
@@ -166,13 +182,7 @@ public final class PolarShardCodec {
     /** Atomic file save: written beside {@code path}, then moved into place - a crash never leaves a torn file. */
     public static void save(@NotNull Shard shard, @NotNull Path path, @Nullable Consumer<UserDataWriter> userData,
                             boolean entities) throws IOException {
-        Path tmp = path.resolveSibling(path.getFileName() + ".tmp");
-        Files.write(tmp, save(shard, userData, entities));
-        try {
-            Files.move(tmp, path, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
-        } catch (AtomicMoveNotSupportedException e) {
-            Files.move(tmp, path, StandardCopyOption.REPLACE_EXISTING);
-        }
+        ShardFile.moveIntoPlace(path, save(shard, userData, entities));
     }
 
     /**
@@ -204,7 +214,9 @@ public final class PolarShardCodec {
                 }
                 int[] blockData = palette.length > 1 ? section.blockData() : null; // accessor asserts on single palettes
                 for (int i = 0; i < PolarSection.BLOCK_PALETTE_SIZE; i++) {
-                    Block block = blocks[blockData == null ? 0 : blockData[i]];
+                    int id = blockData == null ? 0 : blockData[i];
+                    if (id < 0 || id >= blocks.length) throw new IllegalArgumentException("corrupt polar section: palette index " + id);
+                    Block block = blocks[id];
                     if (block == null) continue;
                     int y = ((world.minSection() + si) << 4) + (i >> 8);
                     if (y < clampMinY || y >= clampMaxY) continue;
