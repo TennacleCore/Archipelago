@@ -18,6 +18,7 @@ import net.kyori.adventure.nbt.ListBinaryTag;
 import net.minestom.server.MinecraftServer;
 import net.minestom.server.codec.Transcoder;
 import net.minestom.server.coordinate.Point;
+import net.minestom.server.coordinate.Vec;
 import net.minestom.server.entity.Entity;
 import net.minestom.server.entity.PlayerSkin;
 import net.minestom.server.instance.block.Block;
@@ -217,9 +218,17 @@ public final class Playback {
         return reversed;
     }
 
-    /** Freezes the timeline in place (a paused physics twin may bob inside its correction band). */
+    /** Freezes the timeline in place; parked twins' leg-flight velocity zeroes (the appliers re-aim on resume). */
     public void pause(boolean paused) {
         this.paused = paused;
+        if (paused) {
+            onOwner(() -> {
+                for (int seq : parkedTwins) {
+                    Entity e = entities.get(seq);
+                    if (e != null) e.setVelocity(net.minestom.server.coordinate.Vec.ZERO);
+                }
+            });
+        }
     }
 
     public boolean paused() {
@@ -267,6 +276,7 @@ public final class Playback {
         hiddenActors.clear();
         actorLayers.clear();
         skins.clear();
+        parkedTwins.clear();
         for (Shard layer : layerShards.values()) {
             if (layer != shard) layer.reset();
         }
@@ -379,6 +389,7 @@ public final class Playback {
 
     /** Unbinds and returns the twin of {@code seq}, or {@code null}. */
     public @Nullable Entity untrack(int seq) {
+        parkedTwins.remove(seq);
         return entities.remove(seq);
     }
 
@@ -396,9 +407,39 @@ public final class Playback {
         return entities.get(seq);
     }
 
+    private final Set<Integer> parkedTwins = ConcurrentHashMap.newKeySet();
+
     /** Binds a replayed entity to its recorded seq - the position track and removal target it. */
     public void track(int seq, @NotNull Entity entity) {
         entities.put(seq, entity);
+        // BEFORE the spawn broadcast: a revived twin carries its recorded launch velocity, and at a
+        // fractional rate both its own sim and the client's prediction would free-run it at FULL speed
+        // until the first track op - park it here so the spawn packet already advertises zero.
+        // Reversed always: a sim only knows forward
+        if ((rate < 1 || reversed) && !Visuals.standIn(entity)) park(seq);
+    }
+
+    /** Parks a twin's own physics (zero-velocity broadcast + no gravity): the track owns its motion. The
+     *  no-gravity METADATA also reaches the client, making its local sim linear - the leg-velocity flight
+     *  the appliers drive renders frame-perfect there. Aerodynamics stay native: the server twin and the
+     *  client sim must decay velocity identically between leg redirects. */
+    public void park(int seq) {
+        Entity e = entities.get(seq);
+        if (e != null && parkedTwins.add(seq)) {
+            e.setVelocity(Vec.ZERO);
+            e.setNoGravity(true);
+        }
+    }
+
+    public boolean parked(int seq) {
+        return parkedTwins.contains(seq);
+    }
+
+    /** Full-speed playback again: the twin's own sim resumes (the applier re-seeds its velocity). */
+    public void unpark(int seq) {
+        if (!parkedTwins.remove(seq)) return;
+        Entity e = entities.get(seq);
+        if (e != null && !Visuals.standIn(e)) e.setNoGravity(false);
     }
 
     /** The t0 snapshot's block at {@code pos}, or {@code null} (outside the recorded root's own diff) - reverse block fallback. */

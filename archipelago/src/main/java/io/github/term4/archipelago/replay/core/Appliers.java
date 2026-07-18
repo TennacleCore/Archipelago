@@ -18,6 +18,7 @@ import net.minestom.server.coordinate.Pos;
 import net.minestom.server.coordinate.Vec;
 import net.minestom.server.entity.Entity;
 import net.minestom.server.entity.EntityPose;
+import net.minestom.server.entity.EntityType;
 import net.minestom.server.entity.EquipmentSlot;
 import net.minestom.server.entity.ItemEntity;
 import net.minestom.server.entity.PlayerHand;
@@ -159,6 +160,9 @@ final class Appliers {
 
     static final class MoveApplier implements Applier<Channels.Move> {
         private final LookBack<String, Channels.Move> history = new LookBack<>(Channels.MOVES, Channels.Move::player);
+        /** Active constant-speed legs at fractional rates, per actor; {@link #tick} walks the ghost along. */
+        private final Map<String, Glide> glides = new HashMap<>();
+        private final Map<String, Pin> lastMove = new HashMap<>();
 
         @Override
         public void apply(@NotNull Playback pb, @NotNull Recorded<Channels.Move> op) {
@@ -174,8 +178,29 @@ final class Appliers {
                 pb.layerFor(m.player()).spawn(ghost, pos); // rises straight into its recorded layer
             } else {
                 ghost.grounded(m.ground());
-                ghost.teleport(pos);
-                ghost.sendPacketToViewers(new EntityHeadLookPacket(ghost.getEntityId(), m.yaw()));
+                Pin previous = lastMove.put(m.player(), new Pin(pos, pb.tick()));
+                if (pb.rate() >= 1 || pb.paused()) { // fractional rates glide in tick() instead
+                    ghost.teleport(pos);
+                    ghost.sendPacketToViewers(new EntityHeadLookPacket(ghost.getEntityId(), m.yaw()));
+                } else {
+                    glides.put(m.player(), leg(previous != null ? previous.pos() : ghost.getPosition(),
+                            previous != null ? previous.tick() : pb.tick() - 1, pos, pb.tick(), pb.rate()));
+                }
+            }
+        }
+
+        @Override
+        public void tick(@NotNull Playback pb) {
+            if (pb.rate() >= 1 || pb.paused()) return;
+            for (var it = glides.entrySet().iterator(); it.hasNext(); ) {
+                var entry = it.next();
+                Ghost ghost = pb.ghost(entry.getKey());
+                if (ghost == null) {
+                    it.remove();
+                    continue;
+                }
+                glide(ghost, entry.getValue());
+                ghost.sendPacketToViewers(new EntityHeadLookPacket(ghost.getEntityId(), entry.getValue().target().yaw()));
             }
         }
 
@@ -227,6 +252,11 @@ final class Appliers {
 
         // shared with RemoveApplier's reverse crossing (an un-removed twin re-runs its spawn)
         static boolean spawnNow(Playback pb, Channels.Spawn spawn, boolean ownerless) {
+            return spawnNow(pb, spawn, ownerless, null);
+        }
+
+        /** {@code at} overrides the spawn-op position (a reverse revival rises at its rest, not its launch). */
+        static boolean spawnNow(Playback pb, Channels.Spawn spawn, boolean ownerless, @Nullable Pos at) {
             if (pb.earlyRemoved(spawn.seq())) return true; // its remove already played; never materialize
             Shard in = pb.layer(spawn.layer());
             if (in == null) return true; // its layer never rose (seek-folded away): consume
@@ -238,16 +268,19 @@ final class Appliers {
             if (entity == null) return true;
             for (SpawnHook hook : Replay.spawnHooks()) hook.enhance(entity, owner, pb);
             pb.track(spawn.seq(), entity);
-            in.spawn(entity, new Pos(spawn.x(), spawn.y(), spawn.z(), spawn.yaw(), spawn.pitch()));
+            in.spawn(entity, at != null ? at : new Pos(spawn.x(), spawn.y(), spawn.z(), spawn.yaw(), spawn.pitch()));
             return true;
         }
     }
 
+    /** A track point at a timeline tick (glide legs + rest pins). */
+    private record Pin(Pos pos, long tick) {}
+
     static final class EntityMoveApplier implements Applier<Channels.EntityMove> {
-        private record Pin(Pos pos, long tick) {}
 
         private final Map<Integer, Pin> lastTrack = new HashMap<>();
-        private final Set<Integer> reversedTwins = new HashSet<>();
+        /** Active constant-speed legs at fractional rates, per seq. */
+        private final Map<Integer, Glide> glides = new HashMap<>();
         private final LookBack<Integer, Channels.EntityMove> history =
                 new LookBack<>(Channels.ENTITY_MOVES, Channels.EntityMove::seq);
 
@@ -298,23 +331,35 @@ final class Appliers {
             Pin previous = lastTrack.put(seq, new Pin(target, pb.tick()));
             if (e == null || e.getInstance() == null) return; // the next track op (or the pin) places it
             if (Visuals.standIn(e)) {
-                e.teleport(target);
+                // fractional rates: the per-tick glide in tick() walks it there smoothly instead
+                if (pb.rate() >= 1 || pb.paused()) e.teleport(target);
+                else glides.put(seq, leg(previous != null ? previous.pos() : e.getPosition(),
+                        previous != null ? previous.tick() : pb.tick() - 1, target, pb.tick(), pb.rate()));
                 return;
             }
             if (hard) {
-                // reverse is non-physical (a sim can't fall upwards): the track drives, but through the
-                // tracker's RELATIVE-MOVE wire - what a live entity emits, so clients lerp it; a teleport
-                // packet per op reads as snapping. Entry parks the twin's own physics ONCE (no per-tick
-                // velocity packets) so only the track moves it
-                if (reversedTwins.add(seq)) {
-                    e.setVelocity(Vec.ZERO);
-                    e.setNoGravity(true);
-                }
-                e.refreshPosition(target, false, true);
+                // reverse is non-physical (a sim can't fall upwards) and clients won't integrate it either
+                // (a stuck arrow's IN_GROUND freezes its sim): everything reverses on the relative wire -
+                // per-tick glide at fractional rates, per-op at full rate
+                pb.park(seq);
+                glides.put(seq, leg(previous != null ? previous.pos() : e.getPosition(),
+                        previous != null ? previous.tick() : pb.tick() + 1, target, pb.tick(), pb.rate()));
+                if (pb.rate() >= 1) wireMove(e, target);
                 return;
             }
-            if (reversedTwins.remove(seq)) { // forward again: free-run resumes, re-seeded along the track
-                e.setNoGravity(false);
+            if (pb.rate() < 1 && !pb.paused()) {
+                // fractional forward: a free-running twin (and its client) always sims at FULL speed - parked
+                // (normally already at track time), the leg drives it: fliers by rate-scaled velocity, living
+                // twins by the per-tick glide
+                pb.park(seq);
+                Glide g = leg(previous != null ? previous.pos() : e.getPosition(),
+                        previous != null ? previous.tick() : pb.tick() - 1, target, pb.tick(), pb.rate());
+                glides.put(seq, g);
+                if (velocityFlier(e)) fly(e, g);
+                return;
+            }
+            if (pb.parked(seq)) { // full speed again: free-run resumes, re-seeded along the track
+                pb.unpark(seq);
                 seedVelocity(pb, e, previous, target);
                 e.teleport(target);
                 return;
@@ -328,7 +373,9 @@ final class Appliers {
         private static void seedVelocity(Playback pb, Entity e, @Nullable Pin previous, Pos target) {
             if (previous == null || pb.tick() <= previous.tick()) return;
             long dt = pb.tick() - previous.tick();
-            e.setVelocity(target.sub(previous.pos()).asVec().div(dt).mul(ServerFlag.SERVER_TICKS_PER_SECOND));
+            // x rate: dt is TIMELINE ticks - at 0.25x the twin has 4x the wall time to cover the leg
+            e.setVelocity(target.sub(previous.pos()).asVec().div(dt)
+                    .mul(ServerFlag.SERVER_TICKS_PER_SECOND * pb.rate()));
         }
 
         // between track points a twin STAYS at its last one: a silent track means the real entity rested, but a
@@ -340,11 +387,39 @@ final class Appliers {
                 var entry = it.next();
                 Entity e = pb.entity(entry.getKey());
                 if (e == null || e.isRemoved()) {
-                    reversedTwins.remove(entry.getKey());
                     it.remove();
+                    glides.remove(entry.getKey());
                     continue;
                 }
                 Pin pin = entry.getValue();
+                if (!pb.paused() && (Visuals.standIn(e) || pb.parked(entry.getKey()))
+                        && (pb.rate() < 1 || pb.reversed())) { // track-driven: the leg owns the motion
+                    Glide g = glides.get(entry.getKey());
+                    if (g == null) g = new Glide(pin.pos(), Vec.ZERO);
+                    if (velocityFlier(e) && !pb.reversed()) {
+                        // leg-flight bookkeeping only - position is entirely the two sims' business. Re-aim
+                        // after a pause/spawn, stop dead at the leg's end (the track went silent there -
+                        // unchecked velocity would sail past the rest point)
+                        Vec toTarget = g.target().sub(e.getPosition()).asVec();
+                        if (toTarget.dot(g.step()) <= 0 || toTarget.lengthSquared() < 1.0e-4) {
+                            if (!e.getVelocity().isZero()) e.setVelocity(Vec.ZERO);
+                            wireMove(e, g.target());
+                            glides.remove(entry.getKey());
+                        } else if (e.getVelocity().isZero()) {
+                            fly(e, g);
+                        }
+                    } else {
+                        if (!e.getVelocity().isZero()) e.setVelocity(Vec.ZERO); // glide-driven: the client sim stays inert
+                        Pos before = e.getPosition();
+                        glide(e, g);
+                        // per-tick absolute holds while its track rests, or the client sinks it between
+                        // periodic syncs (identical positions render static)
+                        if (clientRestless(e) && e.getInstance() != null && e.getPosition().equals(before)) {
+                            e.teleport(pin.pos());
+                        }
+                    }
+                    continue;
+                }
                 // a track can stall a tick or two WITHOUT the entity resting: the RECORDED item's own async
                 // spawn holds its position (no delta, no ops) while the revived twin already flies - pinning
                 // then sends the zero+snap that kills a 1.8 client's local item sim (capture-diagnosed).
@@ -356,6 +431,79 @@ final class Appliers {
                 }
             }
         }
+    }
+
+    /** A track leg: {@code step} = the per-theater-tick displacement (CONSTANT speed - leg length over leg
+     *  wall-time; an exponential chase pulses fast-slow-fast and reads as chop). {@code Vec.ZERO} = no
+     *  cadence, snap to the target. */
+    record Glide(Pos target, Vec step) {
+        double perTick() {
+            return step.isZero() ? Double.MAX_VALUE : step.length();
+        }
+    }
+
+    /** The leg from {@code from}@{@code fromTick} to {@code target}@{@code toTick} at {@code rate};
+     *  tick distance is direction-agnostic (reverse legs run toTick < fromTick). */
+    static Glide leg(Pos from, long fromTick, Pos target, long toTick, double rate) {
+        long dt = Math.max(1, Math.abs(toTick - fromTick)); // first leg has no cadence yet: assume the per-tick track
+        return new Glide(target, target.sub(from).asVec().div(dt).mul(rate));
+    }
+
+    /** Client sims that FIGHT leg-flight (26.1 source): hurting projectiles re-accelerate along their own
+     *  motion every tick ((v + v-hat x 0.1) x 0.95, terminal ~2 b/t no matter what velocity lands), the
+     *  bobber's gravity ignores NO_GRAVITY (drag 0.92). Zero velocity is their only inert state. */
+    private static final Set<EntityType> OWN_SIM = Set.of(EntityType.FISHING_BOBBER, EntityType.FIREBALL,
+            EntityType.SMALL_FIREBALL, EntityType.DRAGON_FIREBALL, EntityType.WITHER_SKULL,
+            EntityType.WIND_CHARGE, EntityType.BREEZE_WIND_CHARGE, EntityType.SHULKER_BULLET);
+
+    /** Whether the CLIENT integrates this entity's velocity linearly under NO_GRAVITY (snowballs, arrows,
+     *  items, TNT: inertia ~0.99). Living entities are interpolation-driven remotely, and {@link #OWN_SIM}
+     *  clients fight external velocity outright - both glide on relative moves instead. */
+    private static boolean velocityFlier(Entity e) {
+        return !(e instanceof net.minestom.server.entity.LivingEntity) && !OWN_SIM.contains(e.getEntityType());
+    }
+
+    /** The bobber sinks client-side even parked (its gravity ignores NO_GRAVITY). */
+    private static boolean clientRestless(Entity e) {
+        return e.getEntityType() == EntityType.FISHING_BOBBER;
+    }
+
+    /** (Re)aims a flier along its leg: ONE velocity broadcast, then the client's own no-gravity sim flies it
+     *  frame-perfect and the server twin integrates the same velocity - NOTHING touches its position per tick
+     *  (that is what makes it glassy). The tight tolerance re-anchors BOTH sims about once per leg: their
+     *  native drags decay a few percent per leg, and unchecked that drift becomes visible sync rubber-banding. */
+    private static void fly(Entity e, Glide g) {
+        if (e.getInstance() == null) return; // deferred: tick() re-tries once the spawn lands
+        Vec want = g.step().mul(ServerFlag.SERVER_TICKS_PER_SECOND);
+        if (e.getVelocity().sub(want).length() <= Math.max(0.02, 0.03 * want.length())) return;
+        e.setVelocity(want);
+    }
+
+    /** One constant-speed glide step toward the leg's target. */
+    private static void glide(Entity e, Glide g) {
+        Pos cur = e.getPosition();
+        Vec to = g.target().sub(cur).asVec();
+        double d2 = to.lengthSquared();
+        if (d2 < 1.0e-6) return;
+        double dist = Math.sqrt(d2);
+        double perTick = g.perTick();
+        Pos step = (dist <= perTick ? g.target() : cur.add(to.mul(perTick / dist)))
+                .withView(g.target().yaw(), g.target().pitch());
+        wireMove(e, step);
+    }
+
+    /** A track-driven move on the wire, through the entity's OWN position bookkeeping ({@code lastSyncedPosition}
+     *  included). Never move a live-ticking entity silently: its own movementTick then re-broadcasts the
+     *  accumulated stale delta every tick - the double-send that made ghosts overshoot jumps, sink into the
+     *  ground, and rubber-band back on each sync. A far target (a seek) snaps; a no-op until the async spawn
+     *  lands - moving a pre-spawn entity gets snapped back by setInstance. */
+    private static void wireMove(Entity e, Pos step) {
+        if (e.getInstance() == null) return;
+        if (step.distanceSquared(e.getPosition()) > 16) {
+            e.teleport(step);
+            return;
+        }
+        e.refreshPosition(step, false, true);
     }
 
     static final class BlockApplier implements Applier<Channels.BlockOp> {
@@ -566,10 +714,29 @@ final class Appliers {
             if (pb.entity(op.op().seq()) != null) return;
             for (Recorded<Channels.Spawn> spawn : pb.ops(Channels.SPAWNS)) { // it exists again: re-run its spawn
                 if (spawn.op().seq() == op.op().seq()) {
-                    SpawnApplier.spawnNow(pb, spawn.op(), true); // mid-timeline: the ghost is long alive
+                    // at its REST point, not its recorded launch: the moves that would carry a launch-spawned
+                    // twin to its rest sit EARLIER on the timeline - it would ride at the thrower until the
+                    // reverse cursor reached them (mid-timeline: the ghost is long alive)
+                    SpawnApplier.spawnNow(pb, spawn.op(), true, restPoint(pb, op.op().seq(), op.tick()));
                     return;
                 }
             }
+        }
+
+        /** The last track point at or before {@code tick}, or null (it never moved). */
+        private static @Nullable Pos restPoint(Playback pb, int seq, long tick) {
+            List<Recorded<Channels.EntityMove>> moves = pb.ops(Channels.ENTITY_MOVES);
+            int lo = 0, hi = moves.size();
+            while (lo < hi) {
+                int mid = (lo + hi) >>> 1;
+                if (moves.get(mid).tick() <= tick) lo = mid + 1;
+                else hi = mid;
+            }
+            for (int i = lo - 1; i >= 0; i--) {
+                Channels.EntityMove m = moves.get(i).op();
+                if (m.seq() == seq) return new Pos(m.x(), m.y(), m.z(), m.yaw(), m.pitch());
+            }
+            return null;
         }
     }
 

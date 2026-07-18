@@ -18,6 +18,7 @@ import net.minestom.server.network.packet.server.play.BlockBreakAnimationPacket;
 import net.minestom.server.network.packet.server.play.EntityAnimationPacket;
 import net.minestom.server.network.packet.server.play.EntityEquipmentPacket;
 import net.minestom.server.network.packet.server.play.EntityPositionAndRotationPacket;
+import net.minestom.server.network.packet.server.play.EntityPositionPacket;
 import net.minestom.server.network.packet.server.play.EntityStatusPacket;
 import net.minestom.server.network.packet.server.play.EntityTeleportPacket;
 import net.minestom.server.network.packet.server.play.EntityVelocityPacket;
@@ -202,13 +203,18 @@ class ReplayWireTest extends HeadlessServerTest {
             await("the timeline walks back across the arc", () -> pb.tick() <= 3);
             long teleports = viewer.sent(EntityTeleportPacket.class).stream()
                     .filter(p -> p.entityId() == twin).count();
-            long relMoves = viewer.sent(EntityPositionAndRotationPacket.class).stream()
+            // reverse rides the RELATIVE wire for everyone: clients won't integrate a reverse (a stuck
+            // arrow's IN_GROUND freezes its sim, hurting projectiles re-accelerate along their own motion)
+            long relMoves = viewer.sent(EntityPositionPacket.class).stream()
+                    .filter(p -> p.entityId() == twin).count()
+                    + viewer.sent(EntityPositionAndRotationPacket.class).stream()
                     .filter(p -> p.entityId() == twin).count();
-            long velocities = viewer.sent(EntityVelocityPacket.class).stream()
-                    .filter(p -> p.entityId() == twin).count();
-            assertTrue(relMoves >= 2, "reverse rides the tracker's relative moves (saw " + relMoves + ")");
+            boolean kicked = viewer.sent(EntityVelocityPacket.class).stream()
+                    .filter(p -> p.entityId() == twin)
+                    .anyMatch(p -> p.velocity().length() > 1.0e-3);
+            assertTrue(relMoves >= 3, "reverse rides the relative-move wire (saw " + relMoves + ")");
+            assertFalse(kicked, "no velocity redirects in reverse");
             assertTrue(teleports <= 1, "no teleport packet per op (saw " + teleports + ")");
-            assertTrue(velocities <= 1, "one parking velocity at most (saw " + velocities + ")");
         } finally {
             pb.halt();
             viewer.player.remove();
