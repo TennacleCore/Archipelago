@@ -49,7 +49,7 @@ public final class TestServer {
     private static volatile Recording recording;
     private static volatile Playback playback;
 
-    public static void main(String[] args) {
+    static void main(String[] args) {
         MinecraftServer server = MinecraftServer.init();
         CoreChannels.register();
 
