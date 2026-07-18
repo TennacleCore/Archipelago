@@ -98,6 +98,7 @@ public final class Shard implements WorldAccess {
     /** Removal handle of the one underlying registration driving {@link #tickHooks} on the current clock. */
     private @Nullable Runnable tickDriver;
     private volatile @Nullable ShardLighting light;
+    private volatile ShardTabList.TabScope tabScope = ShardTabList.TabScope.WORLD;
     /** ShardManager.destroy guard: the cascade and the quarantine sweep may both reach a shard. */
     volatile boolean destroyed;
 
@@ -200,6 +201,16 @@ public final class Shard implements WorldAccess {
 
     @Nullable ShardLighting light() {
         return light;
+    }
+
+    /** What this shard's members list in tab, once {@link ShardTabList#install()} ran; default {@link ShardTabList.TabScope#WORLD}. */
+    public void tabScope(ShardTabList.@NotNull TabScope scope) {
+        this.tabScope = scope;
+        ShardTabList.refreshShard(this);
+    }
+
+    public ShardTabList.@NotNull TabScope tabScope() {
+        return tabScope;
     }
 
     // a write changed this level's view and every unmasked descendant's; each level's own light refreshes.

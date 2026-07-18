@@ -13,6 +13,7 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.HashSet;
+import java.util.function.Consumer;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -148,8 +149,14 @@ public final class ShardView {
         ALL_SEEING.remove(player);
     }
 
+    /** A feature's per-player hook on any view/binding change (the tab-list scoper re-syncs here). Fires
+     *  BEFORE the viewable rules: a modern client DROPS a player spawn whose info entry hasn't arrived yet,
+     *  so tab adds must precede the spawns the rule update sends. */
+    static volatile Consumer<Player> viewChangeHook = p -> {};
+
     /** After the player's binding or explicit view changed; {@code old} = the effective view before. */
     static void applyChange(Player player, ShardView old) {
+        viewChangeHook.accept(player);
         ShardView now = of(player);
         if (old.blocks != now.blocks) {
             sendBlockSwap(player, old.blocks, now.blocks);
