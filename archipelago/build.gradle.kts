@@ -43,7 +43,6 @@ mavenPublishing {
 
 repositories {
     mavenCentral()
-    mavenLocal() // minestom-mechanics for the example server + bridge (publish it there first)
     maven("https://jitpack.io")
 }
 
@@ -57,8 +56,6 @@ dependencies {
     compileOnly("dev.hollowcube:polar:1.16.0")
 
     testImplementation("net.minestom:minestom:$minestomVersion")
-    // the integration DEMO only - the published archipelago artifact never depends on mechanics
-    testImplementation("io.github.term4:minestom-mechanics:0.2.0")
     testImplementation("dev.hollowcube:polar:1.16.0")
     testImplementation("com.github.luben:zstd-jni:1.5.7-7") // storage harnesses compress candidate payloads
     testImplementation("org.tinylog:tinylog-api:2.8.0-M1")
@@ -82,7 +79,7 @@ tasks.test {
 
 tasks.register<JavaExec>("runTestServer") {
     group = "application"
-    description = "Runs the Archipelago + MinestomMechanics playground server (offline mode, port 25565)"
+    description = "Runs the Archipelago example server (offline mode, port 25565); the combined mechanics playground lives in the Tennacle repo"
     classpath = sourceSets.test.get().runtimeClasspath
     mainClass = "test.TestServer"
     jvmArgs("--enable-native-access=ALL-UNNAMED") // polar's zstd-jni
