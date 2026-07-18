@@ -274,7 +274,7 @@ public final class PolarShardCodec {
         BinaryTag entities = user.get(TUNNELED_ENTITIES);
         if (entities != null) {
             root.put("entities", entities);
-            user = without(user, TUNNELED_ENTITIES);
+            user = Nbt.without(user, TUNNELED_ENTITIES);
         }
         if (c.before() != null) user = with(user, TUNNELED_BEFORE, beforeTunnel(c.before()));
         if (c.tree() != null) user = with(user, TUNNELED_TREE, c.tree());
@@ -304,12 +304,12 @@ public final class PolarShardCodec {
         Map<Point, Block> before = null;
         if (user.get(TUNNELED_BEFORE) instanceof CompoundBinaryTag cols) {
             before = beforeFromTunnel(cols);
-            user = without(user, TUNNELED_BEFORE);
+            user = Nbt.without(user, TUNNELED_BEFORE);
         }
         ListBinaryTag tree = null;
         if (user.get(TUNNELED_TREE) instanceof ListBinaryTag tunneled) {
             tree = tunneled;
-            user = without(user, TUNNELED_TREE);
+            user = Nbt.without(user, TUNNELED_TREE);
         }
         return new ShardFile.Content(minY, maxY, diff, before, time, weather, user, tree).encode();
     }
@@ -426,8 +426,8 @@ public final class PolarShardCodec {
         CompoundBinaryTag parsed = container(userData);
         if (!parsed.keySet().isEmpty()) {
             // empty sections are framing, not data - the round trip legitimately drops them
-            if (parsed.get("entities") instanceof ListBinaryTag l && l.size() == 0) parsed = without(parsed, "entities");
-            if (parsed.get("user") instanceof CompoundBinaryTag u && u.keySet().isEmpty()) parsed = without(parsed, "user");
+            if (parsed.get("entities") instanceof ListBinaryTag l && l.size() == 0) parsed = Nbt.without(parsed, "entities");
+            if (parsed.get("user") instanceof CompoundBinaryTag u && u.keySet().isEmpty()) parsed = Nbt.without(parsed, "user");
             userData = bytes(parsed); // bytes() canonicalizes; unparseable foreign data stays raw = honestly lossy
         } else if (userData.length == 0) {
             // no user data at all gains the empty container on the way back - framing, not a loss
@@ -466,14 +466,6 @@ public final class PolarShardCodec {
 
     private static CompoundBinaryTag with(CompoundBinaryTag tag, String key, BinaryTag value) {
         return CompoundBinaryTag.builder().put(tag).put(key, value).build();
-    }
-
-    private static CompoundBinaryTag without(CompoundBinaryTag tag, String key) {
-        CompoundBinaryTag.Builder out = CompoundBinaryTag.builder();
-        for (var e : tag) {
-            if (!e.getKey().equals(key)) out.put(e.getKey(), e.getValue());
-        }
-        return out.build();
     }
 
     private static boolean isUntouched(String paletteEntry) {

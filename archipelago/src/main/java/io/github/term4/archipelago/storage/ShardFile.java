@@ -438,7 +438,7 @@ public final class ShardFile {
                 placedAt[i] = resolved.size();
                 parents[placedAt[i]] = placedAt[parent];
                 resolved.add(new Content(c.minY(), c.maxY(), c.diff(), c.before(), c.time(), c.weather(),
-                        without(c.user(), PARENT.id()), null));
+                        Nbt.without(c.user(), PARENT.id()), null));
             }
             if (resolved.size() == before) throw new IllegalArgumentException("parent hints form a cycle");
         }
@@ -529,14 +529,6 @@ public final class ShardFile {
 
     private static @Nullable String string(CompoundBinaryTag tag, String key) {
         return tag.get(key) instanceof StringBinaryTag s ? s.value() : null;
-    }
-
-    private static CompoundBinaryTag without(CompoundBinaryTag tag, String key) {
-        CompoundBinaryTag.Builder out = CompoundBinaryTag.builder();
-        for (var e : tag) {
-            if (!e.getKey().equals(key)) out.put(e.getKey(), e.getValue());
-        }
-        return out.build();
     }
 
     private static byte[] write(CompoundBinaryTag root) {

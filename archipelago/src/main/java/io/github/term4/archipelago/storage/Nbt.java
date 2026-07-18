@@ -69,6 +69,15 @@ public final class Nbt {
         return out.build();
     }
 
+    /** {@code tag} minus {@code key} (compounds are immutable). */
+    public static @NotNull CompoundBinaryTag without(@NotNull CompoundBinaryTag tag, @NotNull String key) {
+        CompoundBinaryTag.Builder out = CompoundBinaryTag.builder();
+        for (var e : tag) {
+            if (!e.getKey().equals(key)) out.put(e.getKey(), e.getValue());
+        }
+        return out.build();
+    }
+
     private static BinaryTag canonical(BinaryTag tag) {
         if (tag instanceof CompoundBinaryTag compound) return canonical(compound);
         if (tag instanceof ListBinaryTag list && list.size() > 0

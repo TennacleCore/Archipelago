@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 import java.util.concurrent.locks.LockSupport;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -153,6 +154,185 @@ class ShardLightTest extends HeadlessServerTest {
             viewer.player.remove();
             shard.relight(false);
         }
+    }
+
+    /** Removing the area's LAST diff drops the chunk out of candidacy - the stale bright light must restore, not linger. */
+    @Test
+    void breakingTheOnlyLightSourceRestoresBase() {
+        int chunkX = 3400 >> 4, chunkZ = 3400 >> 4;
+        loadArea(chunkX, chunkZ);
+        Shard shard = new Shard(instance);
+        shard.relight(true);
+        FakePlayer viewer = FakePlayer.connect(instance, new Pos(3400.5, 70, 3400.5), "DecayViewer");
+        try {
+            shard.join(viewer.player);
+            Vec glowstone = new Vec(3400, 30, 3400);
+            shard.setBlock(glowstone, Block.GLOWSTONE);
+            awaitLight(viewer, chunkX, chunkZ);
+            viewer.sent.clear();
+            shard.setBlock(glowstone, instance.getBlock(glowstone)); // back to the base view: the entry drops
+            awaitBaseRestore(viewer);
+        } finally {
+            viewer.player.remove();
+            shard.relight(false);
+        }
+    }
+
+    /** {@code relight(false)} mid-game: base light restores, but the overlay's BLOCKS must survive the full resend. */
+    @Test
+    void relightOffRestoresBaseAndKeepsOverlayBlocks() {
+        int chunkX = 3500 >> 4, chunkZ = 3500 >> 4;
+        loadArea(chunkX, chunkZ);
+        Shard shard = new Shard(instance);
+        shard.relight(true);
+        Vec overlay = new Vec(3500, 70, 3500);
+        FakePlayer viewer = FakePlayer.connect(instance, new Pos(3500.5, 72, 3500.5), "OffViewer");
+        try {
+            shard.join(viewer.player);
+            shard.setBlock(overlay, Block.EMERALD_BLOCK);
+            shard.setBlock(new Vec(3500, 30, 3500), Block.GLOWSTONE);
+            awaitLight(viewer, chunkX, chunkZ);
+            viewer.sent.clear();
+            shard.relight(false);
+            // replay in packet order: the base full resend must be FOLLOWED by the overlay's block
+            Block seen = instance.getBlock(overlay);
+            boolean restored = false;
+            for (var packet : viewer.sent) {
+                var p = net.minestom.server.network.packet.server.SendablePacket
+                        .extractServerPacket(net.minestom.server.network.ConnectionState.PLAY, packet);
+                if (p instanceof ChunkDataPacket c && c.chunkX() == chunkX && c.chunkZ() == chunkZ) {
+                    seen = instance.getBlock(overlay);
+                    restored = true;
+                } else if (p instanceof net.minestom.server.network.packet.server.play.BlockChangePacket b
+                        && b.blockPosition().sameBlock(overlay)) {
+                    seen = Block.fromStateId(b.blockStateId());
+                }
+            }
+            assertTrue(restored, "disabling relight restores the base chunk for lit chunks");
+            assertTrue(seen.compare(Block.EMERALD_BLOCK), "the overlay block survives the restore");
+        } finally {
+            viewer.player.remove();
+        }
+    }
+
+    /** Tree light: a relit CHILD layer computes over its whole chain - an ancestor's diff lights the child's view. */
+    @Test
+    void childLayerLightsTheChainIncludingAncestorDiffs() {
+        int chunkX = 3600 >> 4, chunkZ = 3600 >> 4;
+        loadArea(chunkX, chunkZ);
+        Shard parent = new Shard(instance);
+        Shard child = new Shard(parent);
+        child.relight(true);
+        FakePlayer viewer = FakePlayer.connect(instance, new Pos(3600.5, 70, 3600.5), "TreeViewer");
+        try {
+            child.join(viewer.player);
+            viewer.sent.clear();
+            // the write lands on the PARENT: the cascade must dirty the child's light, and the child's
+            // chain palette must carry the ancestor's block
+            parent.setBlock(new Vec(3600, 30, 3600), Block.GLOWSTONE);
+            UpdateLightPacket packet = awaitLight(viewer, chunkX, chunkZ);
+            assertTrue(packet.lightData().blockLight().stream().anyMatch(ShardLightTest::lit),
+                    "the child's light carries the parent-layer glowstone");
+        } finally {
+            viewer.player.remove();
+            child.relight(false);
+        }
+    }
+
+    /** The loaded-save flow: diffs land FIRST (ShardFile.load), relight second - light must compute without another write. */
+    @Test
+    void relightAfterExistingDiffsComputesImmediately() {
+        int chunkX = 3700 >> 4, chunkZ = 3700 >> 4;
+        loadArea(chunkX, chunkZ);
+        Shard shard = new Shard(instance);
+        FakePlayer viewer = FakePlayer.connect(instance, new Pos(3700.5, 70, 3700.5), "LoadViewer");
+        try {
+            shard.join(viewer.player);
+            shard.setBlock(new Vec(3700, 30, 3700), Block.GLOWSTONE); // pre-existing diff, relight OFF
+            viewer.sent.clear();
+            shard.relight(true);
+            UpdateLightPacket packet = awaitLight(viewer, chunkX, chunkZ);
+            assertTrue(packet.lightData().blockLight().stream().anyMatch(ShardLightTest::lit),
+                    "enabling relight lights the chain's existing diff");
+        } finally {
+            viewer.player.remove();
+            shard.relight(false);
+        }
+    }
+
+    /** Shard-as-instance: {@code getBlockLight/getSkyLight} read the CHAIN's computed light, base untouched. */
+    @Test
+    void lightQueriesReadTheChainAndFallBackToBase() {
+        int chunkX = 3900 >> 4, chunkZ = 3900 >> 4;
+        loadArea(chunkX, chunkZ);
+        Shard shard = new Shard(instance);
+        shard.relight(true);
+        FakePlayer viewer = FakePlayer.connect(instance, new Pos(3900.5, 70, 3900.5), "QueryViewer");
+        try {
+            shard.join(viewer.player);
+            shard.setBlock(new Vec(3900, 30, 3900), Block.GLOWSTONE);
+            awaitLight(viewer, chunkX, chunkZ); // flush done: the query maps are populated
+            assertTrue(shard.getBlockLight(3900, 30, 3900) > 0, "the chain's glowstone lights the shard query");
+            assertEquals(0, instance.getBlockLight(3900, 30, 3900), "the base map stays dark");
+            assertEquals(instance.getSkyLight(3900, 50, 3900), shard.getSkyLight(3900, 50, 3900),
+                    "above ground the chain's sky exposure matches base");
+        } finally {
+            viewer.player.remove();
+            shard.relight(false);
+        }
+    }
+
+    /** Without a lighting system, queries read base - the diff is NOT reflected (documented on the accessor). */
+    @Test
+    void lightQueriesWithoutRelightReadBase() {
+        int chunkX = 4000 >> 4, chunkZ = 4000 >> 4;
+        loadArea(chunkX, chunkZ);
+        Shard shard = new Shard(instance);
+        shard.setBlock(new Vec(4000, 30, 4000), Block.GLOWSTONE);
+        assertEquals(instance.getBlockLight(4000, 30, 4000), shard.getBlockLight(4000, 30, 4000));
+        assertEquals(instance.getSkyLight(4000, 50, 4000), shard.getSkyLight(4000, 50, 4000));
+    }
+
+    /** The pluggable seam: a user-provided {@link ShardLighting} gets the shard's hooks and closes on swap-out. */
+    @Test
+    void customLightingSystemReceivesHooksAndClosesOnReplace() {
+        int chunkX = 3800 >> 4, chunkZ = 3800 >> 4;
+        loadArea(chunkX, chunkZ);
+        Shard shard = new Shard(instance);
+        RecordingLight custom = new RecordingLight();
+        shard.relight(custom);
+        try {
+            shard.setBlock(new Vec(3800, 30, 3800), Block.GLOWSTONE);
+            assertTrue(custom.changed.contains(
+                            net.minestom.server.coordinate.CoordConversion.chunkIndex(chunkX, chunkZ)),
+                    "writes notify the installed system with the touched chunk");
+            shard.reset();
+            assertTrue(custom.refreshed, "reset drives refreshLit");
+            assertFalse(custom.closed);
+
+            shard.relight(false);
+            assertTrue(custom.closed, "uninstalling closes the outgoing system");
+
+            RecordingLight second = new RecordingLight();
+            shard.relight(second);
+            shard.relight(true); // swapping to the built-in closes the custom one too
+            assertTrue(second.closed);
+        } finally {
+            shard.relight(false);
+        }
+    }
+
+    private static final class RecordingLight implements ShardLighting {
+        final java.util.Set<Long> changed = new java.util.HashSet<>();
+        boolean refreshed, closed;
+        @Override public void changed(java.util.Set<Long> chunks) { changed.addAll(chunks); }
+        @Override public void refreshLit() { refreshed = true; }
+        @Override public void sendTo(net.minestom.server.entity.Player player, int chunkX, int chunkZ) {}
+        @Override public void close() { closed = true; }
+        @Override public net.minestom.server.network.packet.server.SendablePacket packet(int chunkX, int chunkZ) { return null; }
+        @Override public java.util.Set<Long> litChunks() { return java.util.Set.of(); }
+        @Override public void markLit(long chunkIndex) {}
+        @Override public java.util.Set<Long> candidateChunks() { return java.util.Set.of(); }
     }
 
     private static boolean lit(byte[] light) {

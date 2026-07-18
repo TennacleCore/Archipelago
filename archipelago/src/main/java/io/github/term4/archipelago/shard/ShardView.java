@@ -209,7 +209,7 @@ public final class ShardView {
         if (to != null && in == to.instance()) collectChainDiff(to, lca, positions);
         Shard newView = to != null && in == to.instance() ? to : null;
         // light first: its unlit fallback re-sends BASE chunks whole, which would clobber the block sends below
-        Set<Long> resent = ShardLight.onViewSwap(player, from != null && in == from.instance() ? from : null, newView);
+        Set<Long> resent = ShardLighting.onViewSwap(player, from != null && in == from.instance() ? from : null, newView);
         if (newView != null && !resent.isEmpty()) {
             // a full base resend reverts the WHOLE chain's overlay in that chunk - shared-ancestor diffs the
             // LCA cut excluded included - so recover every chain position living in a resent chunk

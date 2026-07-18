@@ -46,7 +46,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * light arrives last wins client-side - one instance chunk carries ONE light state per client on the wire).
  * Modern-client polish: 1.8 clients relight locally from block data.
  */
-final class ShardLight {
+final class ShardLight implements ShardLighting {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(ShardLight.class);
     private static final int DELAY = ServerFlag.SEND_LIGHT_AFTER_BLOCK_PLACEMENT_DELAY;
@@ -78,26 +78,34 @@ final class ShardLight {
     private volatile long flushAt = Long.MAX_VALUE;
     private final Runnable unhook;
 
-    // flush-thread-confined (single-flight): the per-shard light state itself
-    private final Map<Sec, Light> blockLights = new HashMap<>();
-    private final Map<Sec, Light> skyLights = new HashMap<>();
+    // written by the single-flight flush only; concurrent for the query path (same read-during-recompute
+    // transient Instance.getBlockLight accepts)
+    private final Map<Sec, Light> blockLights = new ConcurrentHashMap<>();
+    private final Map<Sec, Light> skyLights = new ConcurrentHashMap<>();
 
     private record Sec(int x, int y, int z) {}
 
     ShardLight(Shard shard) {
         this.shard = shard;
         this.unhook = shard.onTick(this::onTick);
+        // relight may be enabled AFTER the diff exists (a loaded save, a mid-game toggle): the chain's
+        // touched chunks compute without waiting for the next write
+        Set<Long> touched = ShardLighting.chainChunks(shard);
+        if (!touched.isEmpty()) mark(touched, false);
     }
 
-    void close() {
-        closed = true;
+    @Override
+    public void close() {
+        closed = true; // an in-flight flush re-checks before publishing; a racing send loses at worst one packet
         unhook.run();
+        for (long index : Set.copyOf(lit)) restoreBase(index);
         cache.clear();
         dirty.clear();
     }
 
     /** This shard's light for one chunk to one viewer (chunk load / swap-in); a cache miss heals on the next flush. */
-    void sendTo(Player player, int chunkX, int chunkZ) {
+    @Override
+    public void sendTo(Player player, int chunkX, int chunkZ) {
         long index = CoordConversion.chunkIndex(chunkX, chunkZ);
         UpdateLightPacket packet = cache.get(index);
         if (packet != null) {
@@ -109,13 +117,15 @@ final class ShardLight {
     }
 
     /** Blocks changed in {@code chunks} (this shard's view): dirty-mark only - the flush recomputes off-thread. */
-    void changed(Set<Long> chunks) {
+    @Override
+    public void changed(Set<Long> chunks) {
         mark(chunks, false);
     }
 
     /** After a reset (or ancestor churn): every previously lit chunk re-evaluates on the next flush - still-candidate
      *  chunks recompute (the parent-view light), the rest restore the base chunk. */
-    void refreshLit() {
+    @Override
+    public void refreshLit() {
         resetPending = true;
         mark(Set.copyOf(lit), true);
     }
@@ -177,12 +187,25 @@ final class ShardLight {
         DimensionType dim = base.getCachedDimensionType();
         int minSection = dim.minY() >> 4, maxSection = dim.maxY() >> 4;
 
-        if (reset) restoreNonCandidates(base);
+        if (reset) restoreNonCandidates();
 
         Set<Long> columns = new HashSet<>();
         for (long index : expand(batch)) {
             int cx = CoordConversion.chunkIndexGetX(index), cz = CoordConversion.chunkIndexGetZ(index);
-            if (candidate(cx, cz) && base.isChunkLoaded(cx, cz)) columns.add(index);
+            if (!base.isChunkLoaded(cx, cz)) {
+                // a write reached an unloaded chunk (reverse playback, far edits): its cached light is stale
+                // now - drop it so the chunk-load path recomputes instead of serving the old packet
+                cache.remove(index);
+                lit.remove(index);
+                continue;
+            }
+            if (candidate(cx, cz)) {
+                columns.add(index);
+            } else if (lit.contains(index)) {
+                // the write REMOVED the area's last diff: no longer a candidate, so the recompute below would
+                // skip it and the deleted source's light would linger - restore the base chunk instead
+                restoreBase(index);
+            }
         }
         if (columns.isEmpty() || closed) return;
 
@@ -213,15 +236,18 @@ final class ShardLight {
     }
 
     /** Reset path: a previously lit chunk the chain no longer touches reverts to the base chunk wholesale. */
-    private void restoreNonCandidates(Instance base) {
+    private void restoreNonCandidates() {
         for (long index : Set.copyOf(lit)) {
             int cx = CoordConversion.chunkIndexGetX(index), cz = CoordConversion.chunkIndexGetZ(index);
             if (candidate(cx, cz)) continue;
-            lit.remove(index);
-            cache.remove(index);
-            Chunk chunk = base.getChunk(cx, cz);
-            if (chunk != null) shard.sendToBlockViewers(chunk.getFullDataPacket());
+            restoreBase(index);
         }
+    }
+
+    private void restoreBase(long index) {
+        lit.remove(index);
+        cache.remove(index);
+        ShardLighting.restoreBase(shard, index);
     }
 
     /** {@code LightingChunk.flushQueue}, sequential: one INTERNAL pass, then EXTERNAL passes until borders settle. */
@@ -299,12 +325,11 @@ final class ShardLight {
                 if (touched.isEmpty()) return basePalette != null ? basePalette : Palette.blocks();
                 Palette copy;
                 if (basePalette != null) {
-                    Chunk c = chunk;
-                    c.lockReadLock();
+                    chunk.lockReadLock();
                     try {
                         copy = basePalette.clone();
                     } finally {
-                        c.unlockReadLock();
+                        chunk.unlockReadLock();
                     }
                 } else {
                     copy = Palette.blocks();
@@ -339,8 +364,8 @@ final class ShardLight {
         }
 
         Point[] neighbors(Sec s, Map<Sec, Light> lights) {
-            Point[] links = new Point[LightCompute_DIRECTIONS.length];
-            for (Direction direction : LightCompute_DIRECTIONS) {
+            Point[] links = new Point[DIRECTIONS.length];
+            for (Direction direction : DIRECTIONS) {
                 int x = s.x() + direction.normalX(), z = s.z() + direction.normalZ();
                 int y = s.y() + direction.normalY();
                 if (!inRange(y)) continue;
@@ -389,7 +414,8 @@ final class ShardLight {
         }
     }
 
-    private static final Direction[] LightCompute_DIRECTIONS = Direction.values();
+    // indexed by Direction ordinal, like LightCompute.DIRECTIONS
+    private static final Direction[] DIRECTIONS = Direction.values();
 
     // LightingChunk.checkSkyOcclusion (private upstream)
     private static boolean checkSkyOcclusion(Block block) {
@@ -455,42 +481,35 @@ final class ShardLight {
         return new LightData(skyMask, blockMask, emptySkyMask, emptyBlockMask, skyLights, blockLights);
     }
 
-    // ---- view routing (unchanged semantics) ----
+    // ---- view routing ----
 
-    /**
-     * A viewer's block view swapped {@code from -> to}: the new view's light replaces the old's wherever either
-     * side lit, and chunks only the old side lit fall back to the base chunk (full resend restores base light).
-     * Returns the full-resent chunk indices - those packets carry BASE blocks, so the caller must re-send the
-     * destination view's diffs there afterwards.
-     */
-    static Set<Long> onViewSwap(Player player, @Nullable Shard from, @Nullable Shard to) {
-        ShardLight fromLight = from != null ? from.light() : null;
-        ShardLight toLight = to != null ? to.light() : null;
-        if (fromLight == null && toLight == null) return Set.of();
-        Set<Long> chunks = new HashSet<>();
-        if (fromLight != null) chunks.addAll(fromLight.lit);
-        if (toLight != null) chunks.addAll(toLight.candidates());
-        Instance base = (to != null ? to : from).instance();
-        Set<Long> resent = new HashSet<>();
-        for (long index : chunks) {
-            int chunkX = CoordConversion.chunkIndexGetX(index), chunkZ = CoordConversion.chunkIndexGetZ(index);
-            UpdateLightPacket packet = toLight != null ? toLight.packet(chunkX, chunkZ) : null;
-            if (packet != null) {
-                player.sendPacket(packet);
-                toLight.lit.add(index);
-            } else if (fromLight != null && fromLight.lit.contains(index)) {
-                Chunk chunk = base.getChunk(chunkX, chunkZ);
-                if (chunk != null) {
-                    player.sendPacket(chunk.getFullDataPacket());
-                    resent.add(index);
-                }
+    @Override
+    public int blockLight(int x, int y, int z) {
+        return level(blockLights, x, y, z);
+    }
+
+    @Override
+    public int skyLight(int x, int y, int z) {
+        return level(skyLights, x, y, z);
+    }
+
+    /** As of the last flush (the wire's own coalescing window); a candidate miss self-heals like {@link #sendTo}. */
+    private int level(Map<Sec, Light> lights, int x, int y, int z) {
+        Light light = lights.get(new Sec(x >> 4, y >> 4, z >> 4));
+        if (light == null) {
+            int cx = x >> 4, cz = z >> 4;
+            if (candidate(cx, cz) && shard.instance().isChunkLoaded(cx, cz)) {
+                mark(Set.of(CoordConversion.chunkIndex(cx, cz)), true);
             }
+            return -1;
         }
-        return resent;
+        return light.getLevel(CoordConversion.globalToSectionRelative(x),
+                CoordConversion.globalToSectionRelative(y), CoordConversion.globalToSectionRelative(z));
     }
 
     /** The published packet, or {@code null} - a candidate miss self-heals on the next flush. */
-    private @Nullable UpdateLightPacket packet(int chunkX, int chunkZ) {
+    @Override
+    public @Nullable UpdateLightPacket packet(int chunkX, int chunkZ) {
         if (!candidate(chunkX, chunkZ) || !shard.instance().isChunkLoaded(chunkX, chunkZ)) return null;
         long index = CoordConversion.chunkIndex(chunkX, chunkZ);
         UpdateLightPacket packet = cache.get(index);
@@ -498,11 +517,20 @@ final class ShardLight {
         return packet;
     }
 
+    @Override
+    public Set<Long> litChunks() {
+        return lit;
+    }
+
+    @Override
+    public void markLit(long chunkIndex) {
+        lit.add(chunkIndex);
+    }
+
     /** Loaded chunks where this chain's light can differ from base: diff-touched chunks + the light-bleed ring. */
-    private Set<Long> candidates() {
-        Set<Long> touched = new HashSet<>();
-        for (Shard s = shard; s != null; s = s.parent()) touched.addAll(s.overlayChunks());
-        return expand(touched);
+    @Override
+    public Set<Long> candidateChunks() {
+        return expand(ShardLighting.chainChunks(shard));
     }
 
     private static Set<Long> expand(Set<Long> chunks) {

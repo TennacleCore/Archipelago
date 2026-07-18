@@ -315,20 +315,20 @@ final class Appliers {
             }
             if (reversedTwins.remove(seq)) { // forward again: free-run resumes, re-seeded along the track
                 e.setNoGravity(false);
-                if (previous != null && pb.tick() > previous.tick()) {
-                    long dt = pb.tick() - previous.tick();
-                    e.setVelocity(target.sub(previous.pos()).asVec().div(dt).mul(ServerFlag.SERVER_TICKS_PER_SECOND));
-                }
+                seedVelocity(pb, e, previous, target);
                 e.teleport(target);
                 return;
             }
             Vec toTarget = target.sub(e.getPosition()).asVec();
             if (toTarget.lengthSquared() <= RESYNC_SQ) return; // free-run: the twin's physics is the wire
-            if (previous != null && pb.tick() > previous.tick()) { // resume along the recorded path, not the stale sim
-                long dt = pb.tick() - previous.tick();
-                e.setVelocity(target.sub(previous.pos()).asVec().div(dt).mul(ServerFlag.SERVER_TICKS_PER_SECOND));
-            }
+            seedVelocity(pb, e, previous, target); // resume along the recorded path, not the stale sim
             e.teleport(target);
+        }
+
+        private static void seedVelocity(Playback pb, Entity e, @Nullable Pin previous, Pos target) {
+            if (previous == null || pb.tick() <= previous.tick()) return;
+            long dt = pb.tick() - previous.tick();
+            e.setVelocity(target.sub(previous.pos()).asVec().div(dt).mul(ServerFlag.SERVER_TICKS_PER_SECOND));
         }
 
         // between track points a twin STAYS at its last one: a silent track means the real entity rested, but a

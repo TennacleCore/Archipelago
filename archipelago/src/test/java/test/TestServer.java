@@ -10,17 +10,23 @@ import io.github.term4.minestommechanics.mechanics.damage.DamageSystem;
 import io.github.term4.minestommechanics.mechanics.explosion.ExplosionSystem;
 import io.github.term4.minestommechanics.mechanics.knockback.KnockbackSystem;
 import io.github.term4.minestommechanics.mechanics.projectile.ProjectileSystem;
+import io.github.term4.minestommechanics.presets.Preset;
+import io.github.term4.minestommechanics.presets.PrimedTnt;
+import io.github.term4.minestommechanics.presets.hypixel.Hypixel;
 import io.github.term4.minestommechanics.presets.vanilla18.Vanilla18;
 import io.github.term4.minestommechanics.platform.compatibility.Compat18;
 import io.github.term4.minestommechanics.platform.fixes.Fixes18;
 import io.github.term4.minestommechanics.platform.fixes.FixesSystem;
 import io.github.term4.minestommechanics.platform.fixes.client.SelfPlacementFix;
+import net.minestom.server.event.player.PlayerBlockPlaceEvent;
+import net.minestom.server.coordinate.CoordConversion;
 import net.minestom.server.instance.LightingChunk;
 import io.github.term4.minestommechanics.vri.DroppedItemEntity;
 import io.github.term4.minestommechanics.vri.Vri;
 import io.github.term4.minestommechanics.vri.VriConfig;
 import io.github.term4.minestommechanics.world.MechanicsWorld;
 import io.github.term4.archipelago.shard.Shard;
+import io.github.term4.archipelago.shard.ShardLighting;
 import io.github.term4.archipelago.shard.ShardManager;
 import io.github.term4.archipelago.shard.ShardView;
 import io.github.term4.archipelago.Storage;
@@ -71,6 +77,13 @@ import java.util.List;
  */
 public final class TestServer {
 
+    /** The active preset - swap this ONE line to change the whole setup (mechanics profile + the primed-TNT entity, together). */
+    private static final Preset PRESET = Preset.HYPIXEL;
+
+    private static Preset presetFor(Player p) {
+        return PRESET;
+    }
+
     private static ExplosionSystem explosions;
     // demo keeps one recording/playback at a time (the lib supports many); volatile - stop events for a domain
     // theater fire on its clock thread
@@ -90,7 +103,7 @@ public final class TestServer {
         MinestomMechanics mm = MinestomMechanics.getInstance();
         mm.viaProxyDetails = true;
         mm.init();
-        mm.profiles().setGlobal(Vanilla18.profile().toBuilder()
+        mm.profiles().setGlobal(PRESET.profile().toBuilder()
                 .set(MechanicsKeys.COMPAT, Compat18.config())
                 .set(MechanicsKeys.FIXES, Fixes18.config())
                 .build());
@@ -135,7 +148,21 @@ public final class TestServer {
             p.getInventory().addItemStack(ItemStack.of(Material.LADDER, 64));
             p.getInventory().addItemStack(ItemStack.of(Material.IRON_PICKAXE));
             // TODO: Update to use components
-            p.sendMessage("/shard create <name> | child <parent> <new> | join <name> | fork <name> <new> | flatten <top> [bottom] <new> | save <name> | load <saved> <new> | leave | reset <name> | destroy <name> | list | tree | relight <name> <on|off> | spectate <name|off> | sky <name> <day|night|rain|clear>  -  /gm <mode>");
+            p.sendMessage("/shard create <name> | child <parent> <new> | join <name> | fork <name> <new> | flatten <top> [bottom] <new> | save <name> | load <saved> <new> | leave | reset <name> | destroy <name> | list | tree | relight <name> <on|off|disable|custom> | spectate <name|off> | sky <name> <day|night|rain|clear>  -  /gm <mode>");
+        });
+
+        // TNT test item: placing TNT spawns a primed-TNT entity instead of a block, from the active PRESET - so its
+        // wire/bounce/fuse always match the profile above (a mismatch made a Hypixel-profile run behave like MineMen).
+        events.addListener(PlayerBlockPlaceEvent.class, event -> {
+            if (!event.getBlock().compare(Block.TNT)) return;
+            event.setCancelled(true);
+            Player p = event.getPlayer();
+            if (p.getInstance() == null || explosions == null) return;
+            PrimedTnt.spawn(explosions, MechanicsWorld.of(p), event.getBlockPosition(), presetFor(p).tnt);
+            if (p.getGameMode() != GameMode.CREATIVE) { // cancelling the place keeps the item, so consume one like vanilla TNT
+                ItemStack held = p.getItemInHand(event.getHand());
+                p.setItemInHand(event.getHand(), held.withAmount(held.amount() - 1));
+            }
         });
 
         // members build into their shard's overlay, never the map; also installs the world-scoped base
@@ -164,7 +191,7 @@ public final class TestServer {
         Argument<String> skyValue = ArgumentType.Word("value").from("day", "night", "rain", "clear");
 
         shard.setDefaultExecutor((sender, ctx) ->
-                sender.sendMessage("usage: /shard create <name> | child <parent> <new> | join <name> | fork <name> <new> | flatten <top> [bottom] <new> | save <name> | load <saved> <new> | leave | reset <name> | destroy <name> | list | tree | relight <name> <on|off> | spectate <name|off> | sky <name> <day|night|rain|clear> | tps | stall <name> <ms> | spin <name> <ms>"));
+                sender.sendMessage("usage: /shard create <name> | child <parent> <new> | join <name> | fork <name> <new> | flatten <top> [bottom] <new> | save <name> | load <saved> <new> | leave | reset <name> | destroy <name> | list | tree | relight <name> <on|off|disable|custom> | spectate <name|off> | sky <name> <day|night|rain|clear> | tps | stall <name> <ms> | spin <name> <ms>"));
 
         shard.addSyntax((sender, ctx) -> {
             String n = ctx.get(name);
@@ -391,16 +418,38 @@ public final class TestServer {
                 "- " + label(shards, g) + " members=" + g.members().size()
                         + " observers=" + g.observers().size() + " diff=" + g.overlaySize())), list);
 
-        // chain-effective light as per-viewer UpdateLight overlays (modern clients; 1.8 self-relights)
+        // chain-effective light as per-viewer UpdateLight overlays (modern clients; 1.8 self-relights).
+        // 'disable' = NO system (client-local relight is all you see); 'off' = a demo system that FORCES
+        // darkness (the visible proof of server light authority); 'custom' = a stub narrating its hooks
         var relight = ArgumentType.Literal("relight");
-        Argument<String> relightState = ArgumentType.Word("state").from("on", "off");
+        Argument<String> relightState = ArgumentType.Word("state").from("on", "off", "disable", "custom");
         shard.addSyntax((sender, ctx) -> {
             Shard g = shards.byName(ctx.get(name));
             if (g == null) { sender.sendMessage("[shard] no shard named '" + ctx.get(name) + "'"); return; }
-            boolean on = "on".equals(ctx.get(relightState));
-            g.relight(on);
-            sender.sendMessage("[shard] relight " + (on ? "ON" : "off") + " for '" + ctx.get(name)
-                    + "' - place a torch/glowstone or roof something in and watch the light (modern client)");
+            String n = ctx.get(name);
+            switch (ctx.get(relightState)) {
+                case "on" -> {
+                    g.relight(true);
+                    sender.sendMessage("[shard] relight ON for '" + n
+                            + "' - place a torch/glowstone or roof something in and watch the light (modern client)");
+                }
+                case "off" -> {
+                    g.relight(new DarkLight(g));
+                    sender.sendMessage("[shard] relight OFF (forced dark) for '" + n
+                            + "' - place a torch: it glows for ~1s (your client's local light), then the server snuffs it");
+                }
+                case "disable" -> {
+                    g.relight(false);
+                    sender.sendMessage("[shard] relight DISABLED for '" + n
+                            + "' - no server light for shard edits; a torch still glows because your client relights"
+                            + " locally around block changes it sees");
+                }
+                case "custom" -> {
+                    g.relight(new NarratingLight(g, n));
+                    sender.sendMessage("[shard] relight CUSTOM for '" + n
+                            + "' - place blocks and watch the hook narration; /shard relight " + n + " disable removes it");
+                }
+            }
         }, relight, name, relightState);
 
         var tree = ArgumentType.Literal("tree");
@@ -722,5 +771,97 @@ public final class TestServer {
                 + " members=" + shard.members().size()
                 + (d == null ? " server-ticked" : " on " + d.metrics().threadName()));
         for (Shard child : shard.children()) printTree(sender, shards, child, depth + 1);
+    }
+
+    /**
+     * Demo {@link ShardLighting} that FORCES zero light (block and sky) in every chain-touched chunk. The snuff
+     * is delayed so the client's local prediction shows first - torch glows, then the server kills it: the
+     * visible proof that server light overrides client light.
+     */
+    private static final class DarkLight implements ShardLighting {
+        private static final int SNUFF_DELAY = 20;
+        private final Shard shard;
+        private final Runnable unhook;
+        private final java.util.Set<Long> lit = java.util.concurrent.ConcurrentHashMap.newKeySet();
+        private final java.util.Map<Long, Long> due = new java.util.concurrent.ConcurrentHashMap<>();
+        private volatile long clock;
+
+        DarkLight(Shard shard) {
+            this.shard = shard;
+            this.unhook = shard.onTick(t -> tick());
+            changed(ShardLighting.chainChunks(shard)); // already-built areas snuff too
+        }
+
+        private net.minestom.server.network.packet.server.play.UpdateLightPacket dark(int chunkX, int chunkZ) {
+            var dim = shard.instance().getCachedDimensionType();
+            int sections = (dim.maxY() >> 4) - (dim.minY() >> 4);
+            java.util.BitSet empty = new java.util.BitSet();
+            empty.set(0, sections + 2); // every section incl. the below/above padding
+            return new net.minestom.server.network.packet.server.play.UpdateLightPacket(chunkX, chunkZ,
+                    new net.minestom.server.network.packet.server.play.data.LightData(
+                            new java.util.BitSet(), new java.util.BitSet(), empty, empty, List.of(), List.of()));
+        }
+
+        private void tick() {
+            long now = ++clock;
+            for (var it = due.entrySet().iterator(); it.hasNext(); ) {
+                var e = it.next();
+                if (e.getValue() > now) continue;
+                it.remove();
+                long index = e.getKey();
+                if (!candidateChunks().contains(index)) {
+                    if (lit.remove(index)) ShardLighting.restoreBase(shard, index); // last diff broke: back to base
+                    continue;
+                }
+                ShardLighting.broadcast(shard, dark(CoordConversion.chunkIndexGetX(index), CoordConversion.chunkIndexGetZ(index)));
+                lit.add(index);
+            }
+        }
+
+        @Override public void changed(java.util.Set<Long> chunks) {
+            for (long index : chunks) due.put(index, clock + SNUFF_DELAY);
+        }
+        @Override public void refreshLit() { changed(lit); }
+        @Override public void sendTo(Player player, int chunkX, int chunkZ) {
+            long index = CoordConversion.chunkIndex(chunkX, chunkZ);
+            if (!candidateChunks().contains(index)) return;
+            player.sendPacket(dark(chunkX, chunkZ));
+            lit.add(index);
+        }
+        @Override public void close() {
+            unhook.run();
+            due.clear();
+            for (long index : java.util.Set.copyOf(lit)) ShardLighting.restoreBase(shard, index);
+            lit.clear();
+        }
+        @Override public net.minestom.server.network.packet.server.SendablePacket packet(int chunkX, int chunkZ) {
+            return candidateChunks().contains(CoordConversion.chunkIndex(chunkX, chunkZ)) ? dark(chunkX, chunkZ) : null;
+        }
+        @Override public java.util.Set<Long> litChunks() { return lit; }
+        @Override public void markLit(long chunkIndex) { lit.add(chunkIndex); }
+        @Override public java.util.Set<Long> candidateChunks() { return ShardLighting.chainChunks(shard); }
+        @Override public int blockLight(int x, int y, int z) {
+            return candidateChunks().contains(CoordConversion.chunkIndex(x >> 4, z >> 4)) ? 0 : -1;
+        }
+        @Override public int skyLight(int x, int y, int z) {
+            return candidateChunks().contains(CoordConversion.chunkIndex(x >> 4, z >> 4)) ? 0 : -1;
+        }
+    }
+
+    /** Demo custom {@link ShardLighting}: no packets, just chat narration of every hook the shard drives. */
+    private record NarratingLight(Shard shard, String name) implements ShardLighting {
+        private void say(String what) {
+            for (Player p : shard.members()) p.sendMessage("[light:" + name + "] " + what);
+        }
+        @Override public void changed(java.util.Set<Long> chunks) { say("changed x" + chunks.size() + " chunk(s)"); }
+        @Override public void refreshLit() { say("refreshLit (reset/ancestor churn)"); }
+        @Override public void sendTo(Player player, int chunkX, int chunkZ) {
+            player.sendMessage("[light:" + name + "] sendTo " + chunkX + "," + chunkZ);
+        }
+        @Override public void close() { say("closed - base light untouched, nothing to restore"); }
+        @Override public net.minestom.server.network.packet.server.SendablePacket packet(int chunkX, int chunkZ) { return null; }
+        @Override public java.util.Set<Long> litChunks() { return java.util.Set.of(); }
+        @Override public void markLit(long chunkIndex) {}
+        @Override public java.util.Set<Long> candidateChunks() { return java.util.Set.of(); }
     }
 }

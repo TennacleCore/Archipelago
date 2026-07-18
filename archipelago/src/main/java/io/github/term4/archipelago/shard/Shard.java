@@ -97,7 +97,7 @@ public final class Shard implements WorldAccess {
     private final List<LongConsumer> tickHooks = new CopyOnWriteArrayList<>();
     /** Removal handle of the one underlying registration driving {@link #tickHooks} on the current clock. */
     private @Nullable Runnable tickDriver;
-    private volatile @Nullable ShardLight light;
+    private volatile @Nullable ShardLighting light;
     /** ShardManager.destroy guard: the cascade and the quarantine sweep may both reach a shard. */
     volatile boolean destroyed;
 
@@ -184,19 +184,28 @@ public final class Shard implements WorldAccess {
      * clients relight locally from block data - enable on shards whose diffs reshape lighting for modern clients.
      */
     public void relight(boolean enabled) {
-        ShardLight old = this.light;
-        if (old != null) old.close(); // stops its flush tick hook (and with it the driver, if last)
-        this.light = enabled ? new ShardLight(this) : null;
+        relight(enabled ? new ShardLight(this) : null);
     }
 
-    @Nullable ShardLight light() {
+    /**
+     * Installs a custom {@link ShardLighting} system ({@code null} = none, the default: viewers keep the base
+     * instance's light untouched, like an unmanaged instance). The previous system is {@link ShardLighting#close()
+     * closed} first - it restores base light on its lit clients before the replacement takes over.
+     */
+    public void relight(@Nullable ShardLighting lighting) {
+        ShardLighting old = this.light;
+        if (old != null) old.close(); // stops its work (built-in: the flush tick hook, and the driver if last)
+        this.light = lighting;
+    }
+
+    @Nullable ShardLighting light() {
         return light;
     }
 
     // a write changed this level's view and every unmasked descendant's; each level's own light refreshes.
     // no mask pruning: shards without light cost nothing, and light bleeds past exact positions anyway
     private void lightChanged(Set<Long> chunks) {
-        ShardLight l = light;
+        ShardLighting l = light;
         if (l != null) l.changed(chunks);
         for (Shard child : children) child.lightChanged(chunks);
     }
@@ -228,8 +237,7 @@ public final class Shard implements WorldAccess {
     /**
      * Fires when a write changes this shard's view of a position - setBlock/setBlocks/pinBlock/reset; view
      * no-ops and base/parent edits don't fire. Runs on the writing thread. Returns the removal handle.
-     * Replay recordings ride this: player edits, server writes, playback writes and commits all record
-     * through the one seam.
+     * Replay recordings ride this seam.
      */
     public @NotNull Runnable onBlockChange(@NotNull BlockChangeHook hook) {
         blockHooks.add(hook);
@@ -323,7 +331,7 @@ public final class Shard implements WorldAccess {
     }
 
     private void refreshLight() {
-        ShardLight l = light;
+        ShardLighting l = light;
         if (l != null) l.refreshLit();
         for (Shard child : children) child.refreshLight();
     }
@@ -504,6 +512,28 @@ public final class Shard implements WorldAccess {
 
     @Override public @NotNull DimensionType dimension() { return base.getCachedDimensionType(); }
 
+    /** The chain's computed light where the installed {@link ShardLighting} has it, else base. Without a
+     *  lighting system the diff is NOT reflected - a roofed-in area still reads base sky. */
+    @Override
+    public int getBlockLight(int x, int y, int z) {
+        ShardLighting l = light;
+        if (l != null) {
+            int level = l.blockLight(x, y, z);
+            if (level >= 0) return level;
+        }
+        return base.getBlockLight(x, y, z);
+    }
+
+    @Override
+    public int getSkyLight(int x, int y, int z) {
+        ShardLighting l = light;
+        if (l != null) {
+            int level = l.skyLight(x, y, z);
+            if (level >= 0) return level;
+        }
+        return base.getSkyLight(x, y, z);
+    }
+
     @Override
     public PhysicsResult sweep(@NotNull BoundingBox box, @NotNull Pos position, @NotNull Vec velocity,
                                @Nullable PhysicsResult last, boolean singleCollision) {
@@ -536,11 +566,9 @@ public final class Shard implements WorldAccess {
     }
 
     /**
-     * The shard {@code entity} belongs to (member player or shard-spawned entity), or {@code null} when it is not in a
-     * shard (a plain instance). O(1), the inverse of {@link #contains}; for a child layer this is that exact layer
-     * (walk {@link #parent()} for the root). For the clock the entity ticks on, see {@link ExecutionDomain#of(Entity)}
-     * ({@code null} = server-ticked): a member normally ticks on its shard's {@link #domain()}, but the two are
-     * independent (a stasis or re-clock window can differ).
+     * The shard {@code entity} belongs to, or {@code null} (a plain instance). O(1); a child-layer entity reports
+     * that exact layer (walk {@link #parent()} for the root). Independent of the clock it ticks on -
+     * {@link ExecutionDomain#of(Entity)} can differ during stasis/re-clock windows.
      */
     public static @Nullable Shard of(@NotNull Entity entity) {
         return entity.getTag(ENTITY_TAG) instanceof Shard s ? s : null;
@@ -644,13 +672,7 @@ public final class Shard implements WorldAccess {
             if (sky.timeOverride() >= 0) copy.setTime(sky.timeOverride());
             Weather weather = sky.weatherOverride();
             if (weather != null) copy.setWeather(weather);
-            if (entityCloner != null) {
-                for (Entity entity : entities) {
-                    if (entity.isRemoved()) continue;
-                    Entity clone = entityCloner.apply(entity);
-                    if (clone != null) copy.spawn(clone, entity.getPosition());
-                }
-            }
+            forEachClone(entityCloner, copy::spawn);
             return copy;
         });
     }
@@ -732,13 +754,7 @@ public final class Shard implements WorldAccess {
             if (cloner != null) {
                 List<Shard> chain = new ArrayList<>();
                 for (Shard s = this; s != null; s = s.parent) chain.add(s);
-                for (int i = chain.size() - 1; i >= 0; i--) {
-                    for (Entity entity : chain.get(i).entities) {
-                        if (entity.isRemoved()) continue;
-                        Entity clone = cloner.apply(entity);
-                        if (clone != null) flat.spawn(clone, entity.getPosition());
-                    }
-                }
+                for (int i = chain.size() - 1; i >= 0; i--) chain.get(i).forEachClone(cloner, flat::spawn);
             }
             return flat;
         });
@@ -756,18 +772,21 @@ public final class Shard implements WorldAccess {
 
     private record Layer(Map<Point, Block> blocks, long time, @Nullable Weather weather, Map<Entity, Pos> clones) {}
 
+    private void forEachClone(@Nullable Function<Entity, Entity> cloner, BiConsumer<Entity, Pos> out) {
+        if (cloner == null) return;
+        for (Entity entity : entities) {
+            if (entity.isRemoved()) continue;
+            Entity clone = cloner.apply(entity);
+            if (clone != null) out.accept(clone, entity.getPosition());
+        }
+    }
+
     // one side's settled state; call inside this shard's onDomain
     private Layer snapshot(@Nullable Function<Entity, Entity> cloner) {
         Map<Point, Block> blocks = new HashMap<>();
         effectiveDiff(blocks);
         Map<Entity, Pos> clones = new LinkedHashMap<>();
-        if (cloner != null) {
-            for (Entity entity : entities) {
-                if (entity.isRemoved()) continue;
-                Entity clone = cloner.apply(entity);
-                if (clone != null) clones.put(clone, entity.getPosition());
-            }
-        }
+        forEachClone(cloner, clones::put);
         return new Layer(blocks, effectiveTimeOverride(), effectiveWeatherOverride(), clones);
     }
 
@@ -894,7 +913,7 @@ public final class Shard implements WorldAccess {
             collectChunk(chunkX, chunkZ, effective);
             effective.forEach((pos, block) -> player.sendPacket(new BlockChangePacket(pos, block)));
         }
-        ShardLight l = light;
+        ShardLighting l = light;
         if (l != null) l.sendTo(player, chunkX, chunkZ);
     }
 
