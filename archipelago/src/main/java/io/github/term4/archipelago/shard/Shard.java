@@ -1007,4 +1007,14 @@ public final class Shard implements WorldAccess {
     public static void selfPlaceExempt(@NotNull Predicate<Block> rule) {
         BlockRouting.selfPlaceExempt = rule;
     }
+
+    /**
+     * Wraps the base placement listener {@link #blockRouting()} installs (a compat layer arming per-placement
+     * state). Order-independent: registering before or after {@code blockRouting()} both work - the routing
+     * re-applies the decorator whenever it (re)installs the listener.
+     */
+    public static void decoratePlacement(
+            @NotNull java.util.function.UnaryOperator<java.util.function.BiConsumer<ClientPlayerBlockPlacementPacket, Player>> decorator) {
+        BlockRouting.decoratePlacement(decorator);
+    }
 }

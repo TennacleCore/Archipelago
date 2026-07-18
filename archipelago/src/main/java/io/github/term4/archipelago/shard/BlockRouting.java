@@ -45,7 +45,9 @@ import net.minestom.server.world.DimensionType;
 import net.minestom.server.worldevent.WorldEvent;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.function.BiConsumer;
 import java.util.function.Predicate;
+import java.util.function.UnaryOperator;
 
 /** {@link Shard#blockRouting()}: the packet-level place/dig interception. */
 final class BlockRouting {
@@ -53,15 +55,32 @@ final class BlockRouting {
     /** Blocks a placer may put into their OWN body (e.g. a 1.8-mechanics lib exempts ladders/vines/webs). */
     static volatile Predicate<Block> selfPlaceExempt = block -> false;
 
+    /** Wraps the installed base placement listener; re-applied whenever it changes, so registration order never matters. */
+    private static volatile UnaryOperator<BiConsumer<ClientPlayerBlockPlacementPacket, Player>> placementDecorator =
+            UnaryOperator.identity();
+    private static volatile boolean routingInstalled;
+
     private BlockRouting() {}
+
+    static synchronized void decoratePlacement(UnaryOperator<BiConsumer<ClientPlayerBlockPlacementPacket, Player>> decorator) {
+        placementDecorator = decorator;
+        if (routingInstalled) installPlacementListener();
+    }
+
+    private static void installPlacementListener() {
+        BiConsumer<ClientPlayerBlockPlacementPacket, Player> listener = placementDecorator.apply(BasePlacement::listener);
+        MinecraftServer.getPacketListenerManager().setPlayListener(ClientPlayerBlockPlacementPacket.class, listener::accept);
+    }
 
     static EventNode<Event> node() {
         // the plain default can't know about ShardView block-view state; don't clobber a custom policy
         if (WorldPolicy.get() == WorldPolicy.SAME_WORLD) WorldPolicy.set(ShardPolicy.DEFAULT);
         // non-shard players fall through to the stock listener, whose collision scan is world-blind: a
         // co-located shard entity (invisible to a base player) would block their placement
-        MinecraftServer.getPacketListenerManager().setPlayListener(
-                ClientPlayerBlockPlacementPacket.class, BasePlacement::listener);
+        synchronized (BlockRouting.class) {
+            routingInstalled = true;
+            installPlacementListener();
+        }
         EventNode<Event> node = EventNode.all("archipelago:blocks");
         node.addListener(PlayerPacketEvent.class, e -> {
             boolean place = e.getPacket() instanceof ClientPlayerBlockPlacementPacket;
