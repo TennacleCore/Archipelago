@@ -595,10 +595,17 @@ public final class Shard implements WorldAccess {
     @Override public boolean isInVoid(@NotNull Point pos) { return base.isInVoid(pos); }
 
     @Override public @NotNull Collection<@NotNull Entity> entities() {
-        entities.removeIf(Entity::isRemoved); // safety net; the despawn listener is the primary cleanup
-        members.removeIf(m -> !m.isOnline());
-        List<Entity> all = new ArrayList<>(entities);
-        all.addAll(members);
+        // cleanup fused into the copy (this runs per layer per recording tick); the despawn
+        // listener is the primary cleanup
+        List<Entity> all = new ArrayList<>(entities.size() + members.size());
+        for (Entity e : entities) {
+            if (e.isRemoved()) entities.remove(e);
+            else all.add(e);
+        }
+        for (Player m : members) {
+            if (!m.isOnline()) members.remove(m);
+            else all.add(m);
+        }
         return all;
     }
 

@@ -112,6 +112,9 @@ public final class Recording {
 
     private void sample() {
         tick++;
+        List<Shard> layers = new ArrayList<>();
+        collectLayers(shard, layers);
+        sampledLayers = List.copyOf(layers); // one tree walk per tick, not one per sampler
         for (Dispatcher dispatcher : dispatchers) {
             try {
                 dispatcher.sample(this);
@@ -122,6 +125,7 @@ public final class Recording {
                 }
             }
         }
+        sampledLayers = null;
     }
 
     public @NotNull Shard shard() {
@@ -153,8 +157,12 @@ public final class Recording {
         return false;
     }
 
+    private volatile List<Shard> sampledLayers;
+
     /** The recorded layer shards, parents before children (the sweep and samplers iterate this). */
     public @NotNull List<Shard> layers() {
+        List<Shard> cached = sampledLayers;
+        if (cached != null) return cached;
         List<Shard> out = new ArrayList<>();
         collectLayers(shard, out);
         return out;

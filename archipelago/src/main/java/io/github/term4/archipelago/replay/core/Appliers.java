@@ -93,6 +93,19 @@ final class Appliers {
             return lo > 0 ? list.get(lo - 1) : null;
         }
 
+        /** The key's oldest op strictly after {@code tick}, or null. */
+        @Nullable Recorded<T> firstAfter(Playback pb, K k, long tick) {
+            List<Recorded<T>> list = built(pb).get(k);
+            if (list == null) return null;
+            int lo = 0, hi = list.size();
+            while (lo < hi) {
+                int mid = (lo + hi) >>> 1;
+                if (list.get(mid).tick() <= tick) lo = mid + 1;
+                else hi = mid;
+            }
+            return lo < list.size() ? list.get(lo) : null;
+        }
+
         private Map<K, List<Recorded<T>>> built(Playback pb) {
             if (index == null) {
                 index = new HashMap<>();
@@ -213,7 +226,10 @@ final class Appliers {
                 ghost.grounded(m.ground());
                 Pin previous = lastMove.put(m.player(), new Pin(pos, pb.tick()));
                 if (pb.rate() >= 1 || pb.paused()) { // fractional rates glide in tick() instead
-                    ghost.teleport(pos);
+                    // a fold holds absolutely; live full-rate moves ride the same wire seam as every
+                    // other track move (teleport fired a global event + absolute sync per ghost-tick)
+                    if (pb.paused()) ghost.teleport(pos);
+                    else wireMove(ghost, pos);
                     ghost.sendPacketToViewers(new EntityHeadLookPacket(ghost.getEntityId(), m.yaw()));
                 } else {
                     glides.put(m.player(), leg(previous != null ? previous.pos() : ghost.getPosition(),
@@ -256,6 +272,8 @@ final class Appliers {
         private record Pending(Channels.Spawn spawn, long since, long notBefore) {}
 
         private final List<Pending> pending = new ArrayList<>();
+        private final LookBack<Integer, Channels.EntityMove> track =
+                new LookBack<>(Channels.ENTITY_MOVES, Channels.EntityMove::seq);
 
         @Override
         public void apply(@NotNull Playback pb, @NotNull Recorded<Channels.Spawn> op) {
@@ -314,7 +332,7 @@ final class Appliers {
                 if (pb.tick() < p.notBefore() && !pb.reversed()) continue;
                 // a LATE materialization (an owner-wait) rises ON the track, not at its launch - risen at
                 // the launch it would visibly re-fly from the thrower to catch its pin up
-                Pos at = pb.tick() - p.since() > 1 ? trackPointAt(pb, p.spawn().seq(), pb.tick()) : null;
+                Pos at = pb.tick() - p.since() > 1 ? trackPointAt(pb, track, p.spawn().seq(), pb.tick()) : null;
                 if (spawnNow(pb, p.spawn(), pb.tick() - p.since() >= OWNER_WAIT_TICKS, at)) {
                     noteFuse(pb, p.spawn());
                     it.remove();
@@ -473,8 +491,11 @@ final class Appliers {
                     // mid-defer (the spawn hasn't materialized) or untracked: the pin stays - deleting
                     // it here lost every leg that crossed before a deferred spawn landed, and the twin
                     // re-entered a whole window behind (the launch snap-then-rush). A glide for an
-                    // absent body is dropped so settled() can't hold playback open on it
+                    // absent body is dropped so settled() can't hold playback open on it; a pin with
+                    // nothing refreshing it is a DEAD seq - drop past any defer window (reverse
+                    // revivals re-pin through drive)
                     glides.remove(entry.getKey());
+                    if (Math.abs(pb.tick() - entry.getValue().tick()) > 8) it.remove();
                     continue;
                 }
                 if (e.isRemoved()) {
@@ -505,7 +526,7 @@ final class Appliers {
                     // rest pull-back: rebuild on the remainder, spread over ~4 ticks (a dt-1 leg at full
                     // rate is the whole remainder in one tick - the same snap the leg exists to avoid)
                     boolean fresh = pb.tick() - pin.tick() <= 1;
-                    Glide b = fresh ? null : bridge(pb, entry.getKey(), e.getPosition());
+                    Glide b = fresh ? null : bridge(pb, history, entry.getKey(), e.getPosition());
                     if (b != null) {
                         glides.put(entry.getKey(), b);
                         g = b;
@@ -538,7 +559,7 @@ final class Appliers {
                         // a SHORT track hole (a recorded server hiccup - launches stall 1-2 ticks on the
                         // cross-clock pickup; slow motion magnifies the gap) bridges to the next known
                         // point instead of a stop-dead + hold
-                        Glide next = bridge(pb, entry.getKey(), e.getPosition());
+                        Glide next = bridge(pb, history, entry.getKey(), e.getPosition());
                         if (next != null) {
                             glides.put(entry.getKey(), next);
                             if (Visuals.clientAccelerates(e)) aimFireball(e, next);
@@ -648,9 +669,10 @@ final class Appliers {
         }
     }
 
-    /** Pause pin: every generation holds (a viewer's hit prediction must heal mid-pause too). */
+    /** Pause pin: legacy + restless only. A modern sim hit-kicked mid-pause stays displaced until
+     *  play resumes and the aims re-sync it - not worth per-tick spam to every viewer. */
     private static void pinStill(Entity e) {
-        pinAt(e, e.getPosition(), true);
+        pinAt(e, e.getPosition(), Visuals.clientRestless(e));
     }
 
     /** Per-tick absolute + velocity pin for a paused, resting, or removal-held twin. The velocity is a
@@ -1069,6 +1091,8 @@ final class Appliers {
         private record Held(Recorded<Channels.Remove> op, int[] settle) {}
 
         private final List<Held> held = new ArrayList<>();
+        private final LookBack<Integer, Channels.EntityMove> track =
+                new LookBack<>(Channels.ENTITY_MOVES, Channels.EntityMove::seq);
         /** Theater ticks a landed twin rests before the destroy: the CLIENT integrates the same legs a
          *  stream latency later - released on server arrival, its rendered ball is still legs short and
          *  vanishes mid-air. A brief rest ON the wall reads as the hit. */
@@ -1092,7 +1116,7 @@ final class Appliers {
                 long behind = pb.tick() - op.tick();
                 if (behind < 0 || behind > 3) return true; // the cursor jumped: the fold owns the scene
                 Entity e = pb.entity(op.op().seq());
-                Pos impact = trackPointAt(pb, op.op().seq(), op.tick());
+                Pos impact = trackPointAt(pb, track, op.op().seq(), op.tick());
                 boolean present = e != null && impact != null && e.getInstance() != null;
                 boolean landed = !present || impact.distanceSquared(e.getPosition()) <= 0.09;
                 // a held twin rests without re-aims, and a legacy viewer's own gravity sinks it mid-air
@@ -1124,7 +1148,7 @@ final class Appliers {
             // leg carrier only aimed velocity at it - the tick hook never gets to land it (absolute: a
             // stale-anchor rel move mis-lands it). Always sent: an on-point TWIN still has a leg-integrating
             // client a tick behind it
-            Pos impact = trackPointAt(pb, op.op().seq(), op.tick());
+            Pos impact = trackPointAt(pb, track, op.op().seq(), op.tick());
             if (impact != null && gone.getInstance() != null) gone.teleport(impact);
             Ghost collector = pb.ghost(op.op().collector());
             if (collector != null) { // the recorded pickup swoosh toward the ghost
@@ -1143,7 +1167,7 @@ final class Appliers {
                     // at its REST point, not its recorded launch: the moves that would carry a launch-spawned
                     // twin to its rest sit EARLIER on the timeline - it would ride at the thrower until the
                     // reverse cursor reached them (mid-timeline: the ghost is long alive)
-                    SpawnApplier.spawnNow(pb, spawn.op(), true, trackPointAt(pb, op.op().seq(), op.tick()));
+                    SpawnApplier.spawnNow(pb, spawn.op(), true, trackPointAt(pb, track, op.op().seq(), op.tick()));
                     return;
                 }
             }
@@ -1155,30 +1179,12 @@ final class Appliers {
     private static final long BRIDGE_TICKS = 4;
 
     /** A leg from {@code from} to {@code seq}'s next move op in the travel direction, or null (none near). */
-    static @Nullable Glide bridge(Playback pb, int seq, Pos from) {
-        List<Recorded<Channels.EntityMove>> moves = pb.ops(Channels.ENTITY_MOVES);
-        int lo = 0, hi = moves.size();
-        while (lo < hi) {
-            int mid = (lo + hi) >>> 1;
-            if (pb.reversed() ? moves.get(mid).tick() < pb.tick() : moves.get(mid).tick() <= pb.tick()) lo = mid + 1;
-            else hi = mid;
-        }
-        if (pb.reversed()) {
-            for (int i = lo - 1; i >= 0; i--) {
-                Recorded<Channels.EntityMove> r = moves.get(i);
-                if (pb.tick() - r.tick() > BRIDGE_TICKS) return null;
-                if (r.op().seq() != seq) continue;
-                return bridgeLeg(pb, from, r);
-            }
-        } else {
-            for (int i = lo; i < moves.size(); i++) {
-                Recorded<Channels.EntityMove> r = moves.get(i);
-                if (r.tick() - pb.tick() > BRIDGE_TICKS) return null;
-                if (r.op().seq() != seq) continue;
-                return bridgeLeg(pb, from, r);
-            }
-        }
-        return null;
+    static @Nullable Glide bridge(Playback pb, LookBack<Integer, Channels.EntityMove> track, int seq, Pos from) {
+        Recorded<Channels.EntityMove> r = pb.reversed()
+                ? track.latest(pb, seq, pb.tick() - 1)
+                : track.firstAfter(pb, seq, pb.tick());
+        if (r == null || Math.abs(r.tick() - pb.tick()) > BRIDGE_TICKS) return null;
+        return bridgeLeg(pb, from, r);
     }
 
     /** Paced on REAL ticks ({@code subtick} counts the window already consumed) to arrive one window
@@ -1193,24 +1199,19 @@ final class Appliers {
         return new Glide(target, target.sub(from).asVec().div(real), pb.tick(), dt + 1, new int[]{real});
     }
 
-    /** The last track point at or before {@code tick}, or null (it never moved). */
-    static @Nullable Pos trackPointAt(Playback pb, int seq, long tick) {
-        List<Recorded<Channels.EntityMove>> moves = pb.ops(Channels.ENTITY_MOVES);
-        int lo = 0, hi = moves.size();
-        while (lo < hi) {
-            int mid = (lo + hi) >>> 1;
-            if (moves.get(mid).tick() <= tick) lo = mid + 1;
-            else hi = mid;
-        }
-        for (int i = lo - 1; i >= 0; i--) {
-            Channels.EntityMove m = moves.get(i).op();
-            if (m.seq() == seq) return new Pos(m.x(), m.y(), m.z(), m.yaw(), m.pitch());
-        }
-        return null;
+    /** The last track point at or before {@code tick} via the caller's per-seq index, or null (it
+     *  never moved) - a flat scan of the shared ENTITY_MOVES list was O(total ops) for a seq that
+     *  rested long before the query. */
+    static @Nullable Pos trackPointAt(Playback pb, LookBack<Integer, Channels.EntityMove> track,
+                                      int seq, long tick) {
+        Recorded<Channels.EntityMove> r = track.latest(pb, seq, tick);
+        if (r == null) return null;
+        Channels.EntityMove m = r.op();
+        return new Pos(m.x(), m.y(), m.z(), m.yaw(), m.pitch());
     }
 
     static final class DigApplier implements Applier<Channels.Dig> {
-        private record Crack(int layer, int ghostId, int x, int y, int z, long start, long end) {}
+        private record Crack(int layer, int ghostId, int x, int y, int z, long start, long end, byte[] sent) {}
         private record Window(Channels.Dig dig, long from, long to) {}
 
         private final List<Crack> cracks = new ArrayList<>();
@@ -1221,7 +1222,7 @@ final class Appliers {
             if (!op.op().start()) return; // cancels only bound the lookahead below
             Ghost digger = pb.ghost(op.op().digger());
             if (digger != null) cracks.add(new Crack(op.op().layer(), digger.getEntityId(),
-                    op.op().x(), op.op().y(), op.op().z(), op.tick(), end(pb, op)));
+                    op.op().x(), op.op().y(), op.op().z(), op.tick(), end(pb, op), new byte[]{-2}));
         }
 
         @Override
@@ -1251,7 +1252,10 @@ final class Appliers {
                 long duration = Math.max(1, c.end() - c.start());
                 int stage = (int) Math.min(9, (pb.tick() - c.start()) * 10 / duration);
                 byte wire = pb.tick() >= c.end() ? (byte) -1 : (byte) stage; // -1 clears (the break/cancel arrived)
-                in.broadcast(new BlockBreakAnimationPacket(c.ghostId(), new Vec(c.x(), c.y(), c.z()), wire));
+                if (c.sent()[0] != wire) { // stages hold for many ticks (paused: forever)
+                    c.sent()[0] = wire;
+                    in.broadcast(new BlockBreakAnimationPacket(c.ghostId(), new Vec(c.x(), c.y(), c.z()), wire));
+                }
                 if (pb.tick() >= c.end()) it.remove();
             }
         }
@@ -1278,7 +1282,7 @@ final class Appliers {
                         && c.x() == w.dig().x() && c.y() == w.dig().y() && c.z() == w.dig().z());
                 if (!present) {
                     cracks.add(new Crack(w.dig().layer(), digger.getEntityId(),
-                            w.dig().x(), w.dig().y(), w.dig().z(), w.from(), w.to()));
+                            w.dig().x(), w.dig().y(), w.dig().z(), w.from(), w.to(), new byte[]{-2}));
                 }
             }
         }

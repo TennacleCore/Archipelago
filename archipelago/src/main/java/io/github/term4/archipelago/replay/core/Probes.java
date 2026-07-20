@@ -76,6 +76,7 @@ final class Probes {
     static final class ActorSampler implements Dispatcher {
         private static final EquipmentSlot[] SLOTS = EquipmentSlot.values();
 
+        private final Map<String, Channels.Move> lastMove = new HashMap<>();
         private final Map<String, ItemStack[]> lastEquip = new HashMap<>();
         private final Map<String, Boolean> lastSneak = new HashMap<>();
         private final Map<String, Boolean> lastUse = new HashMap<>();
@@ -98,11 +99,13 @@ final class Probes {
         private void sample(Recording rec, Player m, int layerId) {
             String name = m.getUsername();
             Pos pos = m.getPosition();
-            rec.emit(Channels.MOVES, new Channels.Move(name, pos.x(), pos.y(), pos.z(),
-                    pos.yaw(), pos.pitch(), m.isOnGround()));
+            Channels.Move move = new Channels.Move(name, pos.x(), pos.y(), pos.z(),
+                    pos.yaw(), pos.pitch(), m.isOnGround());
+            if (!move.equals(lastMove.put(name, move))) rec.emit(Channels.MOVES, move);
             if (rec.consumeRefresh(name)) {
                 // a respawned actor plays back as a FRESH ghost: drop the diff caches so its full
                 // equipment/pose state re-emits this tick
+                lastMove.remove(name); // the fresh ghost rises on its next move op - force one
                 lastEquip.remove(name);
                 lastSneak.remove(name);
                 lastUse.remove(name);
@@ -184,6 +187,9 @@ final class Probes {
                 lastLayer.remove(e);
                 rec.remove(e, e.getPosition());
             }
+            // event-reported removals leave tracked without passing the gone loop - their refs leak here
+            lastPos.keySet().removeIf(e -> !rec.tracks(e));
+            lastLayer.keySet().removeIf(e -> !rec.tracks(e));
         }
     }
 
@@ -263,9 +269,9 @@ final class Probes {
                 packet = new SoundEffectPacket(bound.soundEvent(), bound.source(), source.getPosition(),
                         bound.volume(), bound.pitch(), bound.seed());
             }
+            if (!Channels.isFx(packet) || !seen.add(packet)) return; // dedup before the encode
             Channels.Fx op = Channels.fx(packet);
-            if (op == null || !seen.add(packet)) return;
-            rec.emit(Channels.FX, op);
+            if (op != null) rec.emit(Channels.FX, op);
         }
 
         @Override

@@ -138,6 +138,12 @@ public final class Channels {
     public static final Recordable<Fx> FX = Recordable.of("replay:fx", 1, 40, StructCodec.struct(
             "k", Codec.INT, Fx::kind, "d", Codec.BYTE_ARRAY, Fx::data, Fx::new), Appliers.FxApplier::new);
 
+    /** Whether {@link #fx} would record this packet - the cheap gate before any serialization. */
+    public static boolean isFx(@NotNull ServerPacket packet) {
+        return packet instanceof ParticlePacket || packet instanceof SoundEffectPacket
+                || packet instanceof WorldEventPacket || packet instanceof ExplosionPacket;
+    }
+
     /** Encodes a positional-FX packet into its channel op, or null (not a recordable FX kind). */
     public static @Nullable Fx fx(@NotNull ServerPacket packet) {
         int kind = switch (packet) {
