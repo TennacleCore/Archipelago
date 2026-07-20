@@ -106,6 +106,11 @@ final class Appliers {
             return lo < list.size() ? list.get(lo) : null;
         }
 
+        /** The key's full op list (chronological), empty when it has none. */
+        List<Recorded<T>> all(Playback pb, K k) {
+            return built(pb).getOrDefault(k, List.of());
+        }
+
         private Map<K, List<Recorded<T>>> built(Playback pb) {
             if (index == null) {
                 index = new HashMap<>();
@@ -456,6 +461,10 @@ final class Appliers {
         private final Map<Integer, Glide> glides = new HashMap<>();
         private final LookBack<Integer, Channels.EntityMove> history =
                 new LookBack<>(Channels.ENTITY_MOVES, Channels.EntityMove::seq);
+        private final LookBack<Integer, Channels.Spawn> spawns =
+                new LookBack<>(Channels.SPAWNS, Channels.Spawn::seq);
+        private double ranAt = 1;
+        private boolean ranReversed;
 
         @Override
         public void apply(@NotNull Playback pb, @NotNull Recorded<Channels.EntityMove> op) {
@@ -498,7 +507,16 @@ final class Appliers {
             Pin previous = lastTrack.put(seq, new Pin(target, pb.tick()));
             if (e == null || e.getInstance() == null) return; // the next track op (or the pin) places it
             if (pb.paused()) { // a fold placed it - hold there, absolutely
-                e.teleport(target);
+                Pos at = target;
+                if (e.getEntityMeta() instanceof net.minestom.server.entity.metadata.projectile.AbstractArrowMeta) {
+                    // the live arrival's view/freeze never ran here: restore both from the track (the
+                    // recorded server view renders arrows flipped, and an unfrozen zero-motion arrow
+                    // aims sideways)
+                    at = terminalView(pb, seq, target);
+                    Recorded<Channels.EntityMove> ahead = history.firstAfter(pb, seq, pb.tick());
+                    Visuals.freezeArrow(e, ahead == null || ahead.tick() - pb.tick() > 2);
+                }
+                e.teleport(at);
                 return;
             }
             if (!Visuals.standIn(e)) pb.park(seq); // stand-ins are born inert: park's zero would broadcast mid-flight
@@ -508,10 +526,50 @@ final class Appliers {
                     previous != null ? previous.tick() : pb.tick() - 1, target, pb.tick(), pb.rate()));
         }
 
+        /** A fold lands a stuck arrow without its live arrival: once the track is silent ahead,
+         *  restore the freeze + terminal view (the late-viewer treatment). */
+        private void restFreeze(Playback pb, int seq, Entity e, Pin pin) {
+            if (!(e.getEntityMeta() instanceof net.minestom.server.entity.metadata.projectile.AbstractArrowMeta meta)
+                    || meta.isInGround()) return;
+            if (pin.pos().distanceSquared(e.getPosition()) > 0.01) return;
+            Recorded<Channels.EntityMove> ahead = history.firstAfter(pb, seq, pin.tick());
+            if (ahead != null && ahead.tick() - pin.tick() <= 2) return; // mid-track, not a rest
+            Visuals.freezeArrow(e, true);
+            e.teleport(terminalView(pb, seq, e.getPosition()));
+        }
+
+        /** The stick orientation from the track: the last distinct movement at or before the cursor,
+         *  in arrow view convention; {@code at}'s own view when it never moved. */
+        private Pos terminalView(Playback pb, int seq, Pos at) {
+            List<Recorded<Channels.EntityMove>> ops = history.all(pb, seq);
+            int lo = 0, hi = ops.size();
+            while (lo < hi) {
+                int mid = (lo + hi) >>> 1;
+                if (ops.get(mid).tick() <= pb.tick()) lo = mid + 1;
+                else hi = mid;
+            }
+            for (int i = lo - 1; i > 0; i--) {
+                Channels.EntityMove to = ops.get(i).op(), from = ops.get(i - 1).op();
+                double dx = to.x() - from.x(), dy = to.y() - from.y(), dz = to.z() - from.z();
+                double h = Math.hypot(dx, dz);
+                if (h + Math.abs(dy) < 1.0e-6) continue;
+                return at.withView((float) Math.toDegrees(Math.atan2(dx, dz)),
+                        (float) Math.toDegrees(Math.atan2(dy, h)));
+            }
+            return at;
+        }
+
         // between track points a twin STAYS at its last one: a silent track means the real entity rested, but a
         // physics twin can drift (a zero-velocity revived arrow falls out of its wall) - pin it back
         @Override
         public void tick(@NotNull Playback pb) {
+            if (pb.rate() != ranAt || pb.reversed() != ranReversed) {
+                // a leg outlives a rate/direction flip by its REAL-tick deadline (up to dt/rate ticks -
+                // seconds at 0.01x): the twin kept walking the old direction after /replay reverse
+                ranAt = pb.rate();
+                ranReversed = pb.reversed();
+                glides.clear();
+            }
             var it = lastTrack.entrySet().iterator();
             while (it.hasNext()) {
                 var entry = it.next();
@@ -563,10 +621,15 @@ final class Appliers {
                         long dt = fresh ? 1 : Math.max(1, Math.round(4 * pb.rate()));
                         g = leg(e.getPosition(), pin.tick() - dt, pin.pos(), pin.tick(), pb.rate());
                         if (fresh) glides.put(entry.getKey(), g);
+                        else restFreeze(pb, entry.getKey(), e, pin);
                     }
                 }
-                // the IN_GROUND freeze is a REST state: a real leg (reverse included) re-flies the arrow
-                if (Visuals.clientFrozen(e) && g.step().length() > 1.0e-3) Visuals.freezeArrow(e, false);
+                // the IN_GROUND freeze is a REST state: a real leg (reverse included) re-flies the
+                // arrow, but only once the track LEAVES the stick - an explosion's recorded nudge is
+                // centimeters, and re-aiming rotation from it flopped stuck arrows sideways
+                if (Visuals.clientFrozen(e) && g.target().distanceSquared(e.getPosition()) > 0.25) {
+                    Visuals.freezeArrow(e, false);
+                }
                 if (!(e instanceof net.minestom.server.entity.LivingEntity)
                         && !Visuals.clientRestless(e) && !Visuals.clientFrozen(e)) {
                     // flier: a puppet's own tick is inert - advance the server along the leg SILENTLY
@@ -589,6 +652,15 @@ final class Appliers {
                         // cross-clock pickup; slow motion magnifies the gap) bridges to the next known
                         // point instead of a stop-dead + hold
                         Glide next = bridge(pb, history, entry.getKey(), e.getPosition());
+                        if (next == null && pb.reversed()) {
+                            // the launch hole sits just before the spawn: the move channel has nothing
+                            // earlier, so the last backward leg bridges to the spawn point itself
+                            Recorded<Channels.Spawn> born = spawns.latest(pb, entry.getKey(), pb.tick() - 1);
+                            if (born != null && pb.tick() - born.tick() <= BRIDGE_TICKS) {
+                                next = bridgeLeg(pb, e.getPosition(), new Pos(born.op().x(), born.op().y(),
+                                        born.op().z(), born.op().yaw(), born.op().pitch()), born.tick());
+                            }
+                        }
                         if (next != null) {
                             glides.put(entry.getKey(), next);
                             if (Visuals.clientAccelerates(e)) aimFireball(e, next);
@@ -607,7 +679,8 @@ final class Appliers {
                         // ABSOLUTE landing, ALWAYS sent to everyone: an on-target twin still has a
                         // leg-integrating client one velocity-tick past it - the absolute is for the
                         // CLIENT, not the twin
-                        e.teleport(aimed(g));
+                        e.teleport(g.step().lengthSquared() > 1.0e-4 ? aimed(g)
+                                : terminalView(pb, entry.getKey(), g.target()));
                         glides.remove(entry.getKey());
                     } else {
                         // the velocity RIDES through the leg's whole window - zeroing it early (even
@@ -1222,8 +1295,12 @@ final class Appliers {
      *  the crossing's own leg re-covered it (the launch rush-then-stall); whole-tick pacing also
      *  compressed a mid-window bridge into a 2x rush. */
     private static Glide bridgeLeg(Playback pb, Pos from, Recorded<Channels.EntityMove> r) {
-        Pos target = new Pos(r.op().x(), r.op().y(), r.op().z(), r.op().yaw(), r.op().pitch());
-        long dt = Math.max(1, Math.abs(r.tick() - pb.tick()));
+        return bridgeLeg(pb, from, new Pos(r.op().x(), r.op().y(), r.op().z(), r.op().yaw(), r.op().pitch()),
+                r.tick());
+    }
+
+    private static Glide bridgeLeg(Playback pb, Pos from, Pos target, long atTick) {
+        long dt = Math.max(1, Math.abs(atTick - pb.tick()));
         int real = (int) Math.max(1, Math.round((dt - pb.subtick() + 1) / Math.max(1.0e-9, pb.rate())));
         return new Glide(target, target.sub(from).asVec().div(real), pb.tick(), dt + 1, new int[]{real});
     }
