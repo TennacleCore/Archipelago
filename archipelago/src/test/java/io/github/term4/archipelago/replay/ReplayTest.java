@@ -210,7 +210,7 @@ class ReplayTest {
         }
 
         Shard visual = new Shard(instance);
-        Playback vis = Replay.play(visual, file, SpawnMode.VISUAL);
+        Playback vis = Replay.play(visual, file);
         try {
             tick();
             Entity twin = vis.entity(0);
@@ -474,7 +474,7 @@ class ReplayTest {
         unRevive.run();
         // ...while a stand-in stays hard track-driven (the 1.8 bobber wire depends on it)
         Shard visualTheater = new Shard(instance);
-        Playback visualPb = Replay.play(visualTheater, file, SpawnMode.VISUAL);
+        Playback visualPb = Replay.play(visualTheater, file);
         try {
             tick();
             Entity standIn = visualPb.entity(0);
@@ -525,7 +525,7 @@ class ReplayTest {
         byte[] file;
         try {
             tick(); // tick 1: the cast recorded BEFORE the actor's first move (a spawn-order hazard)
-            rec.emit(Channels.SPAWNS, new Channels.Spawn(0, 2.5, 70, 2.5, 0, 0, 0, visual, CompoundBinaryTag.empty(), "Steve"));
+            rec.emit(Channels.SPAWNS, new Channels.Spawn(0, 2.5, 70, 2.5, 0, 0, 0, visual, "Steve"));
             tick(); // tick 2
             tick(); // tick 3: the ghost's first move
             rec.emit(Channels.MOVES, new Channels.Move("Steve", 1.5, 70, 1.5, 0, 0, true));
@@ -595,7 +595,7 @@ class ReplayTest {
                 rec.emit(Channels.MOVES, new Channels.Move("Steve", i + 0.5, 70, 0.5, 0, 0, true));
                 if (i == 2) rec.emit(Channels.BLOCKS, new Channels.BlockOp(0, 1, 70, 1, "minecraft:stone"));
                 if (i == 3) rec.emit(Channels.SPAWNS,
-                        new Channels.Spawn(0, 5.5, 70, 5.5, 0, 0, 0, visual, CompoundBinaryTag.empty(), ""));
+                        new Channels.Spawn(0, 5.5, 70, 5.5, 0, 0, 0, visual, ""));
                 if (i == 7) rec.emit(Channels.REMOVES, new Channels.Remove(0, ""));
                 if (i == 9) rec.emit(Channels.BLOCKS, new Channels.BlockOp(0, 2, 70, 2, "minecraft:oak_planks"));
             }
@@ -1024,7 +1024,7 @@ class ReplayTest {
                 tick();
                 if (i == 2) rec.emit(Channels.BLOCKS, new Channels.BlockOp(0, 1, 71, 1, "minecraft:stone"));
                 if (i == 3) rec.emit(Channels.SPAWNS,
-                        new Channels.Spawn(0, 5.5, 70, 5.5, 0, 0, 0, visual, CompoundBinaryTag.empty(), ""));
+                        new Channels.Spawn(0, 5.5, 70, 5.5, 0, 0, 0, visual, ""));
                 if (i == 4) rec.emit(Channels.BLOCKS, new Channels.BlockOp(0, 2, 71, 2, "minecraft:oak_planks"));
                 if (i == 5) rec.emit(Channels.REMOVES, new Channels.Remove(0, ""));
             }

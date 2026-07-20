@@ -3,7 +3,6 @@ package io.github.term4.archipelago.replay;
 import io.github.term4.archipelago.shard.Shard;
 import io.github.term4.archipelago.event.ShardDestroyEvent;
 import io.github.term4.archipelago.event.replay.RecordingStopEvent;
-import io.github.term4.archipelago.storage.EntityDescriptors;
 import io.github.term4.archipelago.storage.Nbt;
 import io.github.term4.archipelago.storage.ShardFile;
 import io.github.term4.archipelago.replay.channel.Dispatcher;
@@ -47,12 +46,11 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
-import java.util.function.UnaryOperator;
 
 /**
  * One recording session: the t0 snapshot is taken immediately, dispatchers fill the channels until
  * {@link #stop()} returns the file. Entities are not part of the snapshot - every one (t0 included) rides the
- * spawn channel as a visual snapshot plus its save descriptor. The session auto-ends when its shard is
+ * spawn channel as a visual snapshot. The session auto-ends when its shard is
  * destroyed (fail-stop included) - the stop event fires, and {@link #stop()} still hands over the footage.
  */
 public final class Recording {
@@ -229,26 +227,21 @@ public final class Recording {
     }
 
     /**
-     * Records an entity appearing on the core spawn channel: visual snapshot + sanitized descriptor, position
-     * track + removal from then on. Repeat sightings dedup (sweep and event probes may both call); {@code pos}
-     * carries the spawn rotation; {@code shooter} = the launcher's username ({@code ""} = none), the wire owner.
+     * Records an entity appearing on the core spawn channel: visual snapshot, position track + removal from
+     * then on. Repeat sightings dedup (sweep and event probes may both call); {@code pos} carries the spawn
+     * rotation; {@code shooter} = the launcher's username ({@code ""} = none), the wire owner.
      */
     public void spawn(@NotNull Entity entity, @NotNull Pos pos, @NotNull String shooter) {
         if (!active.get() || !seen.add(entity.getEntityId())) return;
         // state captured at CALL time (the entity keeps moving); bookkeeping lands on the owner thread
         CompoundBinaryTag visual = Visuals.snapshot(entity);
-        CompoundBinaryTag desc0 = EntityDescriptors.descriptor(entity);
         int layer = layerOf(entity);
         long at = tick;
         onOwner(() -> {
             int seq = nextSeq.getAndIncrement();
             tracked.put(entity, new Track(seq, at));
-            CompoundBinaryTag desc = desc0;
-            if (desc != null) {
-                for (UnaryOperator<CompoundBinaryTag> sanitizer : Replay.sanitizers()) desc = sanitizer.apply(desc);
-            }
             emitAt(Channels.SPAWNS, new Channels.Spawn(layer, pos.x(), pos.y(), pos.z(), pos.yaw(), pos.pitch(),
-                    seq, visual, desc == null ? CompoundBinaryTag.empty() : desc, shooter), at);
+                    seq, visual, shooter), at);
         });
     }
 

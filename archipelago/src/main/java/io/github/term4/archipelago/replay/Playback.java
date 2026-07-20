@@ -60,7 +60,6 @@ public final class Playback {
     private final Map<String, Channel<?>> byType = new HashMap<>();
     private final List<String> skipped = new ArrayList<>();
     private final long length;
-    private final SpawnMode spawnMode;
     private final ShardFile.UserDataView data; // null on the in-memory path
     private final List<Replay.Bookmark> bookmarks;
     private volatile Runnable ticker;
@@ -86,11 +85,10 @@ public final class Playback {
     private final AtomicBoolean ended = new AtomicBoolean();
     private boolean loggedError;
 
-    Playback(@NotNull Shard shard, @NotNull CompoundBinaryTag container, @NotNull SpawnMode spawnMode,
+    Playback(@NotNull Shard shard, @NotNull CompoundBinaryTag container,
              @Nullable ShardFile.UserDataView data) {
         this.shard = shard;
         this.t0 = Map.copyOf(shard.diff());
-        this.spawnMode = spawnMode;
         this.data = data;
         List<Replay.Bookmark> marks = data == null ? null : data.get(Replay.BOOKMARKS);
         this.bookmarks = marks == null ? List.of() : marks;
@@ -115,10 +113,9 @@ public final class Playback {
     }
 
     // the in-memory path: a stopped recording's op queues and t0 snapshot play as they are - no codec
-    Playback(@NotNull Shard shard, @NotNull Recording recording, @NotNull SpawnMode spawnMode) {
+    Playback(@NotNull Shard shard, @NotNull Recording recording) {
         this.shard = shard;
         this.t0 = Map.copyOf(shard.diff());
-        this.spawnMode = spawnMode;
         this.data = null;
         this.bookmarks = recording.bookmarks();
         this.length = recording.tick();
@@ -320,10 +317,6 @@ public final class Playback {
 
     public boolean active() {
         return !ended.get();
-    }
-
-    public @NotNull SpawnMode spawnMode() {
-        return spawnMode;
     }
 
     /** Channels present in the file but not registered here (or undecodable) - they were skipped. */

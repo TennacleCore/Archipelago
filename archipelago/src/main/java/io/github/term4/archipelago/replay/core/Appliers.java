@@ -6,7 +6,6 @@ import io.github.term4.archipelago.storage.Nbt;
 import io.github.term4.archipelago.replay.Ghost;
 import io.github.term4.archipelago.replay.Playback;
 import io.github.term4.archipelago.replay.Replay;
-import io.github.term4.archipelago.replay.SpawnMode;
 import io.github.term4.archipelago.replay.Visuals;
 import io.github.term4.archipelago.replay.channel.Applier;
 import io.github.term4.archipelago.replay.channel.Recordable;

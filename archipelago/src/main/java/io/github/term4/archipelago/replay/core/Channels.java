@@ -29,10 +29,9 @@ public final class Channels {
     // items: slot name -> encoded stack, absent = air (all slots, armor included)
     public record Equip(String player, CompoundBinaryTag items) {}
     public record Act(String player, int kind, int value) {}
-    // visual = the Visuals snapshot (always), desc = the entity's save descriptor (empty = none),
-    // shooter = launcher username for the wire owner ("" = none)
+    // visual = the Visuals snapshot; shooter = launcher username for the wire owner ("" = none)
     public record Spawn(int layer, double x, double y, double z, float yaw, float pitch, int seq,
-                 CompoundBinaryTag visual, CompoundBinaryTag desc, String shooter) {}
+                 CompoundBinaryTag visual, String shooter) {}
     public record EntityMove(int seq, double x, double y, double z, float yaw, float pitch) {}
     // a tracked entity switching layers mid-track
     public record EntityLayer(int seq, int layer) {}
@@ -73,7 +72,7 @@ public final class Channels {
                     "x", Codec.DOUBLE, Spawn::x, "y", Codec.DOUBLE, Spawn::y, "z", Codec.DOUBLE, Spawn::z,
                     "yaw", Codec.FLOAT, Spawn::yaw, "pitch", Codec.FLOAT, Spawn::pitch,
                     "s", Codec.INT, Spawn::seq, "vis", Codec.NBT_COMPOUND, Spawn::visual,
-                    "d", Codec.NBT_COMPOUND, Spawn::desc, "o", Codec.STRING, Spawn::shooter, Spawn::new),
+                    "o", Codec.STRING, Spawn::shooter, Spawn::new),
                     Appliers.SpawnApplier::new)
             .folding((s, op) -> s.latest(Channels.SPAWNS, op.op().seq(), op));
 

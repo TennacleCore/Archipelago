@@ -111,7 +111,6 @@ class StorageBreakdownTest {
         CompoundBinaryTag snowVis = Visuals.snapshot(new Entity(EntityType.SNOWBALL));
         CompoundBinaryTag arrowVis = Visuals.snapshot(new Entity(EntityType.ARROW));
         CompoundBinaryTag bobberVis = Visuals.snapshot(new Entity(EntityType.FISHING_BOBBER));
-        CompoundBinaryTag desc = EntityDescriptors.descriptor(new Entity(EntityType.SNOWBALL));
 
         final class Flight {
             int seq, left;
@@ -156,7 +155,7 @@ class StorageBreakdownTest {
                     f.vy = 0.3;
                     CompoundBinaryTag vis = f.bobber ? bobberVis : (rng.nextBoolean() ? snowVis : arrowVis);
                     rec.emit(Channels.SPAWNS, new Channels.Spawn(0, f.fx, f.fy, f.fz, yaw[a], pitch[a], f.seq,
-                            vis, desc, f.bobber ? name : ""));
+                            vis, f.bobber ? name : ""));
                     flights.add(f);
                 }
             }
@@ -609,17 +608,17 @@ class StorageBreakdownTest {
         long prev = 0, prevQ = 0;
         for (Op<Channels.Spawn> op : ops) {
             Channels.Spawn s = op.op();
-            int vis = blobs.id(nbt(s.visual())), desc = blobs.id(nbt(s.desc()));
+            int vis = blobs.id(nbt(s.visual()));
             i.zig(op.tick() - prev);
             prev = op.tick();
             i.var(s.seq()).f64(s.x()).f64(s.y()).f64(s.z()).f32(s.yaw()).f32(s.pitch())
-                    .var(shooters.id(s.shooter())).var(vis).var(desc);
+                    .var(shooters.id(s.shooter())).var(vis);
             q.zig(op.tick() - prevQ);
             prevQ = op.tick();
             q.var(s.seq()).zig(Math.round(s.x() * 4096)).zig(Math.round(s.y() * 4096)).zig(Math.round(s.z() * 4096))
-                    .angle(s.yaw()).angle(s.pitch()).var(shooters.id(s.shooter())).var(vis).var(desc);
+                    .angle(s.yaw()).angle(s.pitch()).var(shooters.id(s.shooter())).var(vis);
         }
-        paletteNotes.add("spawn vis+desc: %d refs -> %d distinct blobs, %,d B palette"
+        paletteNotes.add("spawn vis: %d refs -> %d distinct blobs, %,d B palette"
                 .formatted(blobs.refs, blobs.size(), blobs.bytes()));
         byte[] interleaved = withPools(shooters, blobs, i);
         return new Enc(interleaved, interleaved, withPools(shooters, blobs, q));

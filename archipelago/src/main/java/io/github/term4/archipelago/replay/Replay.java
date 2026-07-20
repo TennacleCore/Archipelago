@@ -21,12 +21,11 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
-import java.util.function.UnaryOperator;
 
 /**
  * Replays over shards: one {@code .shard} file = the t0 snapshot (blocks + sky) plus a channel-per-recordable
  * op log in its user data. Everything is registration - {@link #register recordables}, {@link #dispatchers
- * sources}, {@link #sanitizeDescriptors sanitizers}, {@link #onSpawn spawn hooks};
+ * sources}, {@link #onSpawn spawn hooks};
  * {@link io.github.term4.archipelago.replay.core.CoreChannels} is the built-in set.
  */
 public final class Replay {
@@ -44,7 +43,6 @@ public final class Replay {
 
     private static final Map<String, Map<Integer, Recordable<?>>> RECORDABLES = new ConcurrentHashMap<>();
     private static final List<Supplier<Dispatcher>> DISPATCHERS = new CopyOnWriteArrayList<>();
-    private static final List<UnaryOperator<CompoundBinaryTag>> SANITIZERS = new CopyOnWriteArrayList<>();
     private static final List<SpawnHook> SPAWN_HOOKS = new CopyOnWriteArrayList<>();
 
     private Replay() {}
@@ -60,27 +58,18 @@ public final class Replay {
         DISPATCHERS.add(factory);
     }
 
-    /**
-     * Rewrites save descriptors as they are recorded - a library strips what must not replay (a projectile's
-     * shooter link would re-bind, and teleport, the original thrower on playback).
-     */
-    public static void sanitizeDescriptors(@NotNull UnaryOperator<CompoundBinaryTag> sanitizer) {
-        SANITIZERS.add(sanitizer);
-    }
-
     /** Registers a {@link SpawnHook}, run on every replayed entity before it spawns. */
     public static void onSpawn(@NotNull SpawnHook hook) {
         SPAWN_HOOKS.add(hook);
     }
 
-    /** The generation split behind the twin wire: modern renderers frame-lerp only what the entity's
-     *  own sim moves (every position packet snaps prev=cur and strobes), so modern viewers ride
-     *  velocity; legacy (1.8-line) renderers frame-lerp position sets natively but their sims integrate
-     *  their own rate-unscaled gravity through a quiet wire, so legacy viewers get per-tick absolute
-     *  sets and hold pins. Default: nobody is legacy. */
+    /** The twin-wire generation split: every viewer rides per-tick velocity; legacy (1.8-line)
+     *  viewers additionally get per-tick absolute anchors and hold pins (their renderers frame-lerp
+     *  only what their own sim moves, and their latched arrows obey positions alone), and fireball
+     *  aims differ per generation. Default: nobody - a pure-modern server needs no wiring. */
     private static volatile java.util.function.Predicate<net.minestom.server.entity.Player> LEGACY = p -> false;
 
-    /** Registers which viewers render the legacy (1.8-line) wire. */
+    /** Registers which viewers render the legacy (1.8-line) wire - see docs/replay-bridge.md. */
     public static void legacyViewers(@NotNull java.util.function.Predicate<net.minestom.server.entity.Player> viewers) {
         LEGACY = viewers;
     }
@@ -114,11 +103,6 @@ public final class Replay {
      * @throws IllegalArgumentException when the file has no op log (a plain shard save)
      */
     public static @NotNull Playback play(@NotNull Shard target, byte @NotNull [] file) {
-        return play(target, file, SpawnMode.REVIVED);
-    }
-
-    /** {@link #play(Shard, byte[])} with an explicit {@link SpawnMode}. */
-    public static @NotNull Playback play(@NotNull Shard target, byte @NotNull [] file, @NotNull SpawnMode spawns) {
         if (RECORDABLES.isEmpty()) {
             throw new IllegalStateException("no recordables registered - CoreChannels.register() or Replay.register(...)");
         }
@@ -127,7 +111,7 @@ public final class Replay {
         CompoundBinaryTag ops = ShardFile.userData(content).get(OPS);
         if (ops == null) throw new IllegalArgumentException("no replay op log in this file (a plain shard save?)");
         ShardFile.UserDataView data = ShardFile.load(target, content);
-        Playback playback = new Playback(target, ops, spawns, data);
+        Playback playback = new Playback(target, ops, data);
         EventDispatcher.call(new PlaybackStartEvent(playback));
         return playback;
     }
@@ -138,14 +122,9 @@ public final class Replay {
      * for footage that leaves the JVM.
      */
     public static @NotNull Playback play(@NotNull Shard target, @NotNull Recording recording) {
-        return play(target, recording, SpawnMode.REVIVED);
-    }
-
-    /** {@link #play(Shard, Recording)} with an explicit {@link SpawnMode}. */
-    public static @NotNull Playback play(@NotNull Shard target, @NotNull Recording recording, @NotNull SpawnMode spawns) {
         if (recording.active()) throw new IllegalStateException("recording still running - stop() it first");
         ShardFile.load(target, recording.t0());
-        Playback playback = new Playback(target, recording, spawns);
+        Playback playback = new Playback(target, recording);
         EventDispatcher.call(new PlaybackStartEvent(playback));
         return playback;
     }
@@ -157,10 +136,6 @@ public final class Replay {
 
     static List<Supplier<Dispatcher>> dispatcherFactories() {
         return DISPATCHERS;
-    }
-
-    static List<UnaryOperator<CompoundBinaryTag>> sanitizers() {
-        return SANITIZERS;
     }
 
     /** The registered spawn hooks, in registration order (playback-side). */

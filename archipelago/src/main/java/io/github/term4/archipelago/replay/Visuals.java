@@ -28,9 +28,9 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Visual-first snapshots: what an entity LOOKED like (type, metadata, equipment, velocity), captured at spawn so
- * playback renders it with no foreign library - a registered reviver upgrading the visual to a real entity is
- * optional. Metadata keeps the wire-supported value kinds only (flags, items, poses...); exotic entries drop.
+ * Visual-first snapshots: what an entity LOOKED like (type, metadata, equipment), captured at spawn so
+ * playback renders it with no foreign library. Metadata keeps the wire-supported value kinds only
+ * (flags, items, poses...); exotic entries drop.
  */
 public final class Visuals {
 
@@ -39,8 +39,6 @@ public final class Visuals {
     static CompoundBinaryTag snapshot(Entity entity) {
         CompoundBinaryTag.Builder out = CompoundBinaryTag.builder()
                 .putString("type", entity.getEntityType().key().asString());
-        Vec vel = entity.getVelocity();
-        out.put("vel", Nbt.vec3(vel.x(), vel.y(), vel.z()));
         ListBinaryTag.Builder<CompoundBinaryTag> meta = ListBinaryTag.builder(BinaryTagTypes.COMPOUND);
         entity.getMetadataPacket().entries().forEach((index, entry) -> {
             CompoundBinaryTag encoded = encodeEntry(entry);
