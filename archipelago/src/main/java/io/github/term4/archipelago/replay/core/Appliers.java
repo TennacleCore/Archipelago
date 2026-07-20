@@ -470,7 +470,15 @@ final class Appliers {
             while (it.hasNext()) {
                 var entry = it.next();
                 Entity e = pb.entity(entry.getKey());
-                if (e == null || e.isRemoved()) {
+                if (e == null) {
+                    // mid-defer (the spawn hasn't materialized) or untracked: the pin stays - deleting
+                    // it here lost every leg that crossed before a deferred spawn landed, and the twin
+                    // re-entered a whole window behind (the launch snap-then-rush). A glide for an
+                    // absent body is dropped so settled() can't hold playback open on it
+                    glides.remove(entry.getKey());
+                    continue;
+                }
+                if (e.isRemoved()) {
                     it.remove();
                     glides.remove(entry.getKey());
                     continue;
@@ -1155,19 +1163,29 @@ final class Appliers {
                 Recorded<Channels.EntityMove> r = moves.get(i);
                 if (pb.tick() - r.tick() > BRIDGE_TICKS) return null;
                 if (r.op().seq() != seq) continue;
-                return leg(from, pb.tick(), new Pos(r.op().x(), r.op().y(), r.op().z(),
-                        r.op().yaw(), r.op().pitch()), r.tick(), pb.rate());
+                return bridgeLeg(pb, from, r);
             }
         } else {
             for (int i = lo; i < moves.size(); i++) {
                 Recorded<Channels.EntityMove> r = moves.get(i);
                 if (r.tick() - pb.tick() > BRIDGE_TICKS) return null;
                 if (r.op().seq() != seq) continue;
-                return leg(from, pb.tick(), new Pos(r.op().x(), r.op().y(), r.op().z(),
-                        r.op().yaw(), r.op().pitch()), r.tick(), pb.rate());
+                return bridgeLeg(pb, from, r);
             }
         }
         return null;
+    }
+
+    /** Paced on REAL ticks ({@code subtick} counts the window already consumed) to arrive one window
+     *  AFTER the op's crossing - the phase every normal leg keeps (built at its op's crossing, walked
+     *  through that window). A bridge landing AT the crossing sat a whole window on its target while
+     *  the crossing's own leg re-covered it (the launch rush-then-stall); whole-tick pacing also
+     *  compressed a mid-window bridge into a 2x rush. */
+    private static Glide bridgeLeg(Playback pb, Pos from, Recorded<Channels.EntityMove> r) {
+        Pos target = new Pos(r.op().x(), r.op().y(), r.op().z(), r.op().yaw(), r.op().pitch());
+        long dt = Math.max(1, Math.abs(r.tick() - pb.tick()));
+        int real = (int) Math.max(1, Math.round((dt - pb.subtick() + 1) / Math.max(1.0e-9, pb.rate())));
+        return new Glide(target, target.sub(from).asVec().div(real), pb.tick(), dt + 1, new int[]{real});
     }
 
     /** The last track point at or before {@code tick}, or null (it never moved). */

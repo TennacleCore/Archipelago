@@ -302,6 +302,12 @@ public final class Playback {
         return shard;
     }
 
+    /** The cursor's progress into the current timeline tick, in timeline units [0, 1). Owner-thread
+     *  reads only (applier ticks) - legs paced on whole ticks compress when built mid-window. */
+    public double subtick() {
+        return carry;
+    }
+
     /** The current playback tick. */
     public long tick() {
         return tick;
