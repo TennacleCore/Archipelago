@@ -67,8 +67,12 @@ final class ShardLight implements ShardLighting {
     private final Map<Long, UpdateLightPacket> cache = new ConcurrentHashMap<>();
     /** Chunks whose shard light reached at least one client - the restore set for swaps/resets. */
     private final Set<Long> lit = ConcurrentHashMap.newKeySet();
-    /** Chunk columns written since the last flush (owner threads add, the flush drains). */
-    private final Set<Long> dirty = ConcurrentHashMap.newKeySet();
+    /** Written since the last flush (owner threads add, the flush drains): section keys from block
+     *  writes, whole columns from sightings/refreshes. */
+    private final Set<Long> dirtySections = ConcurrentHashMap.newKeySet();
+    private final Set<Long> dirtyColumns = ConcurrentHashMap.newKeySet();
+    /** Columns whose sections have computed at least once (flush thread only). */
+    private final Set<Long> knownColumns = new HashSet<>();
     private final AtomicBoolean inFlight = new AtomicBoolean();
     private volatile boolean resetPending;
     private volatile boolean closed;
@@ -91,7 +95,7 @@ final class ShardLight implements ShardLighting {
         // relight may be enabled AFTER the diff exists (a loaded save, a mid-game toggle): the chain's
         // touched chunks compute without waiting for the next write
         Set<Long> touched = ShardLighting.chainChunks(shard);
-        if (!touched.isEmpty()) mark(touched, false);
+        if (!touched.isEmpty()) markColumns(touched, false);
     }
 
     @Override
@@ -100,7 +104,8 @@ final class ShardLight implements ShardLighting {
         unhook.run();
         for (long index : Set.copyOf(lit)) restoreBase(index);
         cache.clear();
-        dirty.clear();
+        dirtySections.clear();
+        dirtyColumns.clear();
     }
 
     /** This shard's light for one chunk to one viewer (chunk load / swap-in); a cache miss heals on the next flush. */
@@ -113,13 +118,15 @@ final class ShardLight implements ShardLighting {
             lit.add(index);
             return;
         }
-        if (candidate(chunkX, chunkZ) && shard.instance().isChunkLoaded(chunkX, chunkZ)) mark(Set.of(index), true);
+        if (candidate(chunkX, chunkZ) && shard.instance().isChunkLoaded(chunkX, chunkZ)) markColumns(Set.of(index), true);
     }
 
-    /** Blocks changed in {@code chunks} (this shard's view): dirty-mark only - the flush recomputes off-thread. */
+    /** Blocks changed (section keys, this shard's view): dirty-mark only - the flush recomputes off-thread. */
     @Override
-    public void changed(Set<Long> chunks) {
-        mark(chunks, false);
+    public void changed(Set<Long> sections) {
+        if (closed) return;
+        dirtySections.addAll(sections);
+        arm(false);
     }
 
     /** After a reset (or ancestor churn): every previously lit chunk re-evaluates on the next flush - still-candidate
@@ -127,12 +134,16 @@ final class ShardLight implements ShardLighting {
     @Override
     public void refreshLit() {
         resetPending = true;
-        mark(Set.copyOf(lit), true);
+        markColumns(Set.copyOf(lit), true);
     }
 
-    private void mark(Set<Long> chunks, boolean immediate) {
+    private void markColumns(Set<Long> chunks, boolean immediate) {
         if (closed) return;
-        dirty.addAll(chunks);
+        dirtyColumns.addAll(chunks);
+        arm(immediate);
+    }
+
+    private void arm(boolean immediate) {
         long t = clock;
         if (immediate) {
             armedAt = t;
@@ -147,26 +158,23 @@ final class ShardLight implements ShardLighting {
 
     private void onTick(long shardTick) {
         long t = ++clock; // single writer: the shard's own tick driver
-        if (closed || t < flushAt || (dirty.isEmpty() && !resetPending)) return;
+        if (closed || t < flushAt || (dirtySections.isEmpty() && dirtyColumns.isEmpty() && !resetPending)) return;
         if (!inFlight.compareAndSet(false, true)) return;
-        Set<Long> batch = new HashSet<>();
-        for (var it = dirty.iterator(); it.hasNext(); ) {
-            batch.add(it.next());
-            it.remove();
-        }
+        Set<Long> sections = drain(dirtySections);
+        Set<Long> columns = drain(dirtyColumns);
         boolean reset = resetPending;
         resetPending = false;
         armedAt = -1;
         flushAt = Long.MAX_VALUE;
         Thread.startVirtualThread(() -> {
             try {
-                flush(batch, reset);
+                flush(sections, columns, reset);
             } catch (Throwable e) {
                 LOGGER.warn("shard light flush failed", e);
             } finally {
                 inFlight.set(false);
-                if (!dirty.isEmpty() || resetPending) { // work landed mid-flight: catch up next tick
-                    long now = clock;
+                if (!dirtySections.isEmpty() || !dirtyColumns.isEmpty() || resetPending) {
+                    long now = clock; // work landed mid-flight: catch up next tick
                     armedAt = now;
                     flushAt = now;
                 }
@@ -174,13 +182,23 @@ final class ShardLight implements ShardLighting {
         });
     }
 
+    private static Set<Long> drain(Set<Long> from) {
+        Set<Long> out = new HashSet<>();
+        for (var it = from.iterator(); it.hasNext(); ) {
+            out.add(it.next());
+            it.remove();
+        }
+        return out;
+    }
+
     // ---- the flush: one pass of Minestom's own section engine over our light state ----
 
-    private void flush(Set<Long> batch, boolean reset) {
+    private void flush(Set<Long> sections, Set<Long> fullColumns, boolean reset) {
         if (closed) return;
         if (reset) {
             blockLights.clear();
             skyLights.clear();
+            knownColumns.clear();
             cache.clear();
         }
         Instance base = shard.instance();
@@ -189,8 +207,24 @@ final class ShardLight implements ShardLighting {
 
         if (reset) restoreNonCandidates();
 
-        Set<Long> columns = new HashSet<>();
-        for (long index : expand(batch)) {
+        // a section mark in a column that never computed lights like a sighting: nothing exists to patch
+        for (var it = sections.iterator(); it.hasNext(); ) {
+            long key = it.next();
+            long column = CoordConversion.chunkIndex(ShardLighting.sectionKeyX(key), ShardLighting.sectionKeyZ(key));
+            if (!knownColumns.contains(column)) {
+                fullColumns.add(column);
+                it.remove();
+            }
+        }
+
+        Set<Long> involved = expand(fullColumns);
+        Set<Long> markColumns = new HashSet<>();
+        for (long key : sections) {
+            markColumns.add(CoordConversion.chunkIndex(ShardLighting.sectionKeyX(key), ShardLighting.sectionKeyZ(key)));
+        }
+        involved.addAll(expand(markColumns)); // the neighborhood seeds reach one chunk out
+        Set<Long> seedable = new HashSet<>();
+        for (long index : involved) {
             int cx = CoordConversion.chunkIndexGetX(index), cz = CoordConversion.chunkIndexGetZ(index);
             if (!base.isChunkLoaded(cx, cz)) {
                 // a write reached an unloaded chunk (reverse playback, far edits): its cached light is stale
@@ -200,31 +234,71 @@ final class ShardLight implements ShardLighting {
                 continue;
             }
             if (candidate(cx, cz)) {
-                columns.add(index);
+                seedable.add(index);
             } else if (lit.contains(index)) {
                 // the write REMOVED the area's last diff: no longer a candidate, so the recompute below would
                 // skip it and the deleted source's light would linger - restore the base chunk instead
                 restoreBase(index);
             }
         }
-        if (columns.isEmpty() || closed) return;
+        if (seedable.isEmpty() || closed) return;
 
         Ctx ctx = new Ctx(base, dim, minSection, maxSection);
-        Set<Sec> queue = new HashSet<>();
-        for (long index : columns) {
+        Set<Sec> blockSeeds = new HashSet<>(), skySeeds = new HashSet<>();
+        for (long index : expand(fullColumns)) {
+            if (!seedable.contains(index)) continue;
             int cx = CoordConversion.chunkIndexGetX(index), cz = CoordConversion.chunkIndexGetZ(index);
-            for (int sy = minSection; sy < maxSection; sy++) queue.add(new Sec(cx, sy, cz));
+            for (int sy = minSection; sy < maxSection; sy++) {
+                Sec s = new Sec(cx, sy, cz);
+                blockSeeds.add(s);
+                skySeeds.add(s);
+            }
         }
-        for (Sec s : queue) {
-            blockLights.computeIfAbsent(s, k -> Light.block()).invalidate();
-            if (ctx.hasSky) skyLights.computeIfAbsent(s, k -> Light.sky()).invalidate();
+        // a section write reaches at most one section of light in any direction; sky additionally
+        // re-propagates the whole shaft when the write can touch a column surface
+        Map<Long, Integer> lowestSurface = new HashMap<>();
+        for (long key : sections) {
+            int cx = ShardLighting.sectionKeyX(key), sy = ShardLighting.sectionKeyY(key),
+                    cz = ShardLighting.sectionKeyZ(key);
+            for (int dx = -1; dx <= 1; dx++) {
+                for (int dz = -1; dz <= 1; dz++) {
+                    if (!seedable.contains(CoordConversion.chunkIndex(cx + dx, cz + dz))) continue;
+                    for (int dy = -1; dy <= 1; dy++) {
+                        int ny = sy + dy;
+                        if (ny < minSection || ny >= maxSection) continue;
+                        Sec s = new Sec(cx + dx, ny, cz + dz);
+                        blockSeeds.add(s);
+                        skySeeds.add(s);
+                    }
+                }
+            }
+            if (ctx.hasSky && seedable.contains(CoordConversion.chunkIndex(cx, cz))) {
+                int surface = lowestSurface.computeIfAbsent(CoordConversion.chunkIndex(cx, cz), k -> {
+                    int min = Integer.MAX_VALUE;
+                    for (int h : ctx.occlusion(cx, cz)) min = Math.min(min, h);
+                    return min;
+                });
+                if ((sy << 4) + 16 >= surface) {
+                    for (int y2 = minSection; y2 <= sy; y2++) skySeeds.add(new Sec(cx, y2, cz));
+                }
+            }
         }
-        runQueue(queue, blockLights, ctx);
-        if (ctx.hasSky) runQueue(queue, skyLights, ctx);
+        if (!ctx.hasSky) skySeeds.clear();
+        // REPLACE, never invalidate: SkyLight fullyLit latch survives invalidate() and short-circuits
+        // calculateInternal to CONTENT_FULLY_LIT forever - a once-lit section could never darken (a
+        // built roof left the shaft below it fully bright)
+        for (Sec s : blockSeeds) blockLights.put(s, Light.block());
+        for (Sec s : skySeeds) skyLights.put(s, Light.sky());
+        Set<Long> publish = new HashSet<>();
+        for (Sec s : blockSeeds) publish.add(CoordConversion.chunkIndex(s.x(), s.z()));
+        for (Sec s : skySeeds) publish.add(CoordConversion.chunkIndex(s.x(), s.z()));
+        knownColumns.addAll(publish);
+        runQueue(blockSeeds, blockLights, ctx);
+        if (ctx.hasSky) runQueue(skySeeds, skyLights, ctx);
         if (closed) return;
 
         boolean viewers = shard.hasBlockViewers();
-        for (long index : columns) {
+        for (long index : publish) {
             int cx = CoordConversion.chunkIndexGetX(index), cz = CoordConversion.chunkIndexGetZ(index);
             UpdateLightPacket packet = new UpdateLightPacket(cx, cz, lightData(cx, cz, ctx));
             cache.put(index, packet);
@@ -245,6 +319,7 @@ final class ShardLight implements ShardLighting {
     }
 
     private void restoreBase(long index) {
+        knownColumns.remove(index);
         lit.remove(index);
         cache.remove(index);
         ShardLighting.restoreBase(shard, index);
@@ -380,7 +455,8 @@ final class ShardLight implements ShardLighting {
         int[] occlusion(int cx, int cz) {
             return occlusions.computeIfAbsent(CoordConversion.chunkIndex(cx, cz), k -> {
                 Chunk chunk = chunk(cx, cz);
-                if (diff(cx, cz).isEmpty() && chunk instanceof LightingChunk lighting) {
+                Map<Point, Block> diff = diff(cx, cz);
+                if (diff.isEmpty() && chunk instanceof LightingChunk lighting) {
                     lighting.lockReadLock();
                     try {
                         return lighting.getOcclusionMap();
@@ -388,24 +464,40 @@ final class ShardLight implements ShardLighting {
                         lighting.unlockReadLock();
                     }
                 }
-                int[] map = new int[16 * 16];
-                int minY = dim.minY(), maxY = dim.maxY();
-                Map<Point, Block> diff = diff(cx, cz);
-                for (int x = 0; x < 16; x++) {
-                    for (int z = 0; z < 16; z++) {
-                        int gx = (cx << 4) + x, gz = (cz << 4) + z;
-                        int height = maxY - 1;
-                        while (height >= minY) {
-                            Block block = diff.get(new Vec(gx, height, gz));
-                            if (block == null && chunk != null) block = chunk.getBlock(gx, height, gz, Block.Getter.Condition.TYPE);
-                            if (block == null) block = Block.AIR;
-                            if (checkSkyOcclusion(block)) break;
-                            height--;
-                        }
-                        map[z << 4 | x] = height + 1;
-                    }
+                // bucket the diff by column once: the walks below probe it by Y, never by allocated point
+                Map<Integer, Map<Integer, Block>> columns = new HashMap<>();
+                for (Map.Entry<Point, Block> e : diff.entrySet()) {
+                    Point p = e.getKey();
+                    columns.computeIfAbsent((p.blockZ() & 15) << 4 | (p.blockX() & 15), c -> new HashMap<>())
+                            .put(p.blockY(), e.getValue());
                 }
-                return map;
+                int minY = dim.minY(), maxY = dim.maxY();
+                if (chunk != null) chunk.lockReadLock(); // the walks read base blocks (reentrant under runQueue)
+                try {
+                    if (chunk instanceof LightingChunk lighting) {
+                        // patch the base map (a transient clone, dies with this flush): only diffed
+                        // columns re-walk, from just above the higher of base height / diff top
+                        int[] map = lighting.getOcclusionMap().clone();
+                        for (Map.Entry<Integer, Map<Integer, Block>> col : columns.entrySet()) {
+                            int key = col.getKey();
+                            int top = minY - 1;
+                            for (int y : col.getValue().keySet()) top = Math.max(top, y);
+                            map[key] = columnHeight(chunk, col.getValue(), (cx << 4) + (key & 15),
+                                    (cz << 4) + (key >> 4), Math.max(map[key], top + 1) - 1, minY);
+                        }
+                        return map;
+                    }
+                    int[] map = new int[16 * 16];
+                    for (int x = 0; x < 16; x++) {
+                        for (int z = 0; z < 16; z++) {
+                            map[z << 4 | x] = columnHeight(chunk, columns.get(z << 4 | x),
+                                    (cx << 4) + x, (cz << 4) + z, maxY - 1, minY);
+                        }
+                    }
+                    return map;
+                } finally {
+                    if (chunk != null) chunk.unlockReadLock();
+                }
             });
         }
 
@@ -416,6 +508,20 @@ final class ShardLight implements ShardLighting {
 
     // indexed by Direction ordinal, like LightCompute.DIRECTIONS
     private static final Direction[] DIRECTIONS = Direction.values();
+
+    /** Highest occluder + 1 in one column, walking diff-over-base from {@code from} down. */
+    private static int columnHeight(@Nullable Chunk chunk, @Nullable Map<Integer, Block> colDiff,
+                                    int gx, int gz, int from, int minY) {
+        int height = from;
+        while (height >= minY) {
+            Block block = colDiff != null ? colDiff.get(height) : null;
+            if (block == null && chunk != null) block = chunk.getBlock(gx, height, gz, Block.Getter.Condition.TYPE);
+            if (block == null) block = Block.AIR;
+            if (checkSkyOcclusion(block)) break;
+            height--;
+        }
+        return height + 1;
+    }
 
     // LightingChunk.checkSkyOcclusion (private upstream)
     private static boolean checkSkyOcclusion(Block block) {
@@ -499,7 +605,7 @@ final class ShardLight implements ShardLighting {
         if (light == null) {
             int cx = x >> 4, cz = z >> 4;
             if (candidate(cx, cz) && shard.instance().isChunkLoaded(cx, cz)) {
-                mark(Set.of(CoordConversion.chunkIndex(cx, cz)), true);
+                markColumns(Set.of(CoordConversion.chunkIndex(cx, cz)), true);
             }
             return -1;
         }
@@ -513,7 +619,7 @@ final class ShardLight implements ShardLighting {
         if (!candidate(chunkX, chunkZ) || !shard.instance().isChunkLoaded(chunkX, chunkZ)) return null;
         long index = CoordConversion.chunkIndex(chunkX, chunkZ);
         UpdateLightPacket packet = cache.get(index);
-        if (packet == null) mark(Set.of(index), true);
+        if (packet == null) markColumns(Set.of(index), true);
         return packet;
     }
 

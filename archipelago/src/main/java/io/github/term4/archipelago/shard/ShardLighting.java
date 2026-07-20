@@ -28,8 +28,25 @@ import java.util.Set;
  */
 public interface ShardLighting {
 
-    /** Blocks changed in {@code chunks} (chunk indexes, this shard's view). */
-    void changed(Set<Long> chunks);
+    /** Blocks changed in {@code sections} ({@link #sectionKey} keys, this shard's view). */
+    void changed(Set<Long> sections);
+
+    /** Packed section coordinates (x/z 26 bits signed, y 12). */
+    static long sectionKey(int chunkX, int sectionY, int chunkZ) {
+        return ((long) (chunkX & 0x3FFFFFF) << 38) | ((long) (chunkZ & 0x3FFFFFF) << 12) | (sectionY & 0xFFFL);
+    }
+
+    static int sectionKeyX(long key) {
+        return (int) (key >> 38);
+    }
+
+    static int sectionKeyZ(long key) {
+        return (int) (key << 26 >> 38);
+    }
+
+    static int sectionKeyY(long key) {
+        return (int) (key << 52 >> 52);
+    }
 
     /** The diff was reset (or an ancestor layer churned): previously lit chunks must re-evaluate. */
     void refreshLit();

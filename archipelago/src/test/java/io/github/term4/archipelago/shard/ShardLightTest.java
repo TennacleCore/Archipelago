@@ -303,9 +303,8 @@ class ShardLightTest extends HeadlessServerTest {
         shard.relight(custom);
         try {
             shard.setBlock(new Vec(3800, 30, 3800), Block.GLOWSTONE);
-            assertTrue(custom.changed.contains(
-                            net.minestom.server.coordinate.CoordConversion.chunkIndex(chunkX, chunkZ)),
-                    "writes notify the installed system with the touched chunk");
+            assertTrue(custom.changed.contains(ShardLighting.sectionKey(chunkX, 30 >> 4, chunkZ)),
+                    "writes notify the installed system with the touched section");
             shard.reset();
             assertTrue(custom.refreshed, "reset drives refreshLit");
             assertFalse(custom.closed);

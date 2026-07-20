@@ -215,10 +215,10 @@ public final class Shard implements WorldAccess {
 
     // a write changed this level's view and every unmasked descendant's; each level's own light refreshes.
     // no mask pruning: shards without light cost nothing, and light bleeds past exact positions anyway
-    private void lightChanged(Set<Long> chunks) {
+    private void lightChanged(Set<Long> sections) {
         ShardLighting l = light;
-        if (l != null) l.changed(chunks);
-        for (Shard child : children) child.lightChanged(chunks);
+        if (l != null) l.changed(sections);
+        for (Shard child : children) child.lightChanged(sections);
     }
 
     Set<Long> overlayChunks() {
@@ -450,7 +450,7 @@ public final class Shard implements WorldAccess {
 
     private void changed(Point pos, Block block) {
         fanBlock(pos, new BlockChangePacket(pos, block));
-        lightChanged(Set.of(CoordConversion.chunkIndex(pos.blockX() >> 4, pos.blockZ() >> 4)));
+        lightChanged(Set.of(ShardLighting.sectionKey(pos.blockX() >> 4, pos.blockY() >> 4, pos.blockZ() >> 4)));
     }
 
     // a write equal to the parent view isn't a diff: place-then-break ends with an EMPTY overlay, not a
@@ -483,9 +483,11 @@ public final class Shard implements WorldAccess {
                 fireBlockChange(pos, previous, block);
             });
             fanBatch(changed);
-            Set<Long> chunks = new HashSet<>();
-            for (Point pos : changed.keySet()) chunks.add(CoordConversion.chunkIndex(pos.blockX() >> 4, pos.blockZ() >> 4));
-            if (!chunks.isEmpty()) lightChanged(chunks);
+            Set<Long> sections = new HashSet<>();
+            for (Point pos : changed.keySet()) {
+                sections.add(ShardLighting.sectionKey(pos.blockX() >> 4, pos.blockY() >> 4, pos.blockZ() >> 4));
+            }
+            if (!sections.isEmpty()) lightChanged(sections);
             return null;
         });
     }
