@@ -662,7 +662,16 @@ final class Appliers {
                         // a SHORT track hole (a recorded server hiccup - launches stall 1-2 ticks on the
                         // cross-clock pickup; slow motion magnifies the gap) bridges to the next known
                         // point instead of a stop-dead + hold
-                        Glide next = bridge(pb, history, entry.getKey(), e.getPosition());
+                        // bridges pace MAGNIFIED holes; at full rate a recorded hole renders as
+                        // recorded - the client coasts its last aim, exactly the live silent-wire look
+                        // (bridging here stretched the launch stall and rushed the catch-up)
+                        Glide next = pb.rate() < 1 || pb.reversed()
+                                ? bridge(pb, history, entry.getKey(), e.getPosition()) : null;
+                        if (next == null && pb.rate() >= 1 && !pb.reversed()
+                                && history.firstAfter(pb, entry.getKey(), pb.tick()) != null) {
+                            glides.remove(entry.getKey()); // spent; the next crossing re-aims
+                            continue;
+                        }
                         if (next == null && pb.reversed()) {
                             // the launch hole sits just before the spawn: the move channel has nothing
                             // earlier, so the last backward leg bridges to the spawn point itself
