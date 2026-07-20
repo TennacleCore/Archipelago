@@ -526,13 +526,6 @@ final class Appliers {
                                     .withView(view.yaw(), view.pitch()), false, false);
                         }
                     }
-                    // the velocity RIDES through the leg's whole window - zeroing it early (even
-                    // landed-on-target: the next leg is a tick away) strips the client's integration
-                    // and collapses rate-1 bounces to 20Hz steps. Fireballs get velocity only when
-                    // their client accel-sim can actually fly the arc (full rate, forward) - and then
-                    // only on redirects, the sim's own acceleration IS the vanilla look
-                    boolean velocityMode = !Visuals.clientAccelerates(e)
-                            || (pb.rate() >= 1 && !pb.reversed());
                     int left = g.left()[0]--;
                     if (left <= 0) {
                         // a SHORT track hole (a recorded server hiccup - launches stall 1-2 ticks on the
@@ -541,8 +534,8 @@ final class Appliers {
                         Glide next = bridge(pb, entry.getKey(), e.getPosition());
                         if (next != null) {
                             glides.put(entry.getKey(), next);
-                            if (velocityMode) fly(e, next, true);
-                            legSets(e, next, !velocityMode);
+                            if (!Visuals.clientAccelerates(e)) fly(e, next, true);
+                            legSets(e, Visuals.clientAccelerates(e));
                             continue;
                         }
                         // zero WITH the landing: a kept velocity coasts velocity-driven clients blocks
@@ -555,9 +548,28 @@ final class Appliers {
                         e.teleport(aimed(g));
                         glides.remove(entry.getKey());
                     } else {
-                        if (velocityMode) fly(e, g, !Visuals.clientAccelerates(e));
-                        else if (!e.getVelocity().isZero()) e.setVelocity(Vec.ZERO);
-                        legSets(e, g, !velocityMode);
+                        // the velocity RIDES through the leg's whole window - zeroing it early (even
+                        // landed-on-target: the next leg is a tick away) strips the client's integration
+                        // and collapses rate-1 bounces to 20Hz steps
+                        boolean everyone = Visuals.clientAccelerates(e);
+                        if (!everyone) {
+                            fly(e, g, true);
+                        } else {
+                            // fireballs get per-tick anchors for EVERY generation: their client accel
+                            // model AMPLIFIES any perturbation (a spectator's hit prediction, packet
+                            // jitter) instead of decaying it, so unanchored velocity desyncs the view.
+                            // The model ((v + 0.1 v-hat) x 0.95 per tick) inverts - a compensated aim
+                            // keeps modern frames moving between anchors at any pace down to its
+                            // 0.095 b/t floor; below it, steps are too small to strobe anyway
+                            double bt = g.step().length();
+                            if (bt > 0.096) {
+                                e.setVelocity(g.step().normalize().mul((bt / 0.95 - 0.1)
+                                        * ServerFlag.SERVER_TICKS_PER_SECOND));
+                            } else if (!e.getVelocity().isZero()) {
+                                e.setVelocity(Vec.ZERO);
+                            }
+                        }
+                        legSets(e, everyone);
                     }
                 } else {
                     if (!e.getVelocity().isZero()) e.setVelocity(Vec.ZERO); // glide-driven: the client sim stays inert
@@ -607,37 +619,33 @@ final class Appliers {
                 (float) Math.toDegrees(Math.atan2(d.y(), h)));
     }
 
-    /** The leg's per-tick absolute set. Legacy renderers frame-lerp position sets natively AND their
-     *  sims integrate their own rate-unscaled gravity through a quiet wire (arrows/items/TNT sink below
-     *  a slow-motion track), so legacy viewers ride sets; modern renderers frame-lerp only what the
-     *  entity's own tick moves - a position packet there snaps prev=cur and strobes, so modern viewers
-     *  ride the velocity instead and only see sets when velocity is unusable ({@code everyone}: the
-     *  fireball family off full rate). */
-    private static void legSets(Entity e, Glide g, boolean everyone) {
-        if (e.getInstance() == null) return;
-        Pos at = e.getPosition(); // the advance stamped the aimed view
-        var set = new net.minestom.server.network.packet.server.play.EntityPositionSyncPacket(
-                e.getEntityId(), at, Vec.ZERO, at.yaw(), at.pitch(), false);
-        for (var viewer : e.getViewers()) {
-            if (everyone || Replay.legacyViewer(viewer)) viewer.sendPacket(set);
-        }
+    /** The leg's per-tick sets at the advanced (view-stamped) position; {@code everyone} when velocity
+     *  is unusable for anyone (the fireball family under its accel floor). */
+    private static void legSets(Entity e, boolean everyone) {
+        if (e.getInstance() != null) sets(e, e.getPosition(), everyone);
     }
 
     private static void pinStill(Entity e) {
         pinAt(e, e.getPosition());
     }
 
-    /** Per-tick absolute + motion pin for a resting, paused, or removal-held twin. One zero-velocity
-     *  broadcast stops modern sims dead (zero never unlatches their IN_GROUND meta); legacy-generation
-     *  sims keep integrating their own gravity regardless and the motion COMPOUNDS between packets, so
-     *  legacy viewers (everyone for the restless bobber) get an absolute + velocity pair every tick -
-     *  each send lands before the client's move, so gravity never gets to displace it. The pinned
-     *  velocity is a CRUMB along the aim, not zero: a 1.8 arrow recomputes its rotation from its own
-     *  motion every unlatched tick, and atan2 of zero drags it sideways (the stuck-arrow shake). */
+    /** Pin for a resting, paused, or removal-held twin: one zero-velocity broadcast stops modern sims
+     *  dead (zero never unlatches their IN_GROUND meta), then the per-tick legacy pair holds the rest. */
     private static void pinAt(Entity e, Pos at) {
         if (e.getInstance() == null) return;
         if (!e.getVelocity().isZero()) e.setVelocity(Vec.ZERO);
-        boolean everyone = Visuals.clientRestless(e);
+        sets(e, at, Visuals.clientRestless(e)); // both bobber generations sim through stillness
+    }
+
+    /** The legacy half of the twin wire: an absolute set + a velocity every tick. Legacy renderers
+     *  frame-lerp sets natively (modern ones snap prev=cur and strobe - they ride velocity instead),
+     *  and each send lands before the client's move, so its own rate-unscaled gravity never displaces
+     *  it (the motion would otherwise COMPOUND between packets). The sent velocity is never the real
+     *  leg: a set-driven client's motion only feeds its OWN collision sweep (a slow arrow lingering
+     *  near its shooter past the 5-tick grace self-collides and dies - the sometimes-vanishing arrows)
+     *  and arrow rotation-from-motion, where atan2 of zero drags the model sideways (the stuck shake).
+     *  A CRUMB along the aim starves the rays and keeps the aim; non-rotating twins get plain zero. */
+    private static void sets(Entity e, Pos at, boolean everyone) {
         Vec keep = Vec.ZERO;
         if (e.getEntityMeta() instanceof net.minestom.server.entity.metadata.projectile.AbstractArrowMeta) {
             double yaw = Math.toRadians(at.yaw()), pitch = Math.toRadians(at.pitch());
@@ -649,10 +657,12 @@ final class Appliers {
         var still = new net.minestom.server.network.packet.server.play.EntityVelocityPacket(
                 e.getEntityId(), keep);
         for (var viewer : e.getViewers()) {
-            if (everyone || Replay.legacyViewer(viewer)) {
-                viewer.sendPacket(set);
-                viewer.sendPacket(still);
-            }
+            boolean legacy = Replay.legacyViewer(viewer);
+            if (everyone || legacy) viewer.sendPacket(set);
+            // the starved velocity is strictly LEGACY medicine: velocity is a modern client's motion
+            // carrier - starving it there strands the render on bare 20Hz anchors (which also trail
+            // the timeline by the sim's one-step lead)
+            if (legacy) viewer.sendPacket(still);
         }
     }
 

@@ -275,11 +275,12 @@ class ReplaySlowMotionTest extends HeadlessServerTest {
             assertNotNull(twin, "the twin rose");
             for (int i = 0; i < 20 && twin.getInstance() == null; i++) tick();
             int id = twin.getEntityId();
-            // BOTH client generations turn a fireball's velocity into self-acceleration (1.8 setVelocity
-            // seeds accel = v x 0.1; 26.1 adds 0.1 along motion per tick, huge against a slow-motion
-            // step) - the wire must carry positions ONLY, and they alone pace the client
+            // a MODERN fireball client self-accelerates ((v + 0.1 v-hat) x 0.95 per tick, 26.1 source):
+            // in the slow mid-band the wire sends the INVERTED aim, so the client's own model lands on
+            // the leg pace exactly - emulate that sim and gate the rendered steps
             Pos clientPos = twin.getPosition();
-            int moved = 0, sampled = 24, aims = 0;
+            net.minestom.server.coordinate.Vec clientVel = net.minestom.server.coordinate.Vec.ZERO;
+            int moved = 0, sampled = 24;
             double maxStep = 0, minMovingStep = Double.MAX_VALUE;
             for (int i = 0; i < sampled; i++) {
                 viewer.sent.clear();
@@ -295,10 +296,13 @@ class ReplaySlowMotionTest extends HeadlessServerTest {
                         clientPos = Pos.fromPoint(p.position());
                     } else if (pk instanceof EntityPositionSyncPacket p && p.entityId() == id) {
                         clientPos = Pos.fromPoint(p.position());
-                    } else if (pk instanceof EntityVelocityPacket p && p.entityId() == id
-                            && p.velocity().length() > 1.0e-3) {
-                        aims++;
+                    } else if (pk instanceof EntityVelocityPacket p && p.entityId() == id) {
+                        clientVel = p.velocity();
                     }
+                }
+                if (clientVel.length() > 1.0e-9) {
+                    clientVel = clientVel.add(clientVel.normalize().mul(0.1)).mul(0.95);
+                    clientPos = clientPos.add(clientVel);
                 }
                 double step = clientPos.distance(before);
                 if (step > 1.0e-4) moved++;
@@ -308,7 +312,6 @@ class ReplaySlowMotionTest extends HeadlessServerTest {
                 }
             }
             assertTrue(moved >= sampled / 2, "flight moved on " + moved + "/" + sampled + " ticks");
-            assertEquals(0, aims, "a fireball must never see a velocity packet (client accel poison)");
             // recorded 0.5 b/t at 0.25x: ~0.125 per tick, uniform - never a full-speed hop
             assertTrue(maxStep < 0.3, "client step too large: " + maxStep);
             assertTrue(minMovingStep != Double.MAX_VALUE && maxStep / minMovingStep < 2.0,
