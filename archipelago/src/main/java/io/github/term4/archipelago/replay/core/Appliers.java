@@ -542,7 +542,8 @@ final class Appliers {
                         Glide next = bridge(pb, entry.getKey(), e.getPosition());
                         if (next != null) {
                             glides.put(entry.getKey(), next);
-                            if (!Visuals.clientAccelerates(e)) fly(e, next, true);
+                            if (Visuals.clientAccelerates(e)) aimFireball(e, next);
+                            else fly(e, next, true);
                             legSets(e, Visuals.clientAccelerates(e));
                             continue;
                         }
@@ -550,6 +551,10 @@ final class Appliers {
                         // PAST the wall (the rest wire is quiet, nothing pulls them back)
                         Visuals.freezeArrow(e, true);
                         if (!e.getVelocity().isZero()) e.setVelocity(Vec.ZERO);
+                        else if (Visuals.clientAccelerates(e)) { // fireball aims bypass the server field
+                            e.sendPacketToViewers(new net.minestom.server.network.packet.server.play.EntityVelocityPacket(
+                                    e.getEntityId(), Vec.ZERO));
+                        }
                         // ABSOLUTE landing, ALWAYS sent to everyone: an on-target twin still has a
                         // leg-integrating client one velocity-tick past it - the absolute is for the
                         // CLIENT, not the twin
@@ -559,28 +564,10 @@ final class Appliers {
                         // the velocity RIDES through the leg's whole window - zeroing it early (even
                         // landed-on-target: the next leg is a tick away) strips the client's integration
                         // and collapses rate-1 bounces to 20Hz steps
-                        boolean everyone = Visuals.clientAccelerates(e);
-                        if (!everyone) {
-                            fly(e, g, true);
-                        } else {
-                            // fireballs get per-tick anchors for EVERY generation: their client accel
-                            // model AMPLIFIES any perturbation (a spectator's hit prediction, packet
-                            // jitter) instead of decaying it, so unanchored velocity desyncs the view.
-                            // The model ((v + 0.1 v-hat) x 0.95 per tick) inverts - a compensated aim
-                            // keeps modern frames moving between anchors at any pace down to its
-                            // 0.095 b/t floor; below it, steps are too small to strobe anyway
-                            double bt = g.step().length();
-                            if (bt > 0.096) {
-                                e.setVelocity(g.step().normalize().mul((bt / 0.95 - 0.1)
-                                        * ServerFlag.SERVER_TICKS_PER_SECOND));
-                            } else {
-                                // EVERY tick, not once: a viewer's own hit prediction re-kicks their
-                                // client sim, and the accel model amplifies the kick into a ~2 b/t
-                                // flicker against the anchors - only a fresh zero heals it
-                                e.setVelocity(Vec.ZERO);
-                            }
-                        }
-                        legSets(e, everyone);
+                        boolean fireball = Visuals.clientAccelerates(e);
+                        if (fireball) aimFireball(e, g);
+                        else fly(e, g, true);
+                        legSets(e, fireball);
                     }
                 } else {
                     if (!e.getVelocity().isZero()) e.setVelocity(Vec.ZERO); // glide-driven: the client sim stays inert
@@ -591,7 +578,7 @@ final class Appliers {
                     // never latched (a slow-rate ray is microscopic, so its own collision test never
                     // fires) sags under its own compounding gravity at the stick
                     if ((Visuals.clientRestless(e) || Visuals.clientFrozen(e)) && e.getPosition().equals(before)) {
-                        pinStill(e);
+                        pinAt(e, e.getPosition(), Visuals.clientRestless(e));
                     }
                 }
             }
@@ -630,33 +617,50 @@ final class Appliers {
                 (float) Math.toDegrees(Math.atan2(d.y(), h)));
     }
 
-    /** The leg's per-tick sets at the advanced (view-stamped) position; {@code everyone} when velocity
-     *  is unusable for anyone (the fireball family under its accel floor). */
+    /** Per-viewer fireball aim: a legacy client MOVES first and mutates motion after (the plain leg is
+     *  exact under per-tick resets), a modern one moves by (v + 0.1 v-hat) x 0.95 - the inverted aim
+     *  lands on the leg pace down to its 0.095 b/t floor, and below it a per-tick zero holds (a fresh
+     *  zero also heals a viewer's own hit prediction, which the accel model would amplify). */
+    private static void aimFireball(Entity e, Glide g) {
+        if (e.getInstance() == null) return;
+        Vec step = g.step();
+        double bt = step.length();
+        var legacyAim = new net.minestom.server.network.packet.server.play.EntityVelocityPacket(
+                e.getEntityId(), step);
+        var modernAim = new net.minestom.server.network.packet.server.play.EntityVelocityPacket(
+                e.getEntityId(), bt > 0.096 ? step.normalize().mul(bt / 0.95 - 0.1) : Vec.ZERO);
+        for (var viewer : e.getViewers()) {
+            viewer.sendPacket(Replay.legacyViewer(viewer) ? legacyAim : modernAim);
+        }
+    }
+
+    /** The leg's per-tick anchors at the advanced (view-stamped) position, riding ALONGSIDE the
+     *  velocity: they land before the client's own move, so the frame still lerps the motion. Legacy
+     *  viewers always get them (bounds their drift; a latched 1.8 arrow ignores velocity and follows
+     *  only these - the reverse-arrow carrier); {@code everyone} for fireballs, whose sims amplify any
+     *  perturbation instead of decaying it. */
     private static void legSets(Entity e, boolean everyone) {
-        if (e.getInstance() != null) sets(e, e.getPosition(), everyone);
+        if (e.getInstance() == null) return;
+        Pos at = e.getPosition();
+        var set = new net.minestom.server.network.packet.server.play.EntityPositionSyncPacket(
+                e.getEntityId(), at, Vec.ZERO, at.yaw(), at.pitch(), false);
+        for (var viewer : e.getViewers()) {
+            if (everyone || Replay.legacyViewer(viewer)) viewer.sendPacket(set);
+        }
     }
 
+    /** Pause pin: every generation holds (a viewer's hit prediction must heal mid-pause too). */
     private static void pinStill(Entity e) {
-        pinAt(e, e.getPosition());
+        pinAt(e, e.getPosition(), true);
     }
 
-    /** Pin for a resting, paused, or removal-held twin: one zero-velocity broadcast stops modern sims
-     *  dead (zero never unlatches their IN_GROUND meta), then the per-tick legacy pair holds the rest. */
-    private static void pinAt(Entity e, Pos at) {
+    /** Per-tick absolute + velocity pin for a paused, resting, or removal-held twin. The velocity is a
+     *  CRUMB along the aim for arrow twins - their clients recompute rotation from motion every
+     *  unlatched tick, and atan2 of zero drags the model sideways (the stuck shake) - plain zero
+     *  otherwise; each send lands before the client's move, so its own gravity never displaces it. */
+    private static void pinAt(Entity e, Pos at, boolean everyone) {
         if (e.getInstance() == null) return;
         if (!e.getVelocity().isZero()) e.setVelocity(Vec.ZERO);
-        sets(e, at, Visuals.clientRestless(e)); // both bobber generations sim through stillness
-    }
-
-    /** The legacy half of the twin wire: an absolute set + a velocity every tick. Legacy renderers
-     *  frame-lerp sets natively (modern ones snap prev=cur and strobe - they ride velocity instead),
-     *  and each send lands before the client's move, so its own rate-unscaled gravity never displaces
-     *  it (the motion would otherwise COMPOUND between packets). The sent velocity is never the real
-     *  leg: a set-driven client's motion only feeds its OWN collision sweep (a slow arrow lingering
-     *  near its shooter past the 5-tick grace self-collides and dies - the sometimes-vanishing arrows)
-     *  and arrow rotation-from-motion, where atan2 of zero drags the model sideways (the stuck shake).
-     *  A CRUMB along the aim starves the rays and keeps the aim; non-rotating twins get plain zero. */
-    private static void sets(Entity e, Pos at, boolean everyone) {
         Vec keep = Vec.ZERO;
         if (e.getEntityMeta() instanceof net.minestom.server.entity.metadata.projectile.AbstractArrowMeta) {
             double yaw = Math.toRadians(at.yaw()), pitch = Math.toRadians(at.pitch());
@@ -668,12 +672,10 @@ final class Appliers {
         var still = new net.minestom.server.network.packet.server.play.EntityVelocityPacket(
                 e.getEntityId(), keep);
         for (var viewer : e.getViewers()) {
-            boolean legacy = Replay.legacyViewer(viewer);
-            if (everyone || legacy) viewer.sendPacket(set);
-            // the starved velocity is strictly LEGACY medicine: velocity is a modern client's motion
-            // carrier - starving it there strands the render on bare 20Hz anchors (which also trail
-            // the timeline by the sim's one-step lead)
-            if (legacy) viewer.sendPacket(still);
+            if (everyone || Replay.legacyViewer(viewer)) {
+                viewer.sendPacket(set);
+                viewer.sendPacket(still);
+            }
         }
     }
 
@@ -1098,7 +1100,8 @@ final class Appliers {
                 // through the hold (freeze, sag, then the flush snap) - per-tick pins hold it, with the
                 // twin's aimed view (the recorded view wobbled arrow sticks)
                 if (present && landed) {
-                    pinAt(e, impact.withView(e.getPosition().yaw(), e.getPosition().pitch()));
+                    pinAt(e, impact.withView(e.getPosition().yaw(), e.getPosition().pitch()),
+                            Visuals.clientRestless(e));
                 }
                 if (behind < 1) return false;
                 if (behind < 3 && (!landed || --h.settle()[0] > 0)) return false;
