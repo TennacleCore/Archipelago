@@ -10,6 +10,7 @@ import io.github.term4.archipelago.replay.channel.Recorded;
 import io.github.term4.archipelago.replay.channel.StateFolder;
 import io.github.term4.archipelago.storage.DataKey;
 import io.github.term4.archipelago.storage.ShardFile;
+import io.github.term4.archipelago.ticking.DomainTicked;
 import io.github.term4.archipelago.ticking.ExecutionDomain;
 import net.kyori.adventure.nbt.BinaryTag;
 import net.kyori.adventure.nbt.BinaryTagTypes;
@@ -22,6 +23,7 @@ import net.minestom.server.coordinate.Vec;
 import net.minestom.server.entity.Entity;
 import net.minestom.server.entity.PlayerSkin;
 import net.minestom.server.instance.block.Block;
+import net.minestom.server.tag.Tag;
 import net.minestom.server.event.Event;
 import net.minestom.server.event.EventDispatcher;
 import net.minestom.server.event.EventNode;
@@ -139,7 +141,7 @@ public final class Playback {
             if (e.shard() == shard) halt();
         });
         MinecraftServer.getGlobalEventHandler().addChild(shardWatch);
-        ticker = shard.onTick(t -> step());
+        ticker = shard.onTick(this::step);
         // a zero-length playback can end inside its first tick, on the clock thread, BEFORE the handle exists
         if (ended.get()) ticker.run();
     }
@@ -161,7 +163,15 @@ public final class Playback {
         return new Channel<>(type, out);
     }
 
-    private void step() {
+    private void step(long time) {
+        // a DOMAIN theater ticks only its ATTACHED (DomainTicked) entities: revived foreign twins - mm
+        // projectiles, TNT - would otherwise never sim or speak their hand wire (the invisible-bounce bug);
+        // main-ticked theaters must NOT double-tick them
+        if (shard.domain() != null) {
+            for (Entity e : entities.values()) {
+                if (!e.isRemoved() && e.getInstance() != null && !DomainTicked.covers(e)) e.tick(time);
+            }
+        }
         if (!paused) {
             for (carry += rate; carry >= 1; carry--) advance();
         }
@@ -268,9 +278,9 @@ public final class Playback {
     // back to t0: the theater is the replay's to reset (don't co-host entities in it); husks of previously
     // risen layers stay linked like after end() - the theater's own destroy cascades them away
     private void rewind() {
-        ghosts.values().forEach(Entity::remove);
+        ghosts.values().forEach(Playback::dismiss);
         ghosts.clear();
-        entities.values().forEach(Entity::remove);
+        entities.values().forEach(Playback::dismiss);
         entities.clear();
         removedEarly.clear();
         hiddenActors.clear();
@@ -409,25 +419,36 @@ public final class Playback {
 
     private final Set<Integer> parkedTwins = ConcurrentHashMap.newKeySet();
 
+    /** Park marker foreign sims read by NAME (no dependency): a parked twin's own physics must not act -
+     *  no sticking, no entity hits, no unsticking - the track owns every state transition. */
+    public static final Tag<Boolean> PARKED = Tag.Transient("replay:parked");
+
     /** Binds a replayed entity to its recorded seq - the position track and removal target it. */
     public void track(int seq, @NotNull Entity entity) {
         entities.put(seq, entity);
-        // BEFORE the spawn broadcast: a revived twin carries its recorded launch velocity, and at a
-        // fractional rate both its own sim and the client's prediction would free-run it at FULL speed
-        // until the first track op - park it here so the spawn packet already advertises zero.
-        // Reversed always: a sim only knows forward
-        if ((rate < 1 || reversed) && !Visuals.standIn(entity)) park(seq);
+        // scheduled absolute syncs land INSTANTLY on non-interpolating clients while the stream they
+        // correct is integration/lerp-driven: a periodic catch-up snap. The replay's own corrections
+        // (arrivals, dying landings, resyncs) own the absolutes; rounding drift stays sub-voxel for ages
+        entity.setSynchronizationTicks(1_000);
+        // BEFORE the spawn broadcast, so the spawn packet already advertises zero instead of the revived
+        // twin's recorded launch velocity
+        if (!Visuals.standIn(entity)) park(seq);
     }
 
-    /** Parks a twin's own physics (zero-velocity broadcast + no gravity): the track owns its motion. The
-     *  no-gravity METADATA also reaches the client, making its local sim linear - the leg-velocity flight
-     *  the appliers drive renders frame-perfect there. Aerodynamics stay native: the server twin and the
-     *  client sim must decay velocity identically between leg redirects. */
+    /** Parks a twin's own physics (zero-velocity broadcast + no gravity): the track owns its motion, at
+     *  every rate. The no-gravity METADATA also reaches the client, making its local sim linear - the
+     *  leg-velocity flight the appliers drive renders frame-perfect there. Aerodynamics stay native: the
+     *  server twin and the client sim must decay velocity identically between leg redirects. */
     public void park(int seq) {
         Entity e = entities.get(seq);
         if (e != null && parkedTwins.add(seq)) {
+            e.setTag(PARKED, true);
             e.setVelocity(Vec.ZERO);
             e.setNoGravity(true);
+            // absolute periodic syncs are phase-ambiguous on an INTEGRATING client (a one-leg jump per
+            // sync): off the leg-flight wire entirely; glide clients are pure-packet, keep a slow cadence
+            // against relative-move rounding drift
+            e.setSynchronizationTicks(Visuals.velocityFlier(e) ? 1_000_000 : 200);
         }
     }
 
@@ -435,11 +456,10 @@ public final class Playback {
         return parkedTwins.contains(seq);
     }
 
-    /** Full-speed playback again: the twin's own sim resumes (the applier re-seeds its velocity). */
-    public void unpark(int seq) {
-        if (!parkedTwins.remove(seq)) return;
-        Entity e = entities.get(seq);
-        if (e != null && !Visuals.standIn(e)) e.setNoGravity(false);
+    // a removal racing its own async spawn re-runs once the spawn lands (or never)
+    private static void dismiss(Entity gone) {
+        gone.remove();
+        if (gone.getInstance() == null) gone.scheduler().scheduleNextTick(gone::remove);
     }
 
     /** The t0 snapshot's block at {@code pos}, or {@code null} (outside the recorded root's own diff) - reverse block fallback. */

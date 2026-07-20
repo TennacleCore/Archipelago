@@ -2,6 +2,15 @@ package io.github.term4.archipelago.replay.core;
 
 import io.github.term4.archipelago.replay.channel.Recordable;
 import net.kyori.adventure.nbt.CompoundBinaryTag;
+import net.minestom.server.MinecraftServer;
+import net.minestom.server.network.NetworkBuffer;
+import net.minestom.server.network.packet.server.ServerPacket;
+import net.minestom.server.network.packet.server.play.ExplosionPacket;
+import net.minestom.server.network.packet.server.play.ParticlePacket;
+import net.minestom.server.network.packet.server.play.SoundEffectPacket;
+import net.minestom.server.network.packet.server.play.WorldEventPacket;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 import net.minestom.server.codec.Codec;
 import net.minestom.server.codec.StructCodec;
 
@@ -31,6 +40,10 @@ public final class Channels {
     public record Remove(int seq, String collector) {}
     public record BlockOp(int layer, int x, int y, int z, String block) {}
     public record Dig(int layer, int x, int y, int z, String digger, boolean start) {}
+    // a positional effect off the outgoing wire: kind selects the packet codec, data is its raw bytes
+    public record Fx(int kind, byte[] data) {}
+
+    public static final int FX_PARTICLE = 0, FX_SOUND = 1, FX_EVENT = 2, FX_EXPLOSION = 3;
 
     public static final int SWING_MAIN = 0, SWING_OFF = 1, HURT = 2, SNEAK_ON = 3, SNEAK_OFF = 4,
             USE_ON = 5, USE_OFF = 6, ARROWS = 7, DEATH = 8, RESPAWN = 9, HIDDEN = 10, SHOWN = 11,
@@ -123,4 +136,28 @@ public final class Channels {
             "l", Codec.INT, Dig::layer,
             "x", Codec.INT, Dig::x, "y", Codec.INT, Dig::y, "z", Codec.INT, Dig::z,
             "p", Codec.STRING, Dig::digger, "s", Codec.BOOLEAN, Dig::start, Dig::new), Appliers.DigApplier::new);
+    public static final Recordable<Fx> FX = Recordable.of("replay:fx", 1, 40, StructCodec.struct(
+            "k", Codec.INT, Fx::kind, "d", Codec.BYTE_ARRAY, Fx::data, Fx::new), Appliers.FxApplier::new);
+
+    /** Encodes a positional-FX packet into its channel op, or null (not a recordable FX kind). */
+    public static @Nullable Fx fx(@NotNull ServerPacket packet) {
+        int kind = switch (packet) {
+            case ParticlePacket ignored -> FX_PARTICLE;
+            case SoundEffectPacket ignored -> FX_SOUND;
+            case WorldEventPacket ignored -> FX_EVENT;
+            case ExplosionPacket ignored -> FX_EXPLOSION;
+            default -> -1;
+        };
+        if (kind < 0) return null;
+        byte[] data = NetworkBuffer.makeArray(buffer -> {
+            switch (packet) {
+                case ParticlePacket pk -> ParticlePacket.SERIALIZER.write(buffer, pk);
+                case SoundEffectPacket pk -> SoundEffectPacket.SERIALIZER.write(buffer, pk);
+                case WorldEventPacket pk -> WorldEventPacket.SERIALIZER.write(buffer, pk);
+                case ExplosionPacket pk -> ExplosionPacket.SERIALIZER.write(buffer, pk);
+                default -> throw new IllegalStateException();
+            }
+        }, MinecraftServer.process());
+        return new Fx(kind, data);
+    }
 }

@@ -12,6 +12,7 @@ import io.github.term4.archipelago.replay.core.Channels;
 import io.github.term4.archipelago.replay.core.CoreChannels;
 import io.github.term4.archipelago.replay.core.StateChannels;
 import io.github.term4.archipelago.storage.DataKey;
+import io.github.term4.archipelago.storage.EntityDescriptors;
 import io.github.term4.archipelago.storage.Nbt;
 import io.github.term4.archipelago.ticking.ExecutionDomain;
 import io.github.term4.archipelago.world.WorldAccess;
@@ -33,6 +34,7 @@ import net.minestom.server.event.EventNode;
 import net.minestom.server.instance.InstanceContainer;
 import net.minestom.server.instance.block.Block;
 import net.minestom.server.item.ItemStack;
+import net.minestom.server.tag.Tag;
 import net.minestom.server.item.Material;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -57,6 +59,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * bridge tests (real mechanics classes).
  */
 class ReplayTest {
+
+    /** Marks entities the test-local describers may stamp (keeps registrations from bleeding across tests). */
+    private static final Tag<Boolean> REVIVABLE = Tag.Transient("test:revivable");
 
     private static InstanceContainer instance;
 
@@ -170,9 +175,17 @@ class ReplayTest {
 
     @Test
     void visualModeForcesStandIns() {
+        // a REGISTERED reviver: generic-tier descriptors puppet now (the track is their truth), so the
+        // "default mode upgrades" contrast needs a real registration
+        Runnable unDescribe = EntityDescriptors.describeEntity(e ->
+                Boolean.TRUE.equals(e.getTag(REVIVABLE)) && e instanceof ItemEntity
+                        ? CompoundBinaryTag.builder().putString("id", "test:item").build() : null);
+        Runnable unRevive = EntityDescriptors.reviveEntity("test:item",
+                desc -> new ItemEntity(ItemStack.of(Material.EMERALD, 5)));
         Shard stage = new Shard(instance);
         ItemStack stack = ItemStack.of(Material.EMERALD, 5);
-        ItemEntity drop = new ItemEntity(stack); // exact class: descriptor + built-in reviver exist
+        ItemEntity drop = new ItemEntity(stack);
+        drop.setTag(REVIVABLE, true);
         Recording rec = Replay.record(stage);
         byte[] file;
         try {
@@ -183,11 +196,15 @@ class ReplayTest {
             drop.remove();
         }
 
+        // playback is puppet-only at every mode now: revivers are save/load-side, twins are stand-ins
         Shard upgraded = new Shard(instance);
         Playback up = Replay.play(upgraded, file);
         try {
             tick();
-            assertInstanceOf(ItemEntity.class, up.entity(0), "default mode upgrades through the reviver");
+            Entity def = up.entity(0);
+            assertNotNull(def);
+            assertFalse(def instanceof ItemEntity, "default mode puppets too");
+            assertEquals(EntityType.ITEM, def.getEntityType());
         } finally {
             up.halt();
         }
@@ -203,6 +220,8 @@ class ReplayTest {
         } finally {
             vis.halt();
         }
+        unDescribe.run();
+        unRevive.run();
     }
 
     @Test
@@ -404,25 +423,35 @@ class ReplayTest {
 
     @Test
     void trackCorrectionsAreBandedForSelfSimulatingTwins() {
+        Runnable unDescribe = EntityDescriptors.describeEntity(e ->
+                Boolean.TRUE.equals(e.getTag(REVIVABLE)) && e.getEntityType() == EntityType.SNOWBALL
+                        ? CompoundBinaryTag.builder().putString("id", "test:snowball").build() : null);
+        Runnable unRevive = EntityDescriptors.reviveEntity("test:snowball", desc -> {
+            Entity ball = new Entity(EntityType.SNOWBALL);
+            ball.setNoGravity(true); // headless: nothing ticks it - hold it like the recorded one
+            return ball;
+        });
         Shard stage = new Shard(instance);
         Entity real = new Entity(EntityType.SNOWBALL);
+        real.setTag(REVIVABLE, true);
         Recording rec = Replay.record(stage);
         byte[] file;
         try {
             stage.spawn(real, new Pos(5.5, 70, 5.5)).join();
             tick(); // tick 1: first sighting -> spawn op (generic descriptor: revives as a physics twin)
             tick(); // tick 2
-            rec.emit(Channels.ENTITY_MOVES, new Channels.EntityMove(0, 5.6, 70, 5.5, 0, 0)); // inside the band
+            rec.emit(Channels.ENTITY_MOVES, new Channels.EntityMove(0, 5.6, 70, 5.5, 0, 0));
             tick(); // tick 3
             tick(); // tick 4
-            rec.emit(Channels.ENTITY_MOVES, new Channels.EntityMove(0, 9.5, 70, 5.5, 0, 0)); // beyond it
+            rec.emit(Channels.ENTITY_MOVES, new Channels.EntityMove(0, 9.5, 70, 5.5, 0, 0)); // a whole-leg jump
             tick(); // tick 5
         } finally {
             file = rec.stop();
             real.remove();
         }
 
-        // a revived twin rides its own physics inside the band (a per-tick teleport is the chop)...
+        // every twin is parked and track-driven at full rate: legs arrive on their deadline even for a
+        // twin nothing ticks (the arrival absolute), free-run is retired
         Shard theater = new Shard(instance);
         Playback pb = Replay.play(theater, file);
         try {
@@ -430,15 +459,19 @@ class ReplayTest {
             Entity twin = pb.entity(0);
             assertNotNull(twin);
             await("twin lands", () -> twin.getInstance() != null);
-            tick(); // the in-band op
-            tick(); // and its pin pass
-            assertEquals(5.5, twin.getPosition().x(), "an in-band correction lets the twin's own sim drive");
-            tick();
-            await("an out-of-band correction still snaps", () -> twin.getPosition().x() == 9.5);
+            assertTrue(twin.hasNoGravity(), "parked at track time");
+            // the pull legs converge asymptotically (sub-voxel residual): near, not exact
+            for (int i = 0; i < 8 && Math.abs(twin.getPosition().x() - 5.6) >= 0.05; i++) tick();
+            assertTrue(Math.abs(twin.getPosition().x() - 5.6) < 0.05,
+                    "the track point carries the twin (x=" + twin.getPosition().x() + ")");
+            for (int i = 0; i < 8 && twin.getPosition().x() != 9.5; i++) tick();
+            assertEquals(9.5, twin.getPosition().x(), "a whole-leg displacement still lands");
         } finally {
             pb.halt();
         }
 
+        unDescribe.run();
+        unRevive.run();
         // ...while a stand-in stays hard track-driven (the 1.8 bobber wire depends on it)
         Shard visualTheater = new Shard(instance);
         Playback visualPb = Replay.play(visualTheater, file, SpawnMode.VISUAL);

@@ -73,6 +73,22 @@ public final class Replay {
         SPAWN_HOOKS.add(hook);
     }
 
+    /** The generation split behind the twin wire: modern renderers frame-lerp only what the entity's
+     *  own sim moves (every position packet snaps prev=cur and strobes), so modern viewers ride
+     *  velocity; legacy (1.8-line) renderers frame-lerp position sets natively but their sims integrate
+     *  their own rate-unscaled gravity through a quiet wire, so legacy viewers get per-tick absolute
+     *  sets and hold pins. Default: nobody is legacy. */
+    private static volatile java.util.function.Predicate<net.minestom.server.entity.Player> LEGACY = p -> false;
+
+    /** Registers which viewers render the legacy (1.8-line) wire. */
+    public static void legacyViewers(@NotNull java.util.function.Predicate<net.minestom.server.entity.Player> viewers) {
+        LEGACY = viewers;
+    }
+
+    public static boolean legacyViewer(@NotNull net.minestom.server.entity.Player viewer) {
+        return LEGACY.test(viewer);
+    }
+
     /** Starts recording {@code shard} and its whole layer tree (multiple concurrent recordings are fine). */
     public static @NotNull Recording record(@NotNull Shard shard) {
         return record(shard, layer -> true);

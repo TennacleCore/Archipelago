@@ -5,6 +5,7 @@ import io.github.term4.archipelago.storage.Nbt;
 import io.github.term4.archipelago.replay.Recording;
 import io.github.term4.archipelago.replay.channel.Dispatcher;
 import io.github.term4.archipelago.replay.channel.EventDispatcher;
+import io.github.term4.archipelago.replay.channel.PacketDispatcher;
 import net.kyori.adventure.nbt.CompoundBinaryTag;
 import net.minestom.server.coordinate.Pos;
 import net.minestom.server.entity.Entity;
@@ -23,10 +24,14 @@ import net.minestom.server.event.player.PlayerHandAnimationEvent;
 import net.minestom.server.event.player.PlayerRespawnEvent;
 import net.minestom.server.event.player.PlayerStartDiggingEvent;
 import net.minestom.server.item.ItemStack;
+import net.minestom.server.network.packet.server.ServerPacket;
+import net.minestom.server.network.packet.server.play.EntitySoundEffectPacket;
+import net.minestom.server.network.packet.server.play.SoundEffectPacket;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -42,7 +47,7 @@ final class Probes {
     static List<Supplier<Dispatcher>> core() {
         // no block probe: the block channel records at the Shard write hook (Recording.watchBlocks)
         return List.of(LayerSampler::new, ActorSampler::new, EntitySampler::new, ActProbe::new,
-                LifeProbe::new, DigProbe::new, PickupProbe::new);
+                LifeProbe::new, DigProbe::new, PickupProbe::new, FxProbe::new);
     }
 
     /** Tree sweep: layers register on sight (create op + relative-diff dump), vanished ones report destroyed. */
@@ -240,6 +245,32 @@ final class Probes {
                             e.getLivingEntity() instanceof Player p ? p.getUsername() : "");
                 }
             });
+        }
+    }
+    /** Positional FX (particles, sounds, world events) straight off the outgoing wire. Only what a member
+     *  actually received records (unwitnessed FX are lost); a grouped broadcast reaches every recipient as
+     *  equal records - content-dedup per tick keeps one. */
+    static final class FxProbe extends PacketDispatcher {
+        private final Set<ServerPacket> seen = Collections.synchronizedSet(new HashSet<>());
+
+        @Override
+        protected void packet(@NotNull Player player, @NotNull ServerPacket packet, @NotNull Recording rec) {
+            // entity-bound sounds go positional (the recorded id means nothing to a theater): the source's
+            // position at emit time; per-player instances stay content-equal so the dedup still holds
+            if (packet instanceof EntitySoundEffectPacket bound && player.getInstance() != null) {
+                Entity source = player.getInstance().getEntityById(bound.entityId());
+                if (source == null) return;
+                packet = new SoundEffectPacket(bound.soundEvent(), bound.source(), source.getPosition(),
+                        bound.volume(), bound.pitch(), bound.seed());
+            }
+            Channels.Fx op = Channels.fx(packet);
+            if (op == null || !seen.add(packet)) return;
+            rec.emit(Channels.FX, op);
+        }
+
+        @Override
+        public void sample(@NotNull Recording rec) {
+            seen.clear();
         }
     }
 }

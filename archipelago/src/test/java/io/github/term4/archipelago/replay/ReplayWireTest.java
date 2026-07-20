@@ -9,6 +9,7 @@ import io.github.term4.archipelago.testsupport.FakePlayer;
 import io.github.term4.archipelago.testsupport.HeadlessServerTest;
 import net.minestom.server.MinecraftServer;
 import net.minestom.server.coordinate.Pos;
+import net.minestom.server.coordinate.Vec;
 import net.minestom.server.entity.Entity;
 import net.minestom.server.entity.EntityType;
 import net.minestom.server.entity.EquipmentSlot;
@@ -22,6 +23,9 @@ import net.minestom.server.network.packet.server.play.EntityPositionPacket;
 import net.minestom.server.network.packet.server.play.EntityStatusPacket;
 import net.minestom.server.network.packet.server.play.EntityTeleportPacket;
 import net.minestom.server.network.packet.server.play.EntityVelocityPacket;
+import net.minestom.server.network.packet.server.play.ParticlePacket;
+import net.minestom.server.network.packet.server.play.WorldEventPacket;
+import net.minestom.server.particle.Particle;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
@@ -203,22 +207,50 @@ class ReplayWireTest extends HeadlessServerTest {
             await("the timeline walks back across the arc", () -> pb.tick() <= 3);
             long teleports = viewer.sent(EntityTeleportPacket.class).stream()
                     .filter(p -> p.entityId() == twin).count();
-            // reverse rides the RELATIVE wire for everyone: clients won't integrate a reverse (a stuck
-            // arrow's IN_GROUND freezes its sim, hurting projectiles re-accelerate along their own motion)
-            long relMoves = viewer.sent(EntityPositionPacket.class).stream()
-                    .filter(p -> p.entityId() == twin).count()
-                    + viewer.sent(EntityPositionAndRotationPacket.class).stream()
-                    .filter(p -> p.entityId() == twin).count();
-            boolean kicked = viewer.sent(EntityVelocityPacket.class).stream()
+            // the reverse leg-flight wire: an unfrozen flier gets velocity redirects pointing BACK along
+            // the arc and integrates client-side - never a per-op position stream
+            boolean reversedVelocity = viewer.sent(EntityVelocityPacket.class).stream()
                     .filter(p -> p.entityId() == twin)
-                    .anyMatch(p -> p.velocity().length() > 1.0e-3);
-            assertTrue(relMoves >= 3, "reverse rides the relative-move wire (saw " + relMoves + ")");
-            assertFalse(kicked, "no velocity redirects in reverse");
+                    .anyMatch(p -> p.velocity().x() < -1.0e-3);
+            assertTrue(reversedVelocity, "reverse rides the velocity wire (a backwards redirect)");
             assertTrue(teleports <= 1, "no teleport packet per op (saw " + teleports + ")");
         } finally {
             pb.halt();
             viewer.player.remove();
             domain.retire();
+        }
+    }
+
+    @Test
+    void fxPacketsReplayOnTheTimeline() {
+        Shard stage = new Shard(instance);
+        Recording rec = Replay.record(stage);
+        byte[] file;
+        try {
+            tick();
+            // the live tap (FxProbe) rides PlayerPacketOutEvent, which fake connections bypass - emit the
+            // encoded ops directly; the codec round-trip and the replay broadcast are the contract here
+            rec.emit(Channels.FX, Channels.fx(new WorldEventPacket(2001, new Vec(3, 75, 3), 42, false)));
+            rec.emit(Channels.FX, Channels.fx(new ParticlePacket(Particle.EXPLOSION, new Vec(3.5, 75, 3.5), Vec.ZERO, 0f, 1)));
+            tick();
+            tick();
+        } finally {
+            file = rec.stop();
+        }
+
+        Shard theater = new Shard(instance);
+        FakePlayer viewer = FakePlayer.connect(instance, new Pos(4.5, 75, 4.5), "FxViewer");
+        theater.join(viewer.player);
+        Playback pb = Replay.play(theater, file);
+        try {
+            for (int i = 0; i < 10; i++) tick();
+            assertTrue(viewer.sent(WorldEventPacket.class).stream()
+                    .anyMatch(pk -> pk.effectId() == 2001 && pk.data() == 42), "the world event replayed");
+            assertTrue(viewer.sent(ParticlePacket.class).stream()
+                    .anyMatch(pk -> pk.particleCount() == 1 && Math.abs(pk.x() - 3.5) < 1.0e-6), "the particle replayed");
+        } finally {
+            pb.halt();
+            viewer.player.remove();
         }
     }
 

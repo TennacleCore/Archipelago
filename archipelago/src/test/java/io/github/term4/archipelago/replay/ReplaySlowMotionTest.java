@@ -6,8 +6,16 @@ import io.github.term4.archipelago.testsupport.FakePlayer;
 import io.github.term4.archipelago.testsupport.HeadlessServerTest;
 import net.minestom.server.MinecraftServer;
 import net.minestom.server.coordinate.Pos;
+import net.minestom.server.network.ConnectionState;
+import net.minestom.server.network.packet.server.SendablePacket;
+import net.minestom.server.network.packet.server.play.EntityPositionAndRotationPacket;
+import net.minestom.server.network.packet.server.play.EntityPositionPacket;
+import net.minestom.server.network.packet.server.play.EntityPositionSyncPacket;
+import net.minestom.server.network.packet.server.play.EntityTeleportPacket;
+import net.minestom.server.network.packet.server.play.EntityVelocityPacket;
 import org.junit.jupiter.api.Test;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -165,13 +173,73 @@ class ReplaySlowMotionTest extends HeadlessServerTest {
                     "rose at the rest point (x=" + twin.getPosition().x() + ")");
             assertTrue(twin.hasNoGravity(), "revived parked");
             assertTrue(twin.getVelocity().isZero(), "revived at rest");
+
+            pb.pause(false); // and the reverse flight: back along the arc, then gone at its spawn crossing
+            double risen = twin.getPosition().x();
+            double lowest = risen;
+            long time = System.currentTimeMillis();
+            for (int i = 0; i < 60; i++) {
+                if (!twin.isRemoved()) twin.tick(time + i * 50L); // leg-flight: its sim integrates (in-game the domain ticks it)
+                tick();
+                lowest = Math.min(lowest, twin.getPosition().x());
+            }
+            assertTrue(lowest < risen - 0.5, "the twin flew backwards (reached x=" + lowest + ")");
+            assertTrue(twin.isRemoved(), "crossing its spawn in reverse despawned it");
         } finally {
             if (pb != null && pb.active()) pb.halt();
         }
     }
 
-    /** OWN_SIM clients (a fireball re-accelerates ANY velocity toward ~2 b/t) must never be leg-flown:
-     *  their twins glide on the relative wire with a zero-velocity-only broadcast history. */
+    /** The client counts a TNT fuse in REAL ticks and discards at zero: the twin's fuse must keep tracking
+     *  the timeline's remaining wall time - rate changes and pauses included. */
+    @Test
+    void tntFuseTracksTheTimeline() {
+        for (int cx = 699; cx <= 701; cx++) {
+            for (int cz = -1; cz <= 1; cz++) instance.loadChunk(cx, cz).join();
+        }
+        CoreChannels.register();
+        Shard live = new Shard(instance);
+        Playback pb = null;
+        try {
+            var mover = new net.minestom.server.entity.Entity(net.minestom.server.entity.EntityType.TNT);
+            mover.setNoGravity(true);
+            live.spawn(mover, new Pos(11200.5, 70, 0.5)).join();
+            Recording rec = Replay.record(live);
+            for (int i = 1; i <= 8; i++) {
+                mover.teleport(new Pos(11200.5 + 0.2 * i, 70, 0.5)).join();
+                tick();
+            }
+            mover.remove(); // the recorded detonation moment
+            tick();
+            rec.stop();
+
+            Shard theater = new Shard(instance);
+            pb = Replay.play(theater, rec);
+            pb.rate(0.25);
+            net.minestom.server.entity.Entity twin = null;
+            for (int i = 0; i < 100 && twin == null; i++) {
+                tick();
+                twin = theater.entities().stream().filter(e -> !(e instanceof net.minestom.server.entity.Player))
+                        .findFirst().orElse(null);
+            }
+            assertNotNull(twin, "the twin rose");
+            for (int i = 0; i < 4; i++) tick();
+            var meta = (net.minestom.server.entity.metadata.other.PrimedTntMeta) twin.getEntityMeta();
+            // ~8 timeline ticks remain at 0.25x = ~32 wall ticks; the default 80 would blow the client's
+            // fuse mid-flight at rates above 2.5x and hold a dead prop below
+            int paced = meta.getFuseTime();
+            assertTrue(paced > 8 && paced < 60, "fuse tracks remaining wall time (got " + paced + ")");
+            pb.pause(true);
+            for (int i = 0; i < 10; i++) tick();
+            assertTrue(meta.getFuseTime() > 1000, "a paused timeline parks the fuse (got " + meta.getFuseTime() + ")");
+        } finally {
+            if (pb != null && pb.active()) pb.halt();
+        }
+    }
+
+    /** OWN_SIM clients (a fireball re-accelerates ANY velocity toward ~2 b/t) leg-fly like everyone:
+     *  the per-tick re-aims bound the client's self-acceleration to one tick, where the 20Hz glide
+     *  stepped on its non-interpolating client (the in-game fireball chop at every rate). */
     @Test
     void fireballTwinGlidesWithoutVelocityRedirects() {
         for (int cx = 599; cx <= 601; cx++) {
@@ -206,21 +274,45 @@ class ReplaySlowMotionTest extends HeadlessServerTest {
             }
             assertNotNull(twin, "the twin rose");
             for (int i = 0; i < 20 && twin.getInstance() == null; i++) tick();
-            viewer.sent.clear();
             int id = twin.getEntityId();
-            int moved = 0, sampled = 24;
-            double lastX = twin.getPosition().x();
+            // BOTH client generations turn a fireball's velocity into self-acceleration (1.8 setVelocity
+            // seeds accel = v x 0.1; 26.1 adds 0.1 along motion per tick, huge against a slow-motion
+            // step) - the wire must carry positions ONLY, and they alone pace the client
+            Pos clientPos = twin.getPosition();
+            int moved = 0, sampled = 24, aims = 0;
+            double maxStep = 0, minMovingStep = Double.MAX_VALUE;
             for (int i = 0; i < sampled; i++) {
+                viewer.sent.clear();
                 tick();
-                double x = twin.getPosition().x();
-                if (x > lastX + 1.0e-4) moved++;
-                lastX = x;
+                Pos before = clientPos;
+                for (SendablePacket sp : java.util.List.copyOf(viewer.sent)) {
+                    var pk = SendablePacket.extractServerPacket(ConnectionState.PLAY, sp);
+                    if (pk instanceof EntityPositionPacket p && p.entityId() == id) {
+                        clientPos = clientPos.add(p.deltaX() / 4096.0, p.deltaY() / 4096.0, p.deltaZ() / 4096.0);
+                    } else if (pk instanceof EntityPositionAndRotationPacket p && p.entityId() == id) {
+                        clientPos = clientPos.add(p.deltaX() / 4096.0, p.deltaY() / 4096.0, p.deltaZ() / 4096.0);
+                    } else if (pk instanceof EntityTeleportPacket p && p.entityId() == id) {
+                        clientPos = Pos.fromPoint(p.position());
+                    } else if (pk instanceof EntityPositionSyncPacket p && p.entityId() == id) {
+                        clientPos = Pos.fromPoint(p.position());
+                    } else if (pk instanceof EntityVelocityPacket p && p.entityId() == id
+                            && p.velocity().length() > 1.0e-3) {
+                        aims++;
+                    }
+                }
+                double step = clientPos.distance(before);
+                if (step > 1.0e-4) moved++;
+                if (i >= 4) {
+                    maxStep = Math.max(maxStep, step);
+                    if (step > 1.0e-3) minMovingStep = Math.min(minMovingStep, step);
+                }
             }
-            assertTrue(moved >= sampled / 2, "glide moved on " + moved + "/" + sampled + " ticks");
-            boolean kicked = viewer.sent(net.minestom.server.network.packet.server.play.EntityVelocityPacket.class)
-                    .stream().filter(pk -> pk.entityId() == id)
-                    .anyMatch(pk -> pk.velocity().length() > 1.0e-3);
-            assertFalse(kicked, "no velocity redirects for an own-sim client");
+            assertTrue(moved >= sampled / 2, "flight moved on " + moved + "/" + sampled + " ticks");
+            assertEquals(0, aims, "a fireball must never see a velocity packet (client accel poison)");
+            // recorded 0.5 b/t at 0.25x: ~0.125 per tick, uniform - never a full-speed hop
+            assertTrue(maxStep < 0.3, "client step too large: " + maxStep);
+            assertTrue(minMovingStep != Double.MAX_VALUE && maxStep / minMovingStep < 2.0,
+                    "client motion pulses: " + minMovingStep + ".." + maxStep);
         } finally {
             if (pb != null && pb.active()) pb.halt();
             if (viewer != null) viewer.player.remove();

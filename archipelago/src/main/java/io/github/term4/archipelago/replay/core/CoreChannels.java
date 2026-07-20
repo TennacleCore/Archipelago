@@ -29,6 +29,7 @@ public final class CoreChannels {
         Replay.register(Channels.ACTS);
         Replay.register(Channels.REMOVES);
         Replay.register(Channels.DIGS);
+        Replay.register(Channels.FX);
         for (Supplier<Dispatcher> probe : Probes.core()) Replay.dispatchers(probe);
     }
 }

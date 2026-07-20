@@ -22,6 +22,9 @@ public final class Ghost extends DomainLivingEntity {
     public Ghost(@NotNull String name, @Nullable String textures, @Nullable String signature) {
         super(EntityType.PLAYER);
         this.name = name;
+        // the track's relative stream is authoritative; the scheduled ABSOLUTE sync lands instantly against
+        // the client's 3-tick player interpolation - a periodic catch-up snap (the slow-mo breathing cycle)
+        setSynchronizationTicks(200);
         List<PlayerInfoUpdatePacket.Property> props = textures != null && signature != null
                 ? List.of(new PlayerInfoUpdatePacket.Property("textures", textures, signature))
                 : List.of();
