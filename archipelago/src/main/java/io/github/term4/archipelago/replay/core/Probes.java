@@ -46,8 +46,8 @@ final class Probes {
 
     static List<Supplier<Dispatcher>> core() {
         // no block probe: the block channel records at the Shard write hook (Recording.watchBlocks)
-        return List.of(LayerSampler::new, ActorSampler::new, EntitySampler::new, ActProbe::new,
-                LifeProbe::new, DigProbe::new, PickupProbe::new, FxProbe::new);
+        return List.of(LayerSampler::new, SkySampler::new, ActorSampler::new, EntitySampler::new,
+                ActProbe::new, LifeProbe::new, DigProbe::new, PickupProbe::new, FxProbe::new);
     }
 
     /** Tree sweep: layers register on sight (create op + relative-diff dump), vanished ones report destroyed. */
@@ -69,6 +69,30 @@ final class Probes {
                 return true;
             });
             known.addAll(live);
+        }
+    }
+
+    /** Per-layer sky-override diffs; the t0 state (when any override exists) lands as a tick-0 op so
+     *  reverse can restore it. No cycles exist - only explicit {@code setTime}/{@code setWeather} land. */
+    static final class SkySampler implements Dispatcher {
+        private final Map<Integer, Channels.Sky> last = new HashMap<>();
+
+        @Override
+        public void start(@NotNull Recording rec) {
+            sample(rec);
+        }
+
+        @Override
+        public void sample(@NotNull Recording rec) {
+            for (Shard layer : rec.layers()) {
+                int id = rec.layer(layer);
+                var weather = layer.weatherOverride();
+                Channels.Sky now = new Channels.Sky(id, layer.timeOverride(), weather != null,
+                        weather != null ? weather.rainLevel() : 0, weather != null ? weather.thunderLevel() : 0);
+                Channels.Sky before = last.put(id, now);
+                if (before == null && now.time() < 0 && !now.weatherSet()) continue; // bare first sight
+                if (!now.equals(before)) rec.emit(Channels.SKIES, now);
+            }
         }
     }
 

@@ -20,6 +20,7 @@ public final class CoreChannels {
         registered = true;
         Replay.register(Channels.LAYERS);
         Replay.register(Channels.SKINS);
+        Replay.register(Channels.SKIES);
         Replay.register(Channels.MOVES);
         Replay.register(Channels.SPAWNS);
         Replay.register(Channels.ENTITY_LAYERS);

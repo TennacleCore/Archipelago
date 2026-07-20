@@ -41,6 +41,8 @@ public final class Channels {
     public record Dig(int layer, int x, int y, int z, String digger, boolean start) {}
     // a positional effect off the outgoing wire: kind selects the packet codec, data is its raw bytes
     public record Fx(int kind, byte[] data) {}
+    // a layer's sky override state at change time (time -1 = inherit; weatherSet gates rain/thunder)
+    public record Sky(int layer, long time, boolean weatherSet, float rain, float thunder) {}
 
     public static final int FX_PARTICLE = 0, FX_SOUND = 1, FX_EVENT = 2, FX_EXPLOSION = 3;
 
@@ -60,6 +62,12 @@ public final class Channels {
                     "p", Codec.STRING, Skin::player, "t", Codec.STRING, Skin::textures,
                     "s", Codec.STRING, Skin::signature, Skin::new), Appliers.SkinApplier::new)
             .folding((s, op) -> s.latest(Channels.SKINS, op.op().player(), op));
+
+    public static final Recordable<Sky> SKIES = Recordable.of("replay:sky", 1, -35, StructCodec.struct(
+                    "l", Codec.INT, Sky::layer, "t", Codec.LONG, Sky::time,
+                    "w", Codec.BOOLEAN, Sky::weatherSet, "r", Codec.FLOAT, Sky::rain,
+                    "th", Codec.FLOAT, Sky::thunder, Sky::new), Appliers.SkyApplier::new)
+            .folding((s, op) -> s.latest(Channels.SKIES, op.op().layer(), op));
 
     public static final Recordable<Move> MOVES = Recordable.of("replay:move", 1, -20, StructCodec.struct(
                     "p", Codec.STRING, Move::player, "x", Codec.DOUBLE, Move::x, "y", Codec.DOUBLE, Move::y,
