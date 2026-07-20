@@ -616,7 +616,9 @@ final class Appliers {
                     // track resumes within reach): bridge forward. An OLD pin with nothing ahead is a
                     // rest pull-back: rebuild on the remainder, spread over ~4 ticks (a dt-1 leg at full
                     // rate is the whole remainder in one tick - the same snap the leg exists to avoid)
-                    boolean fresh = pb.tick() - pin.tick() <= 1;
+                    boolean fresh = pb.tick() - pin.tick() <= 1 && !pb.reversed();
+                    // reversed, the pin is where the twin already IS - only the backward bridge moves it,
+                    // and waiting for the first un-crossing froze 0.01x reversals for seconds
                     Glide b = fresh ? null : bridge(pb, history, entry.getKey(), e.getPosition());
                     if (b != null) {
                         glides.put(entry.getKey(), b);
@@ -644,7 +646,12 @@ final class Appliers {
                         Vec to = g.target().sub(e.getPosition()).asVec();
                         double d = to.length();
                         if (d > 1.0e-6) {
-                            double step = Math.min(d, g.perTick());
+                            // paced to COMPLETE by the deadline: hole bridges leave the twin a fraction
+                            // behind its legs, and at nominal pace the lag survived to the arrival,
+                            // which snapped it in one tick (the captured terminal leap). d/remaining
+                            // equals perTick on-track and spreads any deficit evenly across the window
+                            int remaining = Math.max(1, g.left()[0]);
+                            double step = Math.min(d, Math.max(g.perTick(), d / remaining));
                             Pos view = aimed(g);
                             e.refreshPosition(e.getPosition().add(to.mul(step / d))
                                     .withView(view.yaw(), view.pitch()), false, false);
@@ -1194,7 +1201,7 @@ final class Appliers {
     }
 
     static final class RemoveApplier implements Applier<Channels.Remove> {
-        private record Held(Recorded<Channels.Remove> op, int[] settle) {}
+        private record Held(Recorded<Channels.Remove> op, int[] settle, long[] seen, double[] dist) {}
 
         private final List<Held> held = new ArrayList<>();
         private final LookBack<Integer, Channels.EntityMove> track =
@@ -1209,7 +1216,7 @@ final class Appliers {
             // the scene renders one timeline tick behind at fractional rates: removing at op time despawns
             // a projectile a full leg short of its wall
             if (op.tick() == pb.tick() && pb.rate() < 1 && !pb.paused() && !pb.reversed()) {
-                held.add(new Held(op, new int[]{SETTLE_TICKS}));
+                held.add(new Held(op, new int[]{SETTLE_TICKS}, new long[]{0}, new double[]{Double.MAX_VALUE}));
                 return;
             }
             applyNow(pb, op);
@@ -1220,11 +1227,15 @@ final class Appliers {
             held.removeIf(h -> {
                 Recorded<Channels.Remove> op = h.op();
                 long behind = pb.tick() - op.tick();
-                if (behind < 0 || behind > 3) return true; // the cursor jumped: the fold owns the scene
+                // a reverse or a seek JUMPS the cursor: the fold owns the scene. Gradual playback only
+                // ever advances behind one window at a time
+                if (behind < 0 || behind - h.seen()[0] > 1) return true;
+                h.seen()[0] = behind;
                 Entity e = pb.entity(op.op().seq());
                 Pos impact = trackPointAt(pb, track, op.op().seq(), op.tick());
                 boolean present = e != null && impact != null && e.getInstance() != null;
-                boolean landed = !present || impact.distanceSquared(e.getPosition()) <= 0.09;
+                double dist = present ? impact.distanceSquared(e.getPosition()) : 0;
+                boolean landed = !present || dist <= 0.09;
                 // a held twin rests without re-aims, and a legacy viewer's own gravity sinks it mid-air
                 // through the hold (freeze, sag, then the flush snap) - per-tick pins hold it, with the
                 // twin's aimed view (the recorded view wobbled arrow sticks)
@@ -1233,6 +1244,13 @@ final class Appliers {
                             Visuals.clientRestless(e));
                 }
                 if (behind < 1) return false;
+                // track holes run the scene later than the cursor (each bridge lands a window late):
+                // while the twin still CONVERGES on its impact keep holding - a fixed deadline flushed
+                // it a leg short, and teleport + destroy in one instant reads as a vanish at the wall
+                if (!landed && behind < 8 && dist < h.dist()[0] - 1.0e-6) {
+                    h.dist()[0] = dist;
+                    return false;
+                }
                 if (behind < 3 && (!landed || --h.settle()[0] > 0)) return false;
                 applyNow(pb, op);
                 return true;
