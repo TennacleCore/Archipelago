@@ -505,6 +505,10 @@ final class Appliers {
             // the rest pin yanked a freshly revived twin back to its spawn point (zero velocity + teleport
             // = the 1.8 frozen-item chop, capture-diagnosed)
             Pin previous = lastTrack.put(seq, new Pin(target, pb.tick()));
+            // a same-tick duplicate op (the sampler and Recording.remove both stamp the impact): replacing
+            // the live leg with the zero-step self-leg let the advance eat the whole remainder in one tick
+            // (perTick's no-pacing sentinel) - the capture-diagnosed slow-mo collision LEAP
+            if (previous != null && previous.tick() == pb.tick() && previous.pos().equals(target)) return;
             if (e == null || e.getInstance() == null) return; // the next track op (or the pin) places it
             if (pb.paused()) { // a fold placed it - hold there, absolutely
                 Pos at = target;
