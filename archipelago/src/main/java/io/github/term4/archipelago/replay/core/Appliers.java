@@ -573,7 +573,10 @@ final class Appliers {
                             if (bt > 0.096) {
                                 e.setVelocity(g.step().normalize().mul((bt / 0.95 - 0.1)
                                         * ServerFlag.SERVER_TICKS_PER_SECOND));
-                            } else if (!e.getVelocity().isZero()) {
+                            } else {
+                                // EVERY tick, not once: a viewer's own hit prediction re-kicks their
+                                // client sim, and the accel model amplifies the kick into a ~2 b/t
+                                // flicker against the anchors - only a fresh zero heals it
                                 e.setVelocity(Vec.ZERO);
                             }
                         }
