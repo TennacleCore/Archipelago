@@ -3,8 +3,8 @@ package io.github.term4.archipelago.storage.polar;
 import io.github.term4.archipelago.shard.Shard;
 import io.github.term4.archipelago.storage.DataKey;
 import io.github.term4.archipelago.storage.EntityDescriptors;
-import io.github.term4.archipelago.storage.Nbt;
 import io.github.term4.archipelago.storage.ShardFile;
+import io.github.term4.archipelago.storage.UserData;
 import io.github.term4.archipelago.world.WorldAccess;
 import net.hollowcube.polar.PolarChunk;
 import net.hollowcube.polar.PolarSection;
@@ -119,7 +119,7 @@ class PolarShardCodecTest {
         byte[] bytes = PolarShardCodec.save(original, data -> data.put(META, new GameMeta("bedwars", 3)));
 
         Shard restored = new Shard(instance);
-        PolarShardCodec.UserDataView view = PolarShardCodec.load(restored, bytes);
+        UserData.View view = PolarShardCodec.load(restored, bytes);
         assertEquals(new GameMeta("bedwars", 3), view.get(META), "codec-typed data round-trips");
         assertNull(view.get(UNSET), "absent keys read null");
         assertEquals(original.diff(), restored.diff());
@@ -301,7 +301,7 @@ class PolarShardCodecTest {
         assertArrayEquals(shard, back, "shard -> polar -> shard transcodes byte-exact");
         // and the intermediate polar is a real world: blocks + sky + user data load through the codec
         Shard viaPolar = new Shard(instance);
-        PolarShardCodec.UserDataView view = PolarShardCodec.load(viaPolar, polar);
+        UserData.View view = PolarShardCodec.load(viaPolar, polar);
         assertEquals(source.diff(), viaPolar.diff(), "NBT/handler detail rides polar block entities");
         assertEquals(13000, viaPolar.timeOverride());
         assertEquals("round-9", view.get(NOTE), "the tunneled user compound stays readable");
@@ -335,7 +335,7 @@ class PolarShardCodecTest {
 
         // world-equal: blocks, sky, user data and the tunneled entity list all load from the re-emitted polar
         Shard restored = new Shard(instance);
-        PolarShardCodec.UserDataView view = PolarShardCodec.load(restored, polar2);
+        UserData.View view = PolarShardCodec.load(restored, polar2);
         try {
             assertEquals(source.diff(), restored.diff());
             assertEquals(3000, restored.timeOverride());
@@ -410,7 +410,7 @@ class PolarShardCodecTest {
                 data -> data.put(META, new GameMeta("bedwars", 3)).put(OPS, List.copyOf(ops)));
 
         Shard target = new Shard(instance);
-        PolarShardCodec.UserDataView view = PolarShardCodec.load(target, file);
+        UserData.View view = PolarShardCodec.load(target, file);
         List<Op> read = view.get(OPS);
         assertNotNull(read, "the op log rides the user data uncapped");
         assertEquals(6000, read.size());

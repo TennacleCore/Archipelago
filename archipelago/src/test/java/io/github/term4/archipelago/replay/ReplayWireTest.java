@@ -18,8 +18,6 @@ import net.minestom.server.item.Material;
 import net.minestom.server.network.packet.server.play.BlockBreakAnimationPacket;
 import net.minestom.server.network.packet.server.play.EntityAnimationPacket;
 import net.minestom.server.network.packet.server.play.EntityEquipmentPacket;
-import net.minestom.server.network.packet.server.play.EntityPositionAndRotationPacket;
-import net.minestom.server.network.packet.server.play.EntityPositionPacket;
 import net.minestom.server.network.packet.server.play.EntityStatusPacket;
 import net.minestom.server.network.packet.server.play.EntityTeleportPacket;
 import net.minestom.server.network.packet.server.play.EntityVelocityPacket;

@@ -188,15 +188,19 @@ final class Probes {
                 }
             }
             List<Entity> gone = new ArrayList<>();
+            int[] seen = {0};
             rec.forEachTracked((e, seq) -> {
+                seen[0]++;
                 if (e.isRemoved()) {
                     gone.add(e);
                     return;
                 }
                 // position track over re-simulation: physics twins diverge (wall hits, water bobbing)
                 Pos now = e.getPosition();
-                Pos last = lastPos.put(e, now);
+                Pos last = lastPos.get(e);
+                // rebase only on emit: a per-tick rebase let sub-threshold drift accumulate silently
                 if (last == null || last.distanceSquared(now) > 1.0e-4) {
+                    lastPos.put(e, now);
                     rec.emit(Channels.ENTITY_MOVES, new Channels.EntityMove(seq,
                             now.x(), now.y(), now.z(), now.yaw(), now.pitch()));
                 }
@@ -212,8 +216,10 @@ final class Probes {
                 rec.remove(e, e.getPosition());
             }
             // event-reported removals leave tracked without passing the gone loop - their refs leak here
-            lastPos.keySet().removeIf(e -> !rec.tracks(e));
-            lastLayer.keySet().removeIf(e -> !rec.tracks(e));
+            if (lastPos.size() != seen[0] - gone.size()) {
+                lastPos.keySet().removeIf(e -> !rec.tracks(e));
+                lastLayer.keySet().removeIf(e -> !rec.tracks(e));
+            }
         }
     }
 

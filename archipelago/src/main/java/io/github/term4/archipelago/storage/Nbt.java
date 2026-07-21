@@ -6,6 +6,7 @@ import net.kyori.adventure.nbt.CompoundBinaryTag;
 import net.kyori.adventure.nbt.DoubleBinaryTag;
 import net.kyori.adventure.nbt.ListBinaryTag;
 import net.minestom.server.codec.Transcoder;
+import net.minestom.server.instance.Weather;
 import net.minestom.server.instance.block.Block;
 import net.minestom.server.item.ItemStack;
 import net.minestom.server.utils.block.BlockUtils;
@@ -34,6 +35,23 @@ public final class Nbt {
                 .add(DoubleBinaryTag.doubleBinaryTag(x))
                 .add(DoubleBinaryTag.doubleBinaryTag(y))
                 .add(DoubleBinaryTag.doubleBinaryTag(z)).build();
+    }
+
+    /** Sky-override compound: {@code time} when set ({@code >= 0}), {@code rain}/{@code thunder} when
+     *  {@code weather} set; {@link #skyTime}/{@link #skyWeather} invert. */
+    public static @NotNull CompoundBinaryTag sky(long time, @org.jetbrains.annotations.Nullable Weather weather) {
+        CompoundBinaryTag.Builder sky = CompoundBinaryTag.builder();
+        if (time >= 0) sky.putLong("time", time);
+        if (weather != null) sky.putFloat("rain", weather.rainLevel()).putFloat("thunder", weather.thunderLevel());
+        return sky.build();
+    }
+
+    public static long skyTime(@NotNull CompoundBinaryTag sky) {
+        return sky.get("time") != null ? sky.getLong("time") : -1;
+    }
+
+    public static @org.jetbrains.annotations.Nullable Weather skyWeather(@NotNull CompoundBinaryTag sky) {
+        return sky.get("rain") != null ? new Weather(sky.getFloat("rain"), sky.getFloat("thunder")) : null;
     }
 
     /** Polar's palette entry format, {@code minecraft:block[k=v,...]}; {@link #block(String)} inverts. */

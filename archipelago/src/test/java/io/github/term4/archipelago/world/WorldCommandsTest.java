@@ -3,7 +3,6 @@ package io.github.term4.archipelago.world;
 import io.github.term4.archipelago.shard.Shard;
 import io.github.term4.archipelago.testsupport.FakePlayer;
 import io.github.term4.archipelago.testsupport.HeadlessServerTest;
-import net.minestom.server.MinecraftServer;
 import net.minestom.server.command.builder.Command;
 import net.minestom.server.coordinate.Pos;
 import net.minestom.server.network.packet.server.play.DeclareCommandsPacket;

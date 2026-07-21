@@ -9,8 +9,7 @@ import io.github.term4.archipelago.replay.channel.Recordable;
 import io.github.term4.archipelago.replay.channel.Recorded;
 import io.github.term4.archipelago.replay.channel.StateFolder;
 import io.github.term4.archipelago.storage.DataKey;
-import io.github.term4.archipelago.storage.ShardFile;
-import io.github.term4.archipelago.ticking.DomainTicked;
+import io.github.term4.archipelago.storage.UserData;
 import io.github.term4.archipelago.ticking.ExecutionDomain;
 import net.kyori.adventure.nbt.BinaryTag;
 import net.kyori.adventure.nbt.BinaryTagTypes;
@@ -19,11 +18,9 @@ import net.kyori.adventure.nbt.ListBinaryTag;
 import net.minestom.server.MinecraftServer;
 import net.minestom.server.codec.Transcoder;
 import net.minestom.server.coordinate.Point;
-import net.minestom.server.coordinate.Vec;
 import net.minestom.server.entity.Entity;
 import net.minestom.server.entity.PlayerSkin;
 import net.minestom.server.instance.block.Block;
-import net.minestom.server.tag.Tag;
 import net.minestom.server.event.Event;
 import net.minestom.server.event.EventDispatcher;
 import net.minestom.server.event.EventNode;
@@ -60,7 +57,7 @@ public final class Playback {
     private final Map<String, Channel<?>> byType = new HashMap<>();
     private final List<String> skipped = new ArrayList<>();
     private final long length;
-    private final ShardFile.UserDataView data; // null on the in-memory path
+    private final UserData.View data; // null on the in-memory path
     private final List<Replay.Bookmark> bookmarks;
     private volatile Runnable ticker;
 
@@ -86,7 +83,7 @@ public final class Playback {
     private boolean loggedError;
 
     Playback(@NotNull Shard shard, @NotNull CompoundBinaryTag container,
-             @Nullable ShardFile.UserDataView data) {
+             @Nullable UserData.View data) {
         this.shard = shard;
         this.t0 = Map.copyOf(shard.diff());
         this.data = data;
@@ -161,14 +158,6 @@ public final class Playback {
     }
 
     private void step(long time) {
-        // a DOMAIN theater ticks only its ATTACHED (DomainTicked) entities: revived foreign twins - mm
-        // projectiles, TNT - would otherwise never sim or speak their hand wire (the invisible-bounce bug);
-        // main-ticked theaters must NOT double-tick them
-        if (shard.domain() != null) {
-            for (Entity e : entities.values()) {
-                if (!e.isRemoved() && e.getInstance() != null && !DomainTicked.covers(e)) e.tick(time);
-            }
-        }
         if (!paused) {
             for (carry += rate; carry >= 1; carry--) advance();
         }
@@ -225,17 +214,9 @@ public final class Playback {
         return reversed;
     }
 
-    /** Freezes the timeline in place; parked twins' leg-flight velocity zeroes (the appliers re-aim on resume). */
+    /** Freezes the timeline in place; the appliers' pause pins hold the scene. */
     public void pause(boolean paused) {
         this.paused = paused;
-        if (paused) {
-            onOwner(() -> {
-                for (int seq : parkedTwins) {
-                    Entity e = entities.get(seq);
-                    if (e != null) e.setVelocity(net.minestom.server.coordinate.Vec.ZERO);
-                }
-            });
-        }
     }
 
     public boolean paused() {
@@ -283,7 +264,6 @@ public final class Playback {
         hiddenActors.clear();
         actorLayers.clear();
         skins.clear();
-        parkedTwins.clear();
         for (Shard layer : layerShards.values()) {
             if (layer != shard) layer.reset();
         }
@@ -398,7 +378,6 @@ public final class Playback {
 
     /** Unbinds and returns the twin of {@code seq}, or {@code null}. */
     public @Nullable Entity untrack(int seq) {
-        parkedTwins.remove(seq);
         return entities.remove(seq);
     }
 
@@ -416,11 +395,6 @@ public final class Playback {
         return entities.get(seq);
     }
 
-    private final Set<Integer> parkedTwins = ConcurrentHashMap.newKeySet();
-
-    /** Park marker foreign sims read by NAME (no dependency): a parked twin's own physics must not act -
-     *  no sticking, no entity hits, no unsticking - the track owns every state transition. */
-    public static final Tag<Boolean> PARKED = Tag.Transient("replay:parked");
 
     /** Binds a replayed entity to its recorded seq - the position track and removal target it. */
     public void track(int seq, @NotNull Entity entity) {
@@ -429,36 +403,25 @@ public final class Playback {
         // correct is integration/lerp-driven: a periodic catch-up snap. The replay's own corrections
         // (arrivals, dying landings, resyncs) own the absolutes; rounding drift stays sub-voxel for ages
         entity.setSynchronizationTicks(1_000);
-        // BEFORE the spawn broadcast, so the spawn packet already advertises zero instead of the revived
-        // twin's recorded launch velocity
-        if (!Visuals.standIn(entity)) park(seq);
     }
 
-    /** Parks a twin's own physics (zero-velocity broadcast + no gravity): the track owns its motion, at
-     *  every rate. The no-gravity METADATA also reaches the client, making its local sim linear - the
-     *  leg-velocity flight the appliers drive renders frame-perfect there. Aerodynamics stay native: the
-     *  server twin and the client sim must decay velocity identically between leg redirects. */
-    public void park(int seq) {
-        Entity e = entities.get(seq);
-        if (e != null && parkedTwins.add(seq)) {
-            e.setTag(PARKED, true);
-            e.setVelocity(Vec.ZERO);
-            e.setNoGravity(true);
-            // absolute periodic syncs are phase-ambiguous on an INTEGRATING client (a one-leg jump per
-            // sync): off the leg-flight wire entirely; glide clients are pure-packet, keep a slow cadence
-            // against relative-move rounding drift
-            e.setSynchronizationTicks(Visuals.velocityFlier(e) ? 1_000_000 : 200);
-        }
-    }
-
-    public boolean parked(int seq) {
-        return parkedTwins.contains(seq);
-    }
-
-    // a removal racing its own async spawn re-runs once the spawn lands (or never)
-    private static void dismiss(Entity gone) {
+    /** Removes a twin; a removal racing its own async spawn re-runs once the spawn lands (or never). */
+    public static void dismiss(Entity gone) {
         gone.remove();
         if (gone.getInstance() == null) gone.scheduler().scheduleNextTick(gone::remove);
+    }
+
+    // ops never change and rewind() re-creates appliers: indexes memo here so a rewind (or three appliers
+    // over one channel) builds each once. One index shape per channel id - every LookBack on a channel
+    // must use its canonical key
+    private final Map<String, Object> opIndexes = new HashMap<>();
+
+    /** Per-playback memo for lazily built op-list indexes, keyed by channel id. Owner-thread only. */
+    @SuppressWarnings("unchecked")
+    public <T> @NotNull T opIndex(@NotNull String channel, @NotNull java.util.function.Supplier<T> build) {
+        T got = (T) opIndexes.get(channel);
+        if (got == null) opIndexes.put(channel, got = build.get());
+        return got;
     }
 
     /** The t0 snapshot's block at {@code pos}, or {@code null} (outside the recorded root's own diff) - reverse block fallback. */

@@ -5,6 +5,7 @@ import io.github.term4.archipelago.storage.DataKey;
 import io.github.term4.archipelago.storage.EntityDescriptors;
 import io.github.term4.archipelago.storage.Nbt;
 import io.github.term4.archipelago.storage.ShardFile;
+import io.github.term4.archipelago.storage.UserData;
 import io.github.term4.archipelago.world.WorldAccess;
 import net.hollowcube.polar.PolarChunk;
 import net.hollowcube.polar.PolarReader;
@@ -12,7 +13,6 @@ import net.hollowcube.polar.PolarSection;
 import net.hollowcube.polar.PolarWorld;
 import net.hollowcube.polar.PolarWriter;
 import net.minestom.server.MinecraftServer;
-import net.minestom.server.codec.Transcoder;
 import net.minestom.server.coordinate.CoordConversion;
 import net.minestom.server.coordinate.Point;
 import net.minestom.server.coordinate.Vec;
@@ -69,12 +69,12 @@ public final class PolarShardCodec {
     }
 
     /** {@link #save(Shard)} plus {@link DataKey typed user data} for the load side to read back. */
-    public static byte @NotNull [] save(@NotNull Shard shard, @Nullable Consumer<UserDataWriter> userData) {
+    public static byte @NotNull [] save(@NotNull Shard shard, @Nullable Consumer<UserData.Writer> userData) {
         return save(shard, userData, true);
     }
 
     /** {@code entities} false = blocks/sky/user data only (a map template; loading spawns nothing). */
-    public static byte @NotNull [] save(@NotNull Shard shard, @Nullable Consumer<UserDataWriter> userData, boolean entities) {
+    public static byte @NotNull [] save(@NotNull Shard shard, @Nullable Consumer<UserData.Writer> userData, boolean entities) {
         DimensionType dim = shard.dimension();
         Capture c = capture(shard, userData, entities);
         return encode(dim.minY(), dim.maxY(), c.diff(), c.user());
@@ -85,30 +85,31 @@ public final class PolarShardCodec {
      * Diff, sky, entities and user data snapshot together on the shard's clock, so the bytes are one instant.
      */
     public static @NotNull CompletableFuture<byte[]> saveAsync(@NotNull Shard shard,
-                                                               @Nullable Consumer<UserDataWriter> userData,
+                                                               @Nullable Consumer<UserData.Writer> userData,
                                                                boolean entities) {
         return saveAsync(shard, userData, entities, ForkJoinPool.commonPool());
     }
 
     /** {@link #saveAsync(Shard, Consumer, boolean)} encoding on {@code executor} - a save-heavy server bounds its own I/O pool instead of loading the common pool. */
     public static @NotNull CompletableFuture<byte[]> saveAsync(@NotNull Shard shard,
-                                                               @Nullable Consumer<UserDataWriter> userData,
+                                                               @Nullable Consumer<UserData.Writer> userData,
                                                                boolean entities, @NotNull Executor executor) {
         DimensionType dim = shard.dimension();
         Capture c = capture(shard, userData, entities);
         return CompletableFuture.supplyAsync(() -> encode(dim.minY(), dim.maxY(), c.diff(), c.user()), executor);
     }
 
-    private record Capture(Map<Point, Block> diff, byte[] user) {}
+    private record Capture(Map<Point, Block> diff, CompoundBinaryTag user) {}
 
-    // one relay: separate diff/entity reads could straddle a tick and save an incoherent instant
-    private static Capture capture(Shard shard, @Nullable Consumer<UserDataWriter> userData, boolean entities) {
+    // one relay: separate diff/entity reads could straddle a tick and save an incoherent instant.
+    // The snapshot stays NBT - canonicalize + serialize are pure CPU and run off the clock, in encode
+    private static Capture capture(Shard shard, @Nullable Consumer<UserData.Writer> userData, boolean entities) {
         var domain = shard.domain();
-        Supplier<Capture> snap = () -> new Capture(shard.diff(), writeUserData(shard, userData, entities));
+        Supplier<Capture> snap = () -> new Capture(shard.diff(), userDataTag(shard, userData, entities));
         return domain != null ? domain.relay(snap) : snap.get();
     }
 
-    private static byte[] encode(int minY, int maxY, Map<Point, Block> diff, byte[] userData) {
+    private static byte[] encode(int minY, int maxY, Map<Point, Block> diff, CompoundBinaryTag userData) {
         byte minSection = (byte) (minY / 16);
         byte maxSection = (byte) (maxY / 16 - 1);
         int sectionCount = maxSection - minSection + 1;
@@ -167,7 +168,7 @@ public final class PolarShardCodec {
         });
 
         PolarWorld world = new PolarWorld(PolarWorld.LATEST_VERSION, MinecraftServer.DATA_VERSION,
-                PolarWorld.CompressionType.ZSTD, minSection, maxSection, userData, chunks);
+                PolarWorld.CompressionType.ZSTD, minSection, maxSection, bytes(userData), chunks);
         return PolarWriter.write(world);
     }
 
@@ -175,12 +176,12 @@ public final class PolarShardCodec {
         save(shard, path, null, true);
     }
 
-    public static void save(@NotNull Shard shard, @NotNull Path path, @Nullable Consumer<UserDataWriter> userData) throws IOException {
+    public static void save(@NotNull Shard shard, @NotNull Path path, @Nullable Consumer<UserData.Writer> userData) throws IOException {
         save(shard, path, userData, true);
     }
 
     /** Atomic file save: written beside {@code path}, then moved into place - a crash never leaves a torn file. */
-    public static void save(@NotNull Shard shard, @NotNull Path path, @Nullable Consumer<UserDataWriter> userData,
+    public static void save(@NotNull Shard shard, @NotNull Path path, @Nullable Consumer<UserData.Writer> userData,
                             boolean entities) throws IOException {
         ShardFile.moveIntoPlace(path, save(shard, userData, entities));
     }
@@ -190,7 +191,7 @@ public final class PolarShardCodec {
      * anything already there - load into a fresh shard for an exact restore. The view reads saved user data.
      * Nothing mutates until the whole file parses, so a corrupt file leaves the shard untouched.
      */
-    public static @NotNull UserDataView load(@NotNull Shard shard, byte @NotNull [] data) {
+    public static @NotNull UserData.View load(@NotNull Shard shard, byte @NotNull [] data) {
         PolarWorld world = PolarReader.read(data);
         DimensionType dim = shard.dimension();
         Map<Point, Block> diff = readChunks(world, dim.minY(), dim.maxY()); // clamp: saved under a taller dimension
@@ -243,7 +244,7 @@ public final class PolarShardCodec {
         }
     }
 
-    public static @NotNull UserDataView load(@NotNull Shard shard, @NotNull Path path) throws IOException {
+    public static @NotNull UserData.View load(@NotNull Shard shard, @NotNull Path path) throws IOException {
         return load(shard, Files.readAllBytes(path));
     }
 
@@ -262,14 +263,7 @@ public final class PolarShardCodec {
     public static byte @NotNull [] fromShardFile(byte @NotNull [] shard) {
         ShardFile.Content c = ShardFile.decode(shard);
         CompoundBinaryTag.Builder root = CompoundBinaryTag.builder().putInt("v", FORMAT);
-        CompoundBinaryTag.Builder sky = CompoundBinaryTag.builder();
-        if (c.time() >= 0) sky.putLong("time", c.time());
-        Weather weather = c.weather();
-        if (weather != null) {
-            sky.putFloat("rain", weather.rainLevel());
-            sky.putFloat("thunder", weather.thunderLevel());
-        }
-        root.put("sky", sky.build());
+        root.put("sky", Nbt.sky(c.time(), c.weather()));
         CompoundBinaryTag user = c.user();
         BinaryTag entities = user.get(TUNNELED_ENTITIES);
         if (entities != null) {
@@ -279,7 +273,7 @@ public final class PolarShardCodec {
         if (c.before() != null) user = with(user, TUNNELED_BEFORE, beforeTunnel(c.before()));
         if (c.tree() != null) user = with(user, TUNNELED_TREE, c.tree());
         if (!user.keySet().isEmpty()) root.put("user", user);
-        return encode(c.minY(), c.maxY(), c.diff(), bytes(root.build()));
+        return encode(c.minY(), c.maxY(), c.diff(), root.build());
     }
 
     /**
@@ -293,11 +287,9 @@ public final class PolarShardCodec {
         int minY = world.minSection() << 4, maxY = (world.maxSection() + 1) << 4;
         Map<Point, Block> diff = readChunks(world, minY, maxY);
         CompoundBinaryTag container = container(world.userData());
-        long time = -1;
-        Weather weather = null;
         CompoundBinaryTag sky = container.getCompound("sky");
-        if (sky.get("time") != null) time = sky.getLong("time");
-        if (sky.get("rain") != null) weather = new Weather(sky.getFloat("rain"), sky.getFloat("thunder"));
+        long time = Nbt.skyTime(sky);
+        Weather weather = Nbt.skyWeather(sky);
         CompoundBinaryTag user = container.getCompound("user");
         ListBinaryTag entities = container.getList("entities", BinaryTagTypes.COMPOUND);
         if (entities.size() > 0) user = with(user, TUNNELED_ENTITIES, entities);
@@ -472,49 +464,17 @@ public final class PolarShardCodec {
         return UNTOUCHED.equals(paletteEntry) || "structure_void".equals(paletteEntry);
     }
 
-    /** Collects {@link DataKey} entries at save time (values Codec-encode to NBT immediately). */
-    public static final class UserDataWriter {
-        private final CompoundBinaryTag.Builder tags = CompoundBinaryTag.builder();
-
-        UserDataWriter() {}
-
-        public <T> @NotNull UserDataWriter put(@NotNull DataKey<T> key, @NotNull T value) {
-            tags.put(key.id(), key.codec().encode(Transcoder.NBT, value).orElseThrow());
-            return this;
-        }
-    }
-
-    /** The saved user data of a loaded file; {@link #get} decodes on access ({@code null} when absent). */
-    public static final class UserDataView {
-        public static final UserDataView EMPTY = new UserDataView(CompoundBinaryTag.empty());
-
-        private final CompoundBinaryTag tags;
-
-        UserDataView(CompoundBinaryTag tags) { this.tags = tags; }
-
-        public <T> @Nullable T get(@NotNull DataKey<T> key) {
-            BinaryTag tag = tags.get(key.id());
-            return tag == null ? null : key.codec().decode(Transcoder.NBT, tag).orElseThrow();
-        }
-    }
-
-    private static byte[] writeUserData(Shard shard, @Nullable Consumer<UserDataWriter> userData, boolean entities) {
+    private static CompoundBinaryTag userDataTag(Shard shard, @Nullable Consumer<UserData.Writer> userData,
+                                                 boolean entities) {
         CompoundBinaryTag.Builder root = CompoundBinaryTag.builder().putInt("v", FORMAT);
-        CompoundBinaryTag.Builder sky = CompoundBinaryTag.builder();
-        if (shard.timeOverride() >= 0) sky.putLong("time", shard.timeOverride());
-        Weather weather = shard.weatherOverride();
-        if (weather != null) {
-            sky.putFloat("rain", weather.rainLevel());
-            sky.putFloat("thunder", weather.thunderLevel());
-        }
-        root.put("sky", sky.build());
+        root.put("sky", Nbt.sky(shard.timeOverride(), shard.weatherOverride()));
         if (entities) root.put("entities", EntityDescriptors.write(shard));
         if (userData != null) {
-            UserDataWriter writer = new UserDataWriter();
+            UserData.Writer writer = new UserData.Writer();
             userData.accept(writer);
-            root.put("user", writer.tags.build());
+            root.put("user", writer.build());
         }
-        return bytes(root.build());
+        return root.build();
     }
 
     private static byte[] bytes(CompoundBinaryTag tag) {
@@ -540,13 +500,15 @@ public final class PolarShardCodec {
         return root.getInt("v") == 0 ? CompoundBinaryTag.empty() : root;
     }
 
-    private static UserDataView readUserData(Shard shard, byte[] userData) {
+    private static UserData.View readUserData(Shard shard, byte[] userData) {
         CompoundBinaryTag root = container(userData);
-        if (root.keySet().isEmpty()) return UserDataView.EMPTY;
+        if (root.keySet().isEmpty()) return UserData.View.EMPTY;
         CompoundBinaryTag sky = root.getCompound("sky");
-        if (sky.get("time") != null) shard.setTime(sky.getLong("time"));
-        if (sky.get("rain") != null) shard.setWeather(new Weather(sky.getFloat("rain"), sky.getFloat("thunder")));
+        long time = Nbt.skyTime(sky);
+        if (time >= 0) shard.setTime(time);
+        Weather weather = Nbt.skyWeather(sky);
+        if (weather != null) shard.setWeather(weather);
         EntityDescriptors.read(shard, root.getList("entities", BinaryTagTypes.COMPOUND));
-        return new UserDataView(root.getCompound("user"));
+        return new UserData.View(root.getCompound("user"));
     }
 }

@@ -233,18 +233,8 @@ final class DomainManager {
     }
 
     /**
-     * Ticks {@code domain} is behind the wall clock ({@code 0} = healthy, or no clock). A domain clock
-     * can never run AHEAD of wall time, so lag is the one failure signal: clock-honesty bugs and carrier
-     * saturation both surface here.
-     */
-    long lag(@NotNull Domain domain) {
-        DomainClock clock = clocks.get(domain);
-        return clock == null ? 0 : clock.lag();
-    }
-
-    /**
      * Smoothed tick COST of {@code domain} in ms ({@code 0} = no clock) - the saturation gauge next to
-     * {@link #lag} (lateness): cost creeping toward the 50ms period predicts lag before it happens.
+     * lag (lateness): cost creeping toward the 50ms period predicts lag before it happens.
      */
     double mspt(@NotNull Domain domain) {
         DomainClock clock = clocks.get(domain);

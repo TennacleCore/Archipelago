@@ -2,12 +2,12 @@ package io.github.term4.archipelago.replay;
 
 import io.github.term4.archipelago.replay.channel.Dispatcher;
 import io.github.term4.archipelago.replay.channel.Recordable;
-import io.github.term4.archipelago.replay.channel.SpawnHook;
 import io.github.term4.archipelago.shard.Shard;
 import io.github.term4.archipelago.event.replay.PlaybackStartEvent;
 import io.github.term4.archipelago.event.replay.RecordingStartEvent;
 import io.github.term4.archipelago.storage.DataKey;
 import io.github.term4.archipelago.storage.ShardFile;
+import io.github.term4.archipelago.storage.UserData;
 import net.kyori.adventure.nbt.CompoundBinaryTag;
 import net.minestom.server.codec.Codec;
 import net.minestom.server.codec.StructCodec;
@@ -24,8 +24,7 @@ import java.util.function.Supplier;
 
 /**
  * Replays over shards: one {@code .shard} file = the t0 snapshot (blocks + sky) plus a channel-per-recordable
- * op log in its user data. Everything is registration - {@link #register recordables}, {@link #dispatchers
- * sources}, {@link #onSpawn spawn hooks};
+ * op log in its user data. Everything is registration - {@link #register recordables}, {@link #dispatchers sources};
  * {@link io.github.term4.archipelago.replay.core.CoreChannels} is the built-in set.
  */
 public final class Replay {
@@ -43,7 +42,6 @@ public final class Replay {
 
     private static final Map<String, Map<Integer, Recordable<?>>> RECORDABLES = new ConcurrentHashMap<>();
     private static final List<Supplier<Dispatcher>> DISPATCHERS = new CopyOnWriteArrayList<>();
-    private static final List<SpawnHook> SPAWN_HOOKS = new CopyOnWriteArrayList<>();
 
     private Replay() {}
 
@@ -56,11 +54,6 @@ public final class Replay {
     /** Registers a recording source; every new {@link Recording} gets its own instance. */
     public static void dispatchers(@NotNull Supplier<Dispatcher> factory) {
         DISPATCHERS.add(factory);
-    }
-
-    /** Registers a {@link SpawnHook}, run on every replayed entity before it spawns. */
-    public static void onSpawn(@NotNull SpawnHook hook) {
-        SPAWN_HOOKS.add(hook);
     }
 
     /** The twin-wire generation split: every viewer rides per-tick velocity; legacy (1.8-line)
@@ -110,7 +103,7 @@ public final class Replay {
         ShardFile.Content content = ShardFile.decode(file);
         CompoundBinaryTag ops = ShardFile.userData(content).get(OPS);
         if (ops == null) throw new IllegalArgumentException("no replay op log in this file (a plain shard save?)");
-        ShardFile.UserDataView data = ShardFile.load(target, content);
+        UserData.View data = ShardFile.load(target, content);
         Playback playback = new Playback(target, ops, data);
         EventDispatcher.call(new PlaybackStartEvent(playback));
         return playback;
@@ -136,10 +129,5 @@ public final class Replay {
 
     static List<Supplier<Dispatcher>> dispatcherFactories() {
         return DISPATCHERS;
-    }
-
-    /** The registered spawn hooks, in registration order (playback-side). */
-    public static List<SpawnHook> spawnHooks() {
-        return SPAWN_HOOKS;
     }
 }

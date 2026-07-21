@@ -2,7 +2,6 @@ package io.github.term4.archipelago.replay;
 
 import com.github.luben.zstd.Zstd;
 import io.github.term4.archipelago.shard.Shard;
-import io.github.term4.archipelago.storage.EntityDescriptors;
 import io.github.term4.archipelago.replay.channel.Recordable;
 import io.github.term4.archipelago.replay.core.Channels;
 import io.github.term4.archipelago.replay.core.CoreChannels;

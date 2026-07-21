@@ -9,7 +9,6 @@ import net.kyori.adventure.nbt.ListBinaryTag;
 import net.kyori.adventure.nbt.StringBinaryTag;
 import net.minestom.server.MinecraftServer;
 import net.minestom.server.codec.Codec;
-import net.minestom.server.codec.Transcoder;
 import net.minestom.server.coordinate.Point;
 import net.minestom.server.coordinate.Vec;
 import net.minestom.server.instance.Instance;
@@ -64,12 +63,12 @@ public final class ShardFile {
         return save(shard, null, false);
     }
 
-    public static byte @NotNull [] save(@NotNull Shard shard, @Nullable Consumer<UserDataWriter> userData) {
+    public static byte @NotNull [] save(@NotNull Shard shard, @Nullable Consumer<UserData.Writer> userData) {
         return save(shard, userData, false);
     }
 
     /** {@code withBefore} also records what each position showed beneath the diff (unloaded-chunk = unknown). */
-    public static byte @NotNull [] save(@NotNull Shard shard, @Nullable Consumer<UserDataWriter> userData,
+    public static byte @NotNull [] save(@NotNull Shard shard, @Nullable Consumer<UserData.Writer> userData,
                                         boolean withBefore) {
         // one relay for the whole capture: diff and the before column read the same instant, not one tick apart
         Content content = onOwner(shard, () -> {
@@ -96,12 +95,12 @@ public final class ShardFile {
         save(shard, path, null, false);
     }
 
-    public static void save(@NotNull Shard shard, @NotNull Path path, @Nullable Consumer<UserDataWriter> userData) throws IOException {
+    public static void save(@NotNull Shard shard, @NotNull Path path, @Nullable Consumer<UserData.Writer> userData) throws IOException {
         save(shard, path, userData, false);
     }
 
     /** Atomic file save: written beside {@code path}, then moved into place - a crash never leaves a torn file. */
-    public static void save(@NotNull Shard shard, @NotNull Path path, @Nullable Consumer<UserDataWriter> userData,
+    public static void save(@NotNull Shard shard, @NotNull Path path, @Nullable Consumer<UserData.Writer> userData,
                             boolean withBefore) throws IOException {
         moveIntoPlace(path, save(shard, userData, withBefore));
     }
@@ -121,25 +120,25 @@ public final class ShardFile {
         }
     }
 
-    public static @NotNull UserDataView load(@NotNull Shard shard, @NotNull Path path) throws IOException {
+    public static @NotNull UserData.View load(@NotNull Shard shard, @NotNull Path path) throws IOException {
         return load(shard, Files.readAllBytes(path));
     }
 
     /** {@link #load(Shard, byte[])} for an already-parsed {@link Content} - the in-memory half (a live recording's t0 loads without re-encoding). */
-    public static @NotNull UserDataView load(@NotNull Shard shard, @NotNull Content content) {
+    public static @NotNull UserData.View load(@NotNull Shard shard, @NotNull Content content) {
         if (content.tree() != null) throw new IllegalArgumentException("a tree file - load with loadTree");
         apply(shard, content);
-        return new UserDataView(content.user());
+        return new UserData.View(content.user());
     }
 
     /** Just the file's user-data section, no shard touched - listing saved games/replays by their metadata. */
-    public static @NotNull UserDataView userData(byte @NotNull [] data) {
-        return new UserDataView(decode(data).user());
+    public static @NotNull UserData.View userData(byte @NotNull [] data) {
+        return new UserData.View(decode(data).user());
     }
 
     /** {@link #userData(byte[])} over an already-{@link #decode decoded} file (validate-then-load without a second decode). */
-    public static @NotNull UserDataView userData(@NotNull Content content) {
-        return new UserDataView(content.user());
+    public static @NotNull UserData.View userData(@NotNull Content content) {
+        return new UserData.View(content.user());
     }
 
     /**
@@ -166,12 +165,12 @@ public final class ShardFile {
         }
 
         /** Serializes; {@code extra} entries merge over {@link #user} (new keys win). Deterministic byte-for-byte. */
-        public byte @NotNull [] encode(@Nullable Consumer<UserDataWriter> extra) {
+        public byte @NotNull [] encode(@Nullable Consumer<UserData.Writer> extra) {
             CompoundBinaryTag u = user;
             if (extra != null) {
-                UserDataWriter writer = new UserDataWriter();
+                UserData.Writer writer = new UserData.Writer();
                 extra.accept(writer);
-                u = CompoundBinaryTag.builder().put(u).put(writer.tags.build()).build();
+                u = CompoundBinaryTag.builder().put(u).put(writer.build()).build();
             }
             CompoundBinaryTag.Builder root = CompoundBinaryTag.builder()
                     .putInt("v", FORMAT)
@@ -252,9 +251,8 @@ public final class ShardFile {
             }
         }
         CompoundBinaryTag sky = tag.getCompound("sky");
-        long time = sky.get("time") != null ? sky.getLong("time") : -1;
-        Weather weather = sky.get("rain") != null ? new Weather(sky.getFloat("rain"), sky.getFloat("thunder")) : null;
-        return new Content(minY, maxY, diff, before, time, weather, tag.getCompound("user"), null);
+        return new Content(minY, maxY, diff, before, Nbt.skyTime(sky), Nbt.skyWeather(sky),
+                tag.getCompound("user"), null);
     }
 
     public static byte @NotNull [] saveTree(@NotNull Shard root) {
@@ -268,7 +266,7 @@ public final class ShardFile {
      * recipe here too - descriptors under a per-layer {@link DataKey}.
      */
     public static byte @NotNull [] saveTree(@NotNull Shard root, @Nullable Function<Shard, String> names,
-                                            @Nullable BiConsumer<Shard, UserDataWriter> userData) {
+                                            @Nullable BiConsumer<Shard, UserData.Writer> userData) {
         List<Shard> shards = new ArrayList<>();
         collectTree(root, shards);
         Map<Shard, Integer> index = new HashMap<>();
@@ -281,9 +279,9 @@ public final class ShardFile {
             parents[i] = i == 0 ? -1 : index.get(s.parent());
             CompoundBinaryTag.Builder user = CompoundBinaryTag.builder();
             if (userData != null) {
-                UserDataWriter writer = new UserDataWriter();
+                UserData.Writer writer = new UserData.Writer();
                 userData.accept(s, writer);
-                user.put(writer.tags.build());
+                user.put(writer.build());
             }
             String name = names != null ? names.apply(s) : null;
             if (name != null) user.putString(NAME.id(), name);
@@ -318,7 +316,7 @@ public final class ShardFile {
     }
 
     /** A loaded tree layer: the fresh shard plus its saved user data ({@link #NAME} names it, when saved). */
-    public record TreeLayer(@NotNull Shard shard, @NotNull UserDataView data) {}
+    public record TreeLayer(@NotNull Shard shard, @NotNull UserData.View data) {}
 
     /** Rebuilds a {@link #saveTree tree file} as fresh server-ticked shards over {@code base}; layer 0 = the root. */
     public static @NotNull List<TreeLayer> loadTree(@NotNull Instance base, byte @NotNull [] data) {
@@ -340,7 +338,7 @@ public final class ShardFile {
             Shard shard = i == 0 ? root : new Shard(shards.get(parsed.parents()[i]));
             apply(shard, c);
             shards.add(shard);
-            out.add(new TreeLayer(shard, new UserDataView(c.user())));
+            out.add(new TreeLayer(shard, new UserData.View(c.user())));
         }
         return List.copyOf(out);
     }
@@ -559,10 +557,7 @@ public final class ShardFile {
 
     private static void putSky(CompoundBinaryTag.Builder root, long time, @Nullable Weather weather) {
         if (time < 0 && weather == null) return;
-        CompoundBinaryTag.Builder sky = CompoundBinaryTag.builder();
-        if (time >= 0) sky.putLong("time", time);
-        if (weather != null) sky.putFloat("rain", weather.rainLevel()).putFloat("thunder", weather.thunderLevel());
-        root.put("sky", sky.build());
+        root.put("sky", Nbt.sky(time, weather));
     }
 
     // palettes up to 255 entries (the norm) store one BYTE per block; 0xFF = the no-before sentinel
@@ -603,11 +598,11 @@ public final class ShardFile {
      * corrupt file (or one saved on a different Minecraft version) throws and leaves the shard untouched.
      * Tree files throw - {@link #loadTree} rebuilds those.
      */
-    public static @NotNull UserDataView load(@NotNull Shard shard, byte @NotNull [] data) {
+    public static @NotNull UserData.View load(@NotNull Shard shard, byte @NotNull [] data) {
         Content content = decode(data);
         if (content.tree() != null) throw new IllegalArgumentException("a tree file - load with loadTree");
         apply(shard, content);
-        return new UserDataView(content.user());
+        return new UserData.View(content.user());
     }
 
     private static void apply(Shard shard, Content content) {
@@ -678,29 +673,4 @@ public final class ShardFile {
         return palette;
     }
 
-    /** Collects {@link DataKey} entries at save time (values Codec-encode to NBT immediately). */
-    public static final class UserDataWriter {
-        private final CompoundBinaryTag.Builder tags = CompoundBinaryTag.builder();
-
-        UserDataWriter() {}
-
-        public <T> @NotNull UserDataWriter put(@NotNull DataKey<T> key, @NotNull T value) {
-            tags.put(key.id(), key.codec().encode(Transcoder.NBT, value).orElseThrow());
-            return this;
-        }
-    }
-
-    /** The saved user data of a loaded file; {@link #get} decodes on access ({@code null} when absent). */
-    public static final class UserDataView {
-        private final CompoundBinaryTag tags;
-
-        UserDataView(CompoundBinaryTag tags) {
-            this.tags = tags;
-        }
-
-        public <T> @Nullable T get(@NotNull DataKey<T> key) {
-            BinaryTag tag = tags.get(key.id());
-            return tag == null ? null : key.codec().decode(Transcoder.NBT, tag).orElseThrow();
-        }
-    }
 }

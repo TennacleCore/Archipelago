@@ -193,12 +193,6 @@ public final class Visuals {
             EntityType.SMALL_FIREBALL, EntityType.DRAGON_FIREBALL, EntityType.WITHER_SKULL,
             EntityType.WIND_CHARGE, EntityType.BREEZE_WIND_CHARGE, EntityType.SHULKER_BULLET);
 
-    /** Whether the CLIENT integrates this entity's velocity linearly under NO_GRAVITY (snowballs, arrows,
-     *  items, TNT: inertia ~0.99) - the leg-flight family. Living entities are interpolation-driven
-     *  remotely; {@link #OWN_SIM} clients fight external velocity - both glide on relative moves instead. */
-    public static boolean velocityFlier(@NotNull Entity entity) {
-        return !(entity instanceof LivingEntity) && !OWN_SIM.contains(entity.getEntityType());
-    }
 
     /** The bobber sinks client-side even parked (its gravity ignores NO_GRAVITY). */
     public static boolean clientRestless(@NotNull Entity entity) {
@@ -216,13 +210,6 @@ public final class Visuals {
     /** A stuck arrow's synced IN_GROUND freezes the client's own sim: velocity packets do nothing there. */
     public static boolean clientFrozen(@NotNull Entity entity) {
         return entity.getEntityMeta() instanceof AbstractArrowMeta arrow && arrow.isInGround();
-    }
-
-
-    /** The TNT client mangles grounded velocity itself (x0.7/-0.5/x0.7 per tick on ground): leg velocities
-     *  need re-asserting EVERY tick or the landing/bounce fight renders as a stall-then-hop. */
-    public static boolean clientMeddles(@NotNull Entity entity) {
-        return entity.getEntityType() == EntityType.TNT;
     }
 
     /** A resting NON-stuck arrow faces yaw0/pitch0 on modern clients (they rotate arrows toward velocity;

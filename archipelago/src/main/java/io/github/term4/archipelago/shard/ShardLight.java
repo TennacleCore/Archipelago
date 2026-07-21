@@ -6,7 +6,6 @@ import net.minestom.server.collision.Shape;
 import net.minestom.server.coordinate.BlockVec;
 import net.minestom.server.coordinate.CoordConversion;
 import net.minestom.server.coordinate.Point;
-import net.minestom.server.coordinate.Vec;
 import net.minestom.server.entity.Player;
 import net.minestom.server.instance.Chunk;
 import net.minestom.server.instance.Instance;
@@ -322,6 +321,10 @@ final class ShardLight implements ShardLighting {
         knownColumns.remove(index);
         lit.remove(index);
         cache.remove(index);
+        int cx = CoordConversion.chunkIndexGetX(index), cz = CoordConversion.chunkIndexGetZ(index);
+        // level() reads by Sec: a stale entry would keep serving the deleted-source light after the restore
+        blockLights.keySet().removeIf(s -> s.x() == cx && s.z() == cz);
+        skyLights.keySet().removeIf(s -> s.x() == cx && s.z() == cz);
         ShardLighting.restoreBase(shard, index);
     }
 

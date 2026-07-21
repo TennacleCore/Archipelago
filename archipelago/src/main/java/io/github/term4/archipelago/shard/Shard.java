@@ -911,7 +911,7 @@ public final class Shard implements WorldAccess {
     }
 
     private boolean blockViewer(Player p) {
-        return p.getInstance() == base && ShardView.of(p).blocks() == this;
+        return p.getInstance() == base && WorldPolicy.seesBlocks(p, this);
     }
 
     boolean hasBlockViewers() {

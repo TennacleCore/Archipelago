@@ -2,9 +2,6 @@ package io.github.term4.archipelago.storage.polar;
 
 import com.github.luben.zstd.Zstd;
 import io.github.term4.archipelago.shard.Shard;
-import io.github.term4.archipelago.storage.DataKey;
-import io.github.term4.archipelago.storage.EntityDescriptors;
-import io.github.term4.archipelago.storage.Nbt;
 import net.hollowcube.polar.PolarChunk;
 import net.hollowcube.polar.PolarReader;
 import net.hollowcube.polar.PolarSection;

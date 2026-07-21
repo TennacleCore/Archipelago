@@ -1,6 +1,5 @@
 package io.github.term4.archipelago.ticking;
 
-import io.github.term4.archipelago.shard.Shard;
 import io.github.term4.archipelago.testsupport.DetectorEntity;
 import io.github.term4.archipelago.testsupport.HeadlessServerTest;
 import net.minestom.server.coordinate.Pos;

@@ -45,7 +45,7 @@ class ShardFileTest extends HeadlessServerTest {
         byte[] file = ShardFile.save(source, w -> w.put(ROUND, 7), true);
 
         Shard target = new Shard(instance);
-        ShardFile.UserDataView view = ShardFile.load(target, file);
+        UserData.View view = ShardFile.load(target, file);
         assertEquals(Block.GOLD_BLOCK, target.getBlock(buried));
         assertEquals(Block.DIAMOND_BLOCK, target.getBlock(aired));
         assertEquals(7, view.get(ROUND));
@@ -163,7 +163,7 @@ class ShardFileTest extends HeadlessServerTest {
         Shard rootTwin = new Shard(instance);
         ShardFile.load(rootTwin, parts.get(0));
         Shard childTwin = new Shard(rootTwin);
-        ShardFile.UserDataView view = ShardFile.load(childTwin, parts.get(1));
+        UserData.View view = ShardFile.load(childTwin, parts.get(1));
         assertEquals(child.diff(), childTwin.diff());
         assertEquals("base", view.get(ShardFile.PARENT), "split filled the parent hint");
         assertArrayEquals(tree, ShardFile.join(parts), "join is split's byte-exact inverse");
@@ -198,7 +198,7 @@ class ShardFileTest extends HeadlessServerTest {
         PolarShardCodec.fromShardFile(flat); // the last hop parses clean
 
         Shard offline = new Shard(instance);
-        ShardFile.UserDataView user = ShardFile.load(offline, flat);
+        UserData.View user = ShardFile.load(offline, flat);
         Shard runtime = leaf.flatten();
         assertEquals(runtime.diff(), offline.diff(), "file-level flatten equals the runtime flatten's diff");
         assertEquals(runtime.timeOverride(), offline.timeOverride());

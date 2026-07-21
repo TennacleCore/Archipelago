@@ -7,7 +7,7 @@ import net.minestom.server.entity.Player;
 import org.jetbrains.annotations.NotNull;
 
 /**
- * {@link WorldPolicy} whose block-view test consults {@link ShardView}. Installed automatically by
+ * {@link WorldPolicy} whose entity- and block-view tests consult {@link ShardView}. Installed automatically by
  * {@link Shard#blockRouting()} when the policy is still the plain default; extend THIS (not {@code SAME_WORLD})
  * when overriding with shards in play.
  */

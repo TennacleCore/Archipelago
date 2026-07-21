@@ -31,9 +31,11 @@ public interface WorldPolicy {
         return false;
     }
 
-    /** Whether {@code viewer}'s client renders {@code world}'s BLOCKS - the filter for block-anchored FX. */
+    /** Whether {@code viewer}'s client renders {@code world}'s BLOCKS - the audience test for block/light
+     *  updates and block-anchored FX ({@code Shard} routing consults it, so a blocks-only view is expressible). */
     default boolean seesBlocksOf(@NotNull Player viewer, @NotNull WorldAccess world) {
-        return viewer.getTag(WorldAccess.ENTITY_TAG) == null && viewer.getInstance() == world.instance();
+        WorldAccess bound = viewer.getTag(WorldAccess.ENTITY_TAG);
+        return bound == world || (bound == null && viewer.getInstance() == world.instance());
     }
 
     static boolean canAffect(@NotNull Entity actor, @NotNull Entity target) {

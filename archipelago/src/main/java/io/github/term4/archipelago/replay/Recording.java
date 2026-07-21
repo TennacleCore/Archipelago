@@ -5,6 +5,7 @@ import io.github.term4.archipelago.event.ShardDestroyEvent;
 import io.github.term4.archipelago.event.replay.RecordingStopEvent;
 import io.github.term4.archipelago.storage.Nbt;
 import io.github.term4.archipelago.storage.ShardFile;
+import io.github.term4.archipelago.storage.UserData;
 import io.github.term4.archipelago.replay.channel.Dispatcher;
 import io.github.term4.archipelago.replay.channel.Recordable;
 import io.github.term4.archipelago.replay.channel.Recorded;
@@ -343,7 +344,7 @@ public final class Recording {
     }
 
     /** {@link #stop()} with the app's own {@link io.github.term4.archipelago.storage.DataKey} entries in the file (game results, metadata - read back via {@code ShardFile.userData} or {@code Playback.data}). */
-    public byte @NotNull [] stop(@Nullable Consumer<ShardFile.UserDataWriter> userData) {
+    public byte @NotNull [] stop(@Nullable Consumer<UserData.Writer> userData) {
         endRecording();
         return encodeFile(userData);
     }
@@ -354,7 +355,7 @@ public final class Recording {
     }
 
     /** {@link #stop(Consumer)}, encoded off-thread. */
-    public @NotNull CompletableFuture<byte[]> stopAsync(@Nullable Consumer<ShardFile.UserDataWriter> userData) {
+    public @NotNull CompletableFuture<byte[]> stopAsync(@Nullable Consumer<UserData.Writer> userData) {
         endRecording();
         return CompletableFuture.supplyAsync(() -> encodeFile(userData));
     }
@@ -368,7 +369,7 @@ public final class Recording {
         EventDispatcher.call(new RecordingStopEvent(this));
     }
 
-    private byte[] encodeFile(@Nullable Consumer<ShardFile.UserDataWriter> userData) {
+    private byte[] encodeFile(@Nullable Consumer<UserData.Writer> userData) {
         CompoundBinaryTag.Builder channels = CompoundBinaryTag.builder();
         ops.forEach((type, list) -> {
             List<Recorded<?>> all = materialize(type, list);
