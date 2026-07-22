@@ -23,7 +23,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * (second chance, same thread); past {@code quarantineAfterMs} the domain has FAILED - a crash report is written,
  * the clock retires, a waking zombie exits without ticking, {@code DomainQuarantineEvent} fires
  * ({@link #detach}/{@link #attach}/{@link #retire} still work on the frozen domain for teardown). A hung tick
- * cannot be killed on the JVM, only contained - never re-clock a failed domain, rebuild fresh.
+ * cannot be killed on the JVM, only contained - never re-clock a failed domain.
  */
 final class DomainManager {
 
@@ -59,9 +59,8 @@ final class DomainManager {
     static final Object SERVER = new Object();
 
     /**
-     * Hands {@code entity} to {@code domain}: evicted from the global dispatcher, ticked on the domain's clock.
-     * Transfers are a mailbox - this stamps the destination (the latest stamp wins) and only the CURRENT
-     * owner's clock hands the entity away, so a hand-off can never race the owner's in-flight tick.
+     * Stamps {@code domain} as {@code entity}'s destination (latest stamp wins); only the CURRENT owner's clock
+     * hands the entity away, so a hand-off can never race the owner's in-flight tick.
      *
      * @throws IllegalArgumentException when {@code entity}'s class is not {@link DomainTicked opt-out covered} -
      *                                  it would re-register on its next chunk crossing and double-tick
@@ -111,33 +110,27 @@ final class DomainManager {
     // eviction (one period; DomainEntity's ownership gate covers a server stalled past it)
     private void claimOwnerless(Domain target, Entity entity, boolean fromServer) {
         if (target.stasis) { // deliberate freeze: no clock to serialize on - direct, stamp-guarded
-            if (entity.getTag(Domain.TAG) != null) return; // owned meanwhile; that clock honors the stamp
-            if (entity.getTag(Domain.MOVE) != target) {
-                dispatchOwnerless(entity, fromServer);
-                return;
-            }
-            entity.setTag(Domain.TAG, target);
-            entity.removeTag(Domain.MOVE);
-            globalDispatcher().removeElement(entity);
-            target.entities.add(entity);
+            claim(target, entity, fromServer);
             return;
         }
-        boolean relayed = onClock(target, () -> {
-            if (entity.getTag(Domain.TAG) != null) return; // owned meanwhile; that clock honors the stamp
-            if (entity.getTag(Domain.MOVE) != target) { // the stamp moved on while this claim was queued
-                dispatchOwnerless(entity, fromServer);
-                return;
-            }
-            entity.setTag(Domain.TAG, target);
-            entity.removeTag(Domain.MOVE);
-            globalDispatcher().removeElement(entity);
-            if (fromServer) {
-                target.arrivals.add(new Domain.Arrival(entity, System.nanoTime() + DomainClock.PERIOD_NANOS));
-            } else {
-                target.entities.add(entity);
-            }
-        });
+        boolean relayed = onClock(target, () -> claim(target, entity, fromServer));
         if (!relayed) dispatchOwnerless(entity, fromServer); // target died mid-claim: never strand
+    }
+
+    private void claim(Domain target, Entity entity, boolean fromServer) {
+        if (entity.getTag(Domain.TAG) != null) return; // owned meanwhile; that clock honors the stamp
+        if (entity.getTag(Domain.MOVE) != target) { // the stamp moved on while this claim was queued
+            dispatchOwnerless(entity, fromServer);
+            return;
+        }
+        entity.setTag(Domain.TAG, target);
+        entity.removeTag(Domain.MOVE);
+        globalDispatcher().removeElement(entity);
+        if (fromServer && !target.stasis) {
+            target.arrivals.add(new Domain.Arrival(entity, System.nanoTime() + DomainClock.PERIOD_NANOS));
+        } else {
+            target.entities.add(entity);
+        }
     }
 
     // an ownerless entity goes wherever its stamp points; no live (or stasis) destination = back to the server
@@ -211,8 +204,7 @@ final class DomainManager {
         }
     }
 
-    // ownership ops run on the owning clock's thread, between its ticks; false = no live clock (retired or
-    // quarantined - a possibly-still-running zombie must not be raced), callers fall back or drop
+    // false = no live clock (retired or quarantined - a possibly-still-running zombie must not be raced)
     private boolean onClock(Domain domain, Runnable op) {
         DomainClock clock = clocks.get(domain);
         if (clock == null || clock.quarantined) return false;
@@ -224,18 +216,12 @@ final class DomainManager {
         return clocks.containsKey(domain);
     }
 
-    /**
-     * Carriers permanently lost to quarantined spinners, JVM-wide - the degradation signal an orchestration
-     * layer polls (drain/replace policy is deliberately NOT this library's job; the server plays on).
-     */
+    /** Carriers permanently lost to quarantined spinners, JVM-wide. */
     static int zombieCarriers() {
         return Watchdog.zombies();
     }
 
-    /**
-     * Smoothed tick COST of {@code domain} in ms ({@code 0} = no clock) - the saturation gauge next to
-     * lag (lateness): cost creeping toward the 50ms period predicts lag before it happens.
-     */
+    /** Smoothed tick COST in ms ({@code 0} = no clock); cost creeping toward the period predicts lag. */
     double mspt(@NotNull Domain domain) {
         DomainClock clock = clocks.get(domain);
         return clock == null ? 0 : clock.mspt();

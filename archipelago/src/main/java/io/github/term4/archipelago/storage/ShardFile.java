@@ -20,7 +20,6 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.AtomicMoveNotSupportedException;
@@ -29,7 +28,6 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -37,7 +35,6 @@ import java.util.function.BiConsumer;
 import java.util.function.BinaryOperator;
 import java.util.function.Consumer;
 import java.util.function.Function;
-import java.util.function.Supplier;
 
 /**
  * The lib format ({@code .shard}): a shard IS its diff. One gzip'd NBT compound - a string-state palette (version
@@ -71,7 +68,7 @@ public final class ShardFile {
     public static byte @NotNull [] save(@NotNull Shard shard, @Nullable Consumer<UserData.Writer> userData,
                                         boolean withBefore) {
         // one relay for the whole capture: diff and the before column read the same instant, not one tick apart
-        Content content = onOwner(shard, () -> {
+        Content content = shard.relay(() -> {
             Content snap = snapshot(shard);
             if (!withBefore) return snap;
             Map<Point, Block> before = new HashMap<>();
@@ -84,11 +81,6 @@ public final class ShardFile {
                     snap.time(), snap.weather(), snap.user(), null);
         });
         return content.encode(userData);
-    }
-
-    private static <T> T onOwner(Shard shard, Supplier<T> op) {
-        var domain = shard.domain();
-        return domain != null ? domain.relay(op) : op.get();
     }
 
     public static void save(@NotNull Shard shard, @NotNull Path path) throws IOException {
@@ -177,7 +169,7 @@ public final class ShardFile {
                     .putInt("minY", minY).putInt("maxY", maxY);
             putLayer(root, diff, before, time, weather, u);
             if (tree != null) root.put("tree", tree);
-            return write(root.build());
+            return Nbt.writeBytes(root.build(), BinaryTagIO.Compression.GZIP);
         }
     }
 
@@ -196,12 +188,9 @@ public final class ShardFile {
     private static void putLayer(CompoundBinaryTag.Builder out, Map<Point, Block> diff,
                                  @Nullable Map<Point, Block> before, long time, @Nullable Weather weather,
                                  CompoundBinaryTag user) {
-        // position-sorted columns turn into near-arithmetic byte sequences - most of the compression
         List<Map.Entry<Point, Block>> entries = new ArrayList<>(diff.entrySet());
-        entries.sort(Comparator.comparingInt((Map.Entry<Point, Block> en) -> en.getKey().blockY())
-                .thenComparingInt(en -> en.getKey().blockZ()).thenComparingInt(en -> en.getKey().blockX()));
-        List<String> palette = new ArrayList<>();
-        Map<String, Integer> paletteIndex = new HashMap<>();
+        entries.sort(Map.Entry.comparingByKey(Nbt.POSITION_ORDER));
+        Nbt.Palette palette = new Nbt.Palette();
         int[] xs = new int[entries.size()], ys = new int[entries.size()], zs = new int[entries.size()];
         int[] states = new int[entries.size()];
         int[] beforeCol = before != null ? new int[entries.size()] : null;
@@ -211,15 +200,15 @@ public final class ShardFile {
             xs[i] = pos.blockX();
             ys[i] = pos.blockY();
             zs[i] = pos.blockZ();
-            states[i] = paletteId(entry.getValue(), palette, paletteIndex);
+            states[i] = palette.id(Nbt.blockString(entry.getValue()));
             if (beforeCol != null) {
                 Block covered = before.get(pos);
-                beforeCol[i] = covered == null ? NO_BEFORE : paletteId(covered, palette, paletteIndex);
+                beforeCol[i] = covered == null ? NO_BEFORE : palette.id(Nbt.blockString(covered));
             }
             i++;
         }
         ListBinaryTag.Builder<StringBinaryTag> states0 = ListBinaryTag.builder(BinaryTagTypes.STRING);
-        for (String state : palette) states0.add(StringBinaryTag.stringBinaryTag(state));
+        for (String state : palette.entries()) states0.add(StringBinaryTag.stringBinaryTag(state));
         out.put("palette", states0.build())
                 .putIntArray("x", xs).putIntArray("y", ys).putIntArray("z", zs);
         putColumn(out, "state", states, palette.size());
@@ -312,7 +301,7 @@ public final class ShardFile {
             }
             out.put("tree", tree.build());
         }
-        return write(out.build());
+        return Nbt.writeBytes(out.build(), BinaryTagIO.Compression.GZIP);
     }
 
     /** A loaded tree layer: the fresh shard plus its saved user data ({@link #NAME} names it, when saved). */
@@ -529,16 +518,6 @@ public final class ShardFile {
         return tag.get(key) instanceof StringBinaryTag s ? s.value() : null;
     }
 
-    private static byte[] write(CompoundBinaryTag root) {
-        try (ByteArrayOutputStream out = new ByteArrayOutputStream()) {
-            // canonical: equal content = equal bytes, whatever maps the compounds rode in on
-            BinaryTagIO.writer().write(Nbt.canonical(root), out, BinaryTagIO.Compression.GZIP);
-            return out.toByteArray();
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
-        }
-    }
-
     // palette strings stay nbt-less (twins share the entry); NBT/handler detail is a sparse per-entry section
     private static void putNbt(CompoundBinaryTag.Builder root, List<Map.Entry<Point, Block>> entries) {
         ListBinaryTag.Builder<CompoundBinaryTag> out = null;
@@ -582,16 +561,6 @@ public final class ShardFile {
         return out;
     }
 
-    private static int paletteId(Block block, List<String> palette, Map<String, Integer> index) {
-        String state = Nbt.blockString(block);
-        Integer known = index.get(state);
-        if (known != null) return known;
-        int id = palette.size();
-        palette.add(state);
-        index.put(state, id);
-        return id;
-    }
-
     /**
      * Applies a saved diff + sky overrides onto {@code shard} (one batched {@code setBlocks}, merging over
      * anything there) and returns the typed user-data view. Nothing mutates until the whole file parses - a
@@ -599,10 +568,7 @@ public final class ShardFile {
      * Tree files throw - {@link #loadTree} rebuilds those.
      */
     public static @NotNull UserData.View load(@NotNull Shard shard, byte @NotNull [] data) {
-        Content content = decode(data);
-        if (content.tree() != null) throw new IllegalArgumentException("a tree file - load with loadTree");
-        apply(shard, content);
-        return new UserData.View(content.user());
+        return load(shard, decode(data));
     }
 
     private static void apply(Shard shard, Content content) {
@@ -661,15 +627,7 @@ public final class ShardFile {
     private static Block[] parsePalette(CompoundBinaryTag root) {
         ListBinaryTag entries = root.getList("palette", BinaryTagTypes.STRING);
         Block[] palette = new Block[entries.size()];
-        for (int i = 0; i < palette.length; i++) {
-            String state = entries.getString(i);
-            try {
-                palette[i] = Nbt.block(state);
-            } catch (RuntimeException e) {
-                throw new IllegalArgumentException("unknown block state '" + state
-                        + "' (saved on a different Minecraft version?)", e);
-            }
-        }
+        for (int i = 0; i < palette.length; i++) palette[i] = Nbt.parseState(entries.getString(i));
         return palette;
     }
 

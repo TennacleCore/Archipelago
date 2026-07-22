@@ -29,10 +29,9 @@ public interface DomainTicked {
     }
 
     /**
-     * Whether a stale driver - not the owning clock - is calling {@code tick}: adoption's eviction is a queued
-     * dispatcher signal, and a server stalled past the one-period defer can still drain it late and tick a
-     * just-adopted entity. Ownership, not timing, is the double-tick gate; every covered {@code tick} override
-     * bails out first when true.
+     * Whether something other than the owning clock is calling {@code tick}: the dispatcher's eviction is queued,
+     * so a server stalled past the one-period defer can still tick a just-adopted entity. Every covered
+     * {@code tick} override bails out first when true.
      */
     static boolean foreignDriver(@NotNull Entity entity) {
         ExecutionDomain owner = ExecutionDomain.of(entity);

@@ -2,7 +2,6 @@ package io.github.term4.archipelago.shard;
 
 import io.github.term4.archipelago.testsupport.FakePlayer;
 import io.github.term4.archipelago.testsupport.HeadlessServerTest;
-import net.minestom.server.MinecraftServer;
 import net.minestom.server.coordinate.Vec;
 import net.minestom.server.instance.block.Block;
 import net.minestom.server.coordinate.Pos;
@@ -23,11 +22,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class ShardLightParityTest extends HeadlessServerTest {
 
     private static final int CX = 3600 >> 4, CZ = 3600 >> 4;
-
-    private static void tick() {
-        MinecraftServer.getSchedulerManager().processTick();
-        MinecraftServer.getSchedulerManager().processTickEnd();
-    }
 
     /** The edit script, applied to both shards: buried lights, add+remove, a roof punch (sky shaft
      *  down), a built roof (sky shaft darkening), chunk-border edits (cross-chunk propagation). */
@@ -113,8 +107,7 @@ class ShardLightParityTest extends HeadlessServerTest {
 
     @Test
     void incrementalFlushesMatchAFullRecompute() {
-        for (int dx = -1; dx <= 1; dx++)
-            for (int dz = -1; dz <= 1; dz++) instance.loadChunk(CX + dx, CZ + dz).join();
+        loadArea(CX, CZ);
 
         Shard evolved = new Shard(instance);
         evolved.relight(true);

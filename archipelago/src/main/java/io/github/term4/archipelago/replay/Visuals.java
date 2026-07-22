@@ -12,7 +12,6 @@ import net.minestom.server.coordinate.Vec;
 import net.minestom.server.entity.Entity;
 import net.minestom.server.entity.EntityPose;
 import net.minestom.server.entity.EntityType;
-import net.minestom.server.entity.EquipmentSlot;
 import net.minestom.server.entity.LivingEntity;
 import net.minestom.server.entity.Metadata;
 import net.minestom.server.entity.metadata.projectile.AbstractArrowMeta;
@@ -45,14 +44,7 @@ public final class Visuals {
             if (encoded != null) meta.add(CompoundBinaryTag.builder().putInt("i", index).put(encoded).build());
         });
         out.put("meta", meta.build());
-        if (entity instanceof LivingEntity living) {
-            CompoundBinaryTag.Builder equip = CompoundBinaryTag.builder();
-            for (EquipmentSlot slot : EquipmentSlot.values()) {
-                ItemStack item = living.getEquipment(slot);
-                if (!item.isAir()) equip.put(slot.name(), Nbt.item(item));
-            }
-            out.put("equip", equip.build());
-        }
+        if (entity instanceof LivingEntity living) out.put("equip", Nbt.equipment(living));
         return out.build();
     }
 
@@ -73,10 +65,7 @@ public final class Visuals {
         CompoundBinaryTag equip = snapshot.getCompound("equip");
         if (!equip.keySet().isEmpty()) {
             VisualLiving living = new VisualLiving(type, meta);
-            for (EquipmentSlot slot : EquipmentSlot.values()) {
-                BinaryTag item = equip.get(slot.name());
-                if (item != null) living.setEquipment(slot, Nbt.item(item));
-            }
+            Nbt.applyEquipment(living, equip);
             return living;
         }
         return new VisualEntity(type, owner == null ? 0 : owner.getEntityId(), meta);

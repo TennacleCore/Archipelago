@@ -12,7 +12,6 @@ import net.minestom.server.coordinate.Pos;
 import net.minestom.server.coordinate.Vec;
 import net.minestom.server.entity.Entity;
 import net.minestom.server.entity.EntityType;
-import net.minestom.server.entity.EquipmentSlot;
 import net.minestom.server.entity.ExperienceOrb;
 import net.minestom.server.entity.ItemEntity;
 import net.minestom.server.entity.LivingEntity;
@@ -57,11 +56,7 @@ public final class EntityDescriptors {
             LivingEntity living = new RevivedLiving(EntityType.fromKey(data.getString("type")));
             readData(data, living);
             living.setHealth(data.getFloat("health"));
-            CompoundBinaryTag equipment = data.getCompound("equipment");
-            for (EquipmentSlot slot : EquipmentSlot.values()) {
-                BinaryTag item = equipment.get(slot.name());
-                if (item != null) living.setEquipment(slot, Nbt.item(item));
-            }
+            Nbt.applyEquipment(living, data.getCompound("equipment"));
             return stampCopy(living);
         });
         REVIVERS.put("archipelago:item", data -> {
@@ -134,13 +129,8 @@ public final class EntityDescriptors {
         if (type == Entity.class || type == DomainEntity.class) return generic("archipelago:entity", entity).build();
         if (type == LivingEntity.class || type == RevivedLiving.class) {
             LivingEntity living = (LivingEntity) entity;
-            CompoundBinaryTag.Builder equipment = CompoundBinaryTag.builder();
-            for (EquipmentSlot slot : EquipmentSlot.values()) {
-                ItemStack item = living.getEquipment(slot);
-                if (!item.isAir()) equipment.put(slot.name(), Nbt.item(item));
-            }
             return generic("archipelago:living", entity)
-                    .putFloat("health", living.getHealth()).put("equipment", equipment.build()).build();
+                    .putFloat("health", living.getHealth()).put("equipment", Nbt.equipment(living)).build();
         }
         if (type == ItemEntity.class || type == RevivedItem.class) {
             ItemEntity item = (ItemEntity) entity;

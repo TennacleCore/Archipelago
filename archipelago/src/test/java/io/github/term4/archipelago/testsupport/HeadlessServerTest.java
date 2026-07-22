@@ -36,6 +36,18 @@ public abstract class HeadlessServerTest {
         instance.loadChunk(0, 0).join();
     }
 
+    // headless has no server ticker: samplers, flushes and playback tickers are driven by hand
+    protected static void tick() {
+        MinecraftServer.getSchedulerManager().processTick();
+        MinecraftServer.getSchedulerManager().processTickEnd();
+    }
+
+    protected static void loadArea(int chunkX, int chunkZ) {
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dz = -1; dz <= 1; dz++) instance.loadChunk(chunkX + dx, chunkZ + dz).join();
+        }
+    }
+
     /** Spin-waits (4s cap) for {@code done}, then asserts it. */
     protected static void await(String what, Supplier<Boolean> done) {
         long deadline = System.currentTimeMillis() + 4000;

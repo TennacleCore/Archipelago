@@ -94,8 +94,7 @@ public final class ExecutionDomain {
 
     /**
      * Runs {@code task} on this domain's next tick - the cross-domain hand-off. Runs inline when the domain has
-     * no live clock. The queue is unbounded by design (bounding would drop or reroute shard work); a producer
-     * outpacing the drain gets one WARN.
+     * no live clock. The queue is unbounded by design; a producer outpacing the drain gets one WARN.
      */
     public void execute(@NotNull Runnable task) {
         node.execute(task);
@@ -177,20 +176,19 @@ public final class ExecutionDomain {
     }
 
     /**
-     * Raw domain facts, no opinions. {@code lag} = ticks behind wall time (the one failure signal - a clock
-     * never runs ahead); {@code mspt*} = tick cost in ms (cost creeping toward the period predicts lag);
-     * {@code deadlineMisses} = ticks whose cost exceeded the period (monotonic). {@code threadName} is null and
-     * {@code alive} false once the clock retired or failed.
+     * {@code lag} = ticks behind wall time (a clock never runs ahead); {@code mspt*} = tick cost in ms (cost
+     * creeping toward the period predicts lag); {@code deadlineMisses} = ticks whose cost exceeded the period
+     * (monotonic). {@code threadName} is null and {@code alive} false once the clock retired or failed.
      */
     public record Metrics(long ticks, long lag, double msptLast, double msptEwma, double msptMax,
                           long deadlineMisses, int taskBacklog, int pendingArrivals, int entityCount,
                           int hookCount, @Nullable String threadName, boolean alive, long tickPeriodNanos) {}
 
     /**
-     * Raw engine facts. {@code parallelism} = the configured carrier cap
-     * ({@code -Djdk.virtualThreadScheduler.parallelism}, default = cores); the ACTIVE carrier count is not
-     * observable via supported JDK API. {@code zombieCarriers}/{@code interrupts}/{@code quarantines} are
-     * JVM-wide watchdog counters; {@code clocks} counts the engine's live clocks.
+     * {@code parallelism} = the configured carrier cap ({@code -Djdk.virtualThreadScheduler.parallelism},
+     * default = cores); the ACTIVE carrier count is not observable via supported JDK API.
+     * {@code zombieCarriers}/{@code interrupts}/{@code quarantines} are JVM-wide watchdog counters;
+     * {@code clocks} counts the engine's live clocks.
      */
     public record Engine(int clocks, int zombieCarriers, int parallelism, int cores,
                          long interrupts, long quarantines) {}

@@ -4,7 +4,6 @@ import io.github.term4.archipelago.replay.core.CoreChannels;
 import io.github.term4.archipelago.shard.Shard;
 import io.github.term4.archipelago.testsupport.FakePlayer;
 import io.github.term4.archipelago.testsupport.HeadlessServerTest;
-import net.minestom.server.MinecraftServer;
 import net.minestom.server.coordinate.Pos;
 import net.minestom.server.network.ConnectionState;
 import net.minestom.server.network.packet.server.SendablePacket;
@@ -21,16 +20,20 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /** Fractional rates render as MOTION, not sparser teleports: the ghost glides every theater tick. */
 class ReplaySlowMotionTest extends HeadlessServerTest {
 
-    private static void tick() {
-        MinecraftServer.getSchedulerManager().processTick();
-        MinecraftServer.getSchedulerManager().processTickEnd();
+    /** Ticks until the non-player twin is on stage - the revival spawn is async. */
+    private static net.minestom.server.entity.Entity awaitTwin(Shard theater) {
+        net.minestom.server.entity.Entity twin = null;
+        for (int i = 0; i < 100 && twin == null; i++) {
+            tick();
+            twin = theater.entities().stream().filter(e -> !(e instanceof net.minestom.server.entity.Player))
+                    .findFirst().orElse(null);
+        }
+        return twin;
     }
 
     @Test
     void quarterRateGlidesTheGhostEveryTick() {
-        for (int cx = 250; cx <= 252; cx++) {
-            for (int cz = -1; cz <= 1; cz++) instance.loadChunk(cx, cz).join();
-        }
+        loadArea(251, 0);
         CoreChannels.register();
         Shard live = new Shard(instance);
         FakePlayer actor = FakePlayer.connect(instance, new Pos(4000.5, 42, 0.5), "SlowMoActor");
@@ -75,9 +78,7 @@ class ReplaySlowMotionTest extends HeadlessServerTest {
     /** A revived PHYSICS twin parks at fractional rates: glide steps, never full-speed hops between corrections. */
     @Test
     void quarterRateParksThePhysicsTwin() {
-        for (int cx = 399; cx <= 401; cx++) {
-            for (int cz = -1; cz <= 1; cz++) instance.loadChunk(cx, cz).join();
-        }
+        loadArea(400, 0);
         CoreChannels.register();
         Shard live = new Shard(instance);
         Playback pb = null;
@@ -96,12 +97,7 @@ class ReplaySlowMotionTest extends HeadlessServerTest {
             Shard theater = new Shard(instance);
             pb = Replay.play(theater, rec); // REVIVED: the generic tier raises a physics twin, not a stand-in
             pb.rate(0.25);
-            net.minestom.server.entity.Entity twin = null;
-            for (int i = 0; i < 100 && twin == null; i++) {
-                tick();
-                twin = theater.entities().stream().filter(e -> !(e instanceof net.minestom.server.entity.Player))
-                        .findFirst().orElse(null);
-            }
+            var twin = awaitTwin(theater);
             assertNotNull(twin, "the twin rose");
             // parked AT TRACK TIME (before the spawn broadcast): a revived twin's recorded launch velocity
             // must never free-run its own sim - or the client's - at full speed between corrections
@@ -132,9 +128,7 @@ class ReplaySlowMotionTest extends HeadlessServerTest {
      *  would ride at the thrower until the reverse cursor reached the moves - the backwards-throw look. */
     @Test
     void reverseRevivalRisesAtTheRestPoint() {
-        for (int cx = 499; cx <= 501; cx++) {
-            for (int cz = -1; cz <= 1; cz++) instance.loadChunk(cx, cz).join();
-        }
+        loadArea(500, 0);
         CoreChannels.register();
         Shard live = new Shard(instance);
         Playback pb = null;
@@ -158,12 +152,7 @@ class ReplaySlowMotionTest extends HeadlessServerTest {
             pb.seek(9); // past the removal: no twin on stage
             pb.reverse(true);
             pb.pause(false);
-            net.minestom.server.entity.Entity twin = null;
-            for (int i = 0; i < 100 && twin == null; i++) {
-                tick();
-                twin = theater.entities().stream().filter(e -> !(e instanceof net.minestom.server.entity.Player))
-                        .findFirst().orElse(null);
-            }
+            var twin = awaitTwin(theater);
             assertNotNull(twin, "the reverse crossing revived the twin");
             pb.pause(true); // freeze the cursor: the assert is about WHERE it rose
             for (int i = 0; i < 20 && twin.getInstance() == null; i++) tick();
@@ -192,9 +181,7 @@ class ReplaySlowMotionTest extends HeadlessServerTest {
      *  the timeline's remaining wall time - rate changes and pauses included. */
     @Test
     void tntFuseTracksTheTimeline() {
-        for (int cx = 699; cx <= 701; cx++) {
-            for (int cz = -1; cz <= 1; cz++) instance.loadChunk(cx, cz).join();
-        }
+        loadArea(700, 0);
         CoreChannels.register();
         Shard live = new Shard(instance);
         Playback pb = null;
@@ -214,12 +201,7 @@ class ReplaySlowMotionTest extends HeadlessServerTest {
             Shard theater = new Shard(instance);
             pb = Replay.play(theater, rec);
             pb.rate(0.25);
-            net.minestom.server.entity.Entity twin = null;
-            for (int i = 0; i < 100 && twin == null; i++) {
-                tick();
-                twin = theater.entities().stream().filter(e -> !(e instanceof net.minestom.server.entity.Player))
-                        .findFirst().orElse(null);
-            }
+            var twin = awaitTwin(theater);
             assertNotNull(twin, "the twin rose");
             for (int i = 0; i < 4; i++) tick();
             var meta = (net.minestom.server.entity.metadata.other.PrimedTntMeta) twin.getEntityMeta();
@@ -240,9 +222,7 @@ class ReplaySlowMotionTest extends HeadlessServerTest {
      *  stepped on its non-interpolating client (the in-game fireball chop at every rate). */
     @Test
     void fireballTwinGlidesWithoutVelocityRedirects() {
-        for (int cx = 599; cx <= 601; cx++) {
-            for (int cz = -1; cz <= 1; cz++) instance.loadChunk(cx, cz).join();
-        }
+        loadArea(600, 0);
         CoreChannels.register();
         Shard live = new Shard(instance);
         FakePlayer viewer = null;
@@ -264,12 +244,7 @@ class ReplaySlowMotionTest extends HeadlessServerTest {
             theater.join(viewer.player);
             pb = Replay.play(theater, rec);
             pb.rate(0.25);
-            net.minestom.server.entity.Entity twin = null;
-            for (int i = 0; i < 100 && twin == null; i++) {
-                tick();
-                twin = theater.entities().stream().filter(e -> !(e instanceof net.minestom.server.entity.Player))
-                        .findFirst().orElse(null);
-            }
+            var twin = awaitTwin(theater);
             assertNotNull(twin, "the twin rose");
             for (int i = 0; i < 20 && twin.getInstance() == null; i++) tick();
             int id = twin.getEntityId();

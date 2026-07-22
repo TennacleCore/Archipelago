@@ -9,7 +9,7 @@ import io.github.term4.archipelago.replay.Visuals;
 import io.github.term4.archipelago.replay.channel.Applier;
 import io.github.term4.archipelago.replay.channel.Recordable;
 import io.github.term4.archipelago.replay.channel.Recorded;
-import net.kyori.adventure.nbt.BinaryTag;
+import net.kyori.adventure.nbt.CompoundBinaryTag;
 import net.minestom.server.MinecraftServer;
 import net.minestom.server.ServerFlag;
 import net.minestom.server.network.NetworkBuffer;
@@ -226,7 +226,7 @@ final class Appliers {
     static final class MoveApplier implements Applier<Channels.Move> {
         private final LookBack<String, Channels.Move> history = new LookBack<>(Channels.MOVES, Channels.Move::player);
         private final LookBack<String, Channels.Equip> fits = new LookBack<>(Channels.EQUIPS, Channels.Equip::player);
-        /** Active constant-speed legs at fractional rates, per actor; {@link #tick} walks the ghost along. */
+        /** Active constant-speed legs at fractional rates, per actor. */
         private final Map<String, Glide> glides = new HashMap<>();
         private final Map<String, Pin> lastMove = new HashMap<>();
 
@@ -243,12 +243,7 @@ final class Appliers {
                 // a re-raised ghost (respawn/unhide) rises bare, and the recording's re-emitted equips
                 // land a few samples later: dress it from the equip state already at the cursor
                 Recorded<Channels.Equip> fit = fits.latest(pb, m.player(), pb.tick());
-                if (fit != null) {
-                    for (EquipmentSlot slot : EquipmentSlot.values()) {
-                        BinaryTag item = fit.op().items().get(slot.name());
-                        if (item != null) ghost.setEquipment(slot, Nbt.item(item));
-                    }
-                }
+                if (fit != null) Nbt.applyEquipment(ghost, fit.op().items());
                 pb.ghost(m.player(), ghost);
                 pb.layerFor(m.player()).spawn(ghost, pos); // rises straight into its recorded layer
             } else {
@@ -554,7 +549,8 @@ final class Appliers {
             var it = lastTrack.entrySet().iterator();
             while (it.hasNext()) {
                 var entry = it.next();
-                Entity e = pb.entity(entry.getKey());
+                int seq = entry.getKey();
+                Entity e = pb.entity(seq);
                 if (e == null) {
                     // mid-defer (the spawn hasn't materialized) or untracked: the pin stays - deleting
                     // it here lost every leg that crossed before a deferred spawn landed, and the twin
@@ -562,13 +558,13 @@ final class Appliers {
                     // absent body is dropped so settled() can't hold playback open on it; a pin with
                     // nothing refreshing it is a DEAD seq - drop past any defer window (reverse
                     // revivals re-pin through drive)
-                    glides.remove(entry.getKey());
+                    glides.remove(seq);
                     if (Math.abs(pb.tick() - entry.getValue().tick()) > 8) it.remove();
                     continue;
                 }
                 if (e.isRemoved()) {
                     it.remove();
-                    glides.remove(entry.getKey());
+                    glides.remove(seq);
                     continue;
                 }
                 Pin pin = entry.getValue();
@@ -577,11 +573,11 @@ final class Appliers {
                     continue;
                 }
                 // the leg owns the motion
-                Glide g = glides.get(entry.getKey());
+                Glide g = glides.get(seq);
                 // no live leg: a LEG toward the pin, not a snap - drifted rests pull back gently,
                 // stale targets never teleport into the past, seek folds snap
                 if (g == null || Math.abs(pb.tick() - g.builtAt()) > g.span()) {
-                    glides.remove(entry.getKey());
+                    glides.remove(seq);
                     if (pin.pos().distanceSquared(e.getPosition()) > 4) {
                         e.teleport(pin.pos()); // a SNAP is absolute (a stale-anchor rel move mis-lands it)
                         continue;
@@ -591,15 +587,15 @@ final class Appliers {
                     boolean fresh = pb.tick() - pin.tick() <= 1 && !pb.reversed();
                     // reversed, the pin is where the twin already IS - only the backward bridge moves it,
                     // and waiting for the first un-crossing froze 0.01x reversals for seconds
-                    Glide b = fresh ? null : bridge(pb, history, entry.getKey(), e.getPosition());
+                    Glide b = fresh ? null : bridge(pb, history, seq, e.getPosition());
                     if (b != null) {
-                        glides.put(entry.getKey(), b);
+                        glides.put(seq, b);
                         g = b;
                     } else {
                         long dt = fresh ? 1 : Math.max(1, Math.round(4 * pb.rate()));
                         g = leg(e.getPosition(), pin.tick() - dt, pin.pos(), pin.tick(), pb.rate());
-                        if (fresh) glides.put(entry.getKey(), g);
-                        else restFreeze(pb, entry.getKey(), e, pin);
+                        if (fresh) glides.put(seq, g);
+                        else restFreeze(pb, seq, e, pin);
                     }
                 }
                 // the IN_GROUND freeze is a REST state: a real leg (reverse included) re-flies the
@@ -635,26 +631,27 @@ final class Appliers {
                         // bridges pace MAGNIFIED holes; at full rate a hole renders as recorded -
                         // the client coasts its last aim, the live silent-wire look
                         Glide next = pb.rate() < 1 || pb.reversed()
-                                ? bridge(pb, history, entry.getKey(), e.getPosition()) : null;
+                                ? bridge(pb, history, seq, e.getPosition()) : null;
                         if (next == null && pb.rate() >= 1 && !pb.reversed()
-                                && history.firstAfter(pb, entry.getKey(), pb.tick()) != null) {
-                            glides.remove(entry.getKey()); // spent; the next crossing re-aims
+                                && history.firstAfter(pb, seq, pb.tick()) != null) {
+                            glides.remove(seq); // spent; the next crossing re-aims
                             continue;
                         }
                         if (next == null && pb.reversed()) {
                             // the launch hole sits just before the spawn: the move channel has nothing
                             // earlier, so the last backward leg bridges to the spawn point itself
-                            Recorded<Channels.Spawn> born = spawns.latest(pb, entry.getKey(), pb.tick() - 1);
+                            Recorded<Channels.Spawn> born = spawns.latest(pb, seq, pb.tick() - 1);
                             if (born != null && pb.tick() - born.tick() <= BRIDGE_TICKS) {
                                 next = bridgeLeg(pb, e.getPosition(), new Pos(born.op().x(), born.op().y(),
                                         born.op().z(), born.op().yaw(), born.op().pitch()), born.tick());
                             }
                         }
                         if (next != null) {
-                            glides.put(entry.getKey(), next);
-                            if (Visuals.clientAccelerates(e)) aimFireball(e, next);
+                            glides.put(seq, next);
+                            boolean fireball = Visuals.clientAccelerates(e);
+                            if (fireball) aimFireball(e, next);
                             else fly(e, next);
-                            legSets(e, Visuals.clientAccelerates(e));
+                            legSets(e, fireball);
                             continue;
                         }
                         // zero WITH the landing: a kept velocity coasts clients past the wall
@@ -667,8 +664,8 @@ final class Appliers {
                         // absolute, ALWAYS sent: the client is a velocity-tick past even an
                         // on-target twin
                         e.teleport(g.step().lengthSquared() > 1.0e-4 ? aimed(g)
-                                : terminalView(pb, entry.getKey(), g.target()));
-                        glides.remove(entry.getKey());
+                                : terminalView(pb, seq, g.target()));
+                        glides.remove(seq);
                     } else {
                         // the velocity RIDES the leg's whole window: zeroing early collapses rate-1
                         // bounces to 20Hz steps
@@ -685,8 +682,9 @@ final class Appliers {
                     // generations - the bobber sim ignores stillness), and a 1.8-generation arrow that
                     // never latched (a slow-rate ray is microscopic, so its own collision test never
                     // fires) sags under its own compounding gravity at the stick
-                    if ((Visuals.clientRestless(e) || Visuals.clientFrozen(e)) && e.getPosition().equals(before)) {
-                        pinAt(e, e.getPosition(), Visuals.clientRestless(e));
+                    boolean restless = Visuals.clientRestless(e);
+                    if ((restless || Visuals.clientFrozen(e)) && e.getPosition().equals(before)) {
+                        pinAt(e, e.getPosition(), restless);
                     }
                 }
             }
@@ -1029,15 +1027,13 @@ final class Appliers {
         public void apply(@NotNull Playback pb, @NotNull Recorded<Channels.Equip> op) {
             Ghost ghost = pb.ghost(op.op().player());
             if (ghost == null) return;
+            CompoundBinaryTag items = op.op().items();
+            Nbt.applyEquipment(ghost, items);
             EnumSet<EquipmentSlot> now = EnumSet.noneOf(EquipmentSlot.class);
             for (EquipmentSlot slot : EquipmentSlot.values()) {
-                BinaryTag item = op.op().items().get(slot.name());
-                if (item == null) continue;
-                ghost.setEquipment(slot, Nbt.item(item));
-                now.add(slot);
+                if (items.get(slot.name()) != null) now.add(slot);
             }
-            // clear only slots the ghost actually wore: an explicit BODY=AIR broadcast is the ViaBackwards
-            // chestplate wipe (single-slot AIR clears pass every skip-empty-slots fix by design)
+            // clear only slots the ghost actually wore - a blanket AIR clear is the ViaBackwards chestplate wipe
             EnumSet<EquipmentSlot> before = worn.put(op.op().player(), now);
             if (before != null) {
                 before.removeAll(now);

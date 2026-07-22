@@ -28,7 +28,7 @@ public class DomainEntity extends Entity implements DomainTicked {
             currentChunk = chunk;
             return;
         }
-        super.refreshCurrentChunk(chunk); // unowned: the global dispatcher owns it, as today
+        super.refreshCurrentChunk(chunk);
     }
 
     @Override public void tick(long time) {
@@ -36,7 +36,6 @@ public class DomainEntity extends Entity implements DomainTicked {
         super.tick(time);
     }
 
-    /** {@link DomainTicked#foreignDriver}; subclasses overriding {@code tick} bail out first when true. */
     protected final boolean foreignDriver() {
         return DomainTicked.foreignDriver(this);
     }

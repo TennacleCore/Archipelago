@@ -47,7 +47,7 @@ class ShardFailStopTest extends HeadlessServerTest {
             await("the fresh clock revives the frozen entity",
                     () -> e.ticks.get() > frozen && e.thread.startsWith("shard-domain:"));
 
-            manager.destroy(shard); // ...and destroy still works whenever the app prefers it
+            manager.destroy(shard);
             await("destroyed on demand", () -> manager.byName("doomed") == null);
             assertNull(member.player.getTag(WorldAccess.ENTITY_TAG));
             assertTrue(e.isRemoved());

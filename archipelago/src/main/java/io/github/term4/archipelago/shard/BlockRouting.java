@@ -73,8 +73,7 @@ final class BlockRouting {
     }
 
     static EventNode<Event> node() {
-        // the plain default can't know about ShardView block-view state; don't clobber a custom policy
-        if (WorldPolicy.get() == WorldPolicy.SAME_WORLD) WorldPolicy.set(ShardPolicy.DEFAULT);
+        ShardView.installDefaultPolicy();
         // non-shard players fall through to the stock listener, whose collision scan is world-blind: a
         // co-located shard entity (invisible to a base player) would block their placement
         synchronized (BlockRouting.class) {
@@ -83,8 +82,9 @@ final class BlockRouting {
         }
         EventNode<Event> node = EventNode.all("archipelago:blocks");
         node.addListener(PlayerPacketEvent.class, e -> {
-            boolean place = e.getPacket() instanceof ClientPlayerBlockPlacementPacket;
-            if (!place && !(e.getPacket() instanceof ClientPlayerActionPacket)) return;
+            var packet = e.getPacket();
+            boolean place = packet instanceof ClientPlayerBlockPlacementPacket;
+            if (!place && !(packet instanceof ClientPlayerActionPacket)) return;
             Player player = e.getPlayer();
             Shard bound = player.getTag(WorldAccess.ENTITY_TAG) instanceof Shard d
                     && player.getInstance() == d.instance() ? d : null;
@@ -95,28 +95,24 @@ final class BlockRouting {
             else if (viewed != null && bound != viewed && WorldPolicy.canEdit(player, viewed)) edited = viewed;
             else if (bound != null || viewed != null) edited = null; // read-only: swallowed + resynced
             else return;
-            // cheap thread-safe claim checks keep the cancel decision synchronous; unclaimed packets
-            // (interactions, throwables, drops) stay Minestom's
-            if (place ? !player.getItemInHand(((ClientPlayerBlockPlacementPacket) e.getPacket()).hand()).material().isBlock()
-                    : !digs((ClientPlayerActionPacket) e.getPacket())) {
+            // unclaimed packets (interactions, throwables, drops) stay Minestom's
+            if (place ? !player.getItemInHand(((ClientPlayerBlockPlacementPacket) packet).hand()).material().isBlock()
+                    : !digs((ClientPlayerActionPacket) packet)) {
                 return;
             }
             e.setCancelled(true);
             // ack AFTER the block work, like the stock listeners: an early ack rolls the modern client's
-            // prediction back to the pre-edit state until our block packet lands (jitter breaking the
-            // block under your own feet)
-            int sequence = place ? ((ClientPlayerBlockPlacementPacket) e.getPacket()).sequence()
-                    : ((ClientPlayerActionPacket) e.getPacket()).sequence();
+            // prediction back to the pre-edit state until our block packet lands
+            int sequence = place ? ((ClientPlayerBlockPlacementPacket) packet).sequence()
+                    : ((ClientPlayerActionPacket) packet).sequence();
             if (edited == null) { // no shard writes: resync from the viewed chain, thread-safe reads
-                if (place) readOnlyPlace(player, viewed, (ClientPlayerBlockPlacementPacket) e.getPacket());
-                else readOnlyDig(player, viewed, (ClientPlayerActionPacket) e.getPacket());
+                if (place) readOnlyPlace(player, viewed, (ClientPlayerBlockPlacementPacket) packet);
+                else readOnlyDig(player, viewed, (ClientPlayerActionPacket) packet);
                 player.sendPacket(new AcknowledgeBlockChangePacket(sequence));
                 return;
             }
-            // the write path runs on the EDITED shard's clock: overlay writes are single-writer, and an
-            // observer with edit rights (or a server-ticked member of a domain shard) arrives on a foreign
-            // thread; an attached member is already on it and runs inline
-            var packet = e.getPacket();
+            // the write path runs on the EDITED shard's clock (overlay writes are single-writer): an
+            // observer with edit rights, or a server-ticked member of a domain shard, arrives foreign
             Runnable work = () -> {
                 // the queue hop is a tick wide: re-check what can change under it (disconnect, destroy, demotion)
                 if (!player.isOnline() || edited.destroyed) return;
@@ -126,9 +122,7 @@ final class BlockRouting {
                 else dig(edited, player, (ClientPlayerActionPacket) packet);
                 player.sendPacket(new AcknowledgeBlockChangePacket(sequence));
             };
-            var domain = edited.domain();
-            if (domain != null && !domain.onThread()) domain.execute(work);
-            else work.run();
+            edited.onOwner(work);
         });
         // late joiners get the visibility rules, or they'd see every shard's players/entities until the next join/leave
         node.addListener(PlayerSpawnEvent.class, e -> {

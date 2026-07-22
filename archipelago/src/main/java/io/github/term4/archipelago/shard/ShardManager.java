@@ -48,9 +48,8 @@ public final class ShardManager {
         }
     }
 
-    // fail-stop = the DOMAIN dies; its shards drop into STASIS (frozen entities on the dead clock) - the
-    // app recovers with a FRESH clock (shard.domain(...)), destroys, or leaves them. Member players alone
-    // hand back to server ticking: their connections must keep living
+    // the shards stay frozen on the dead clock; only member players hand back to server ticking, since
+    // their connections must keep living
     private static void onQuarantine(DomainQuarantineEvent e) {
         List<ShardManager> live;
         synchronized (ShardManager.class) {

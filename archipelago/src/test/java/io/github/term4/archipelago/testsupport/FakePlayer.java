@@ -71,8 +71,7 @@ public final class FakePlayer {
                 .filter(type::isInstance).map(type::cast).toList();
     }
 
-    /** The captured spawn/metadata/velocity/teleport packets for entity {@code entityId}, in send order
-     *  (broadcasts arrive as CachedPacket - unwrapped here). */
+    /** The captured spawn/metadata/velocity/teleport packets for entity {@code entityId}, in send order. */
     public List<ServerPacket> packetsFor(int entityId) {
         return sent.stream()
                 .map(p -> SendablePacket.extractServerPacket(ConnectionState.PLAY, p))

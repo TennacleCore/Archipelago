@@ -6,7 +6,7 @@ import io.github.term4.archipelago.replay.Recording;
 import io.github.term4.archipelago.replay.channel.Dispatcher;
 import io.github.term4.archipelago.replay.channel.EventDispatcher;
 import io.github.term4.archipelago.replay.channel.PacketDispatcher;
-import net.kyori.adventure.nbt.CompoundBinaryTag;
+import net.minestom.server.coordinate.Point;
 import net.minestom.server.coordinate.Pos;
 import net.minestom.server.entity.Entity;
 import net.minestom.server.entity.EquipmentSlot;
@@ -149,11 +149,7 @@ final class Probes {
             ItemStack[] items = new ItemStack[SLOTS.length];
             for (int i = 0; i < SLOTS.length; i++) items[i] = m.getEquipment(SLOTS[i]);
             if (!Arrays.equals(items, lastEquip.put(name, items))) {
-                CompoundBinaryTag.Builder encoded = CompoundBinaryTag.builder();
-                for (int i = 0; i < SLOTS.length; i++) {
-                    if (!items[i].isAir()) encoded.put(SLOTS[i].name(), Nbt.item(items[i]));
-                }
-                rec.emit(Channels.EQUIPS, new Channels.Equip(name, encoded.build()));
+                rec.emit(Channels.EQUIPS, new Channels.Equip(name, Nbt.equipment(items)));
             }
             boolean sneak = m.isSneaking();
             if (changed(lastSneak, name, sneak)) {
@@ -257,18 +253,16 @@ final class Probes {
     static final class DigProbe extends EventDispatcher {
         @Override
         protected void listen(@NotNull EventNode<Event> node, @NotNull Recording rec) {
-            node.addListener(PlayerStartDiggingEvent.class, e -> {
-                if (!rec.covers(e.getPlayer())) return;
-                var p = e.getBlockPosition();
-                rec.emit(Channels.DIGS, new Channels.Dig(rec.layerOf(e.getPlayer()),
-                        p.blockX(), p.blockY(), p.blockZ(), e.getPlayer().getUsername(), true));
-            });
-            node.addListener(PlayerCancelDiggingEvent.class, e -> {
-                if (!rec.covers(e.getPlayer())) return;
-                var p = e.getBlockPosition();
-                rec.emit(Channels.DIGS, new Channels.Dig(rec.layerOf(e.getPlayer()),
-                        p.blockX(), p.blockY(), p.blockZ(), e.getPlayer().getUsername(), false));
-            });
+            node.addListener(PlayerStartDiggingEvent.class,
+                    e -> dig(rec, e.getPlayer(), e.getBlockPosition(), true));
+            node.addListener(PlayerCancelDiggingEvent.class,
+                    e -> dig(rec, e.getPlayer(), e.getBlockPosition(), false));
+        }
+
+        private static void dig(Recording rec, Player player, Point pos, boolean start) {
+            if (!rec.covers(player)) return;
+            rec.emit(Channels.DIGS, new Channels.Dig(rec.layerOf(player),
+                    pos.blockX(), pos.blockY(), pos.blockZ(), player.getUsername(), start));
         }
     }
 

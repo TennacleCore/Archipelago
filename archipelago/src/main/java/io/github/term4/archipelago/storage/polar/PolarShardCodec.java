@@ -30,9 +30,7 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -45,7 +43,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ForkJoinPool;
 import java.util.function.Consumer;
-import java.util.function.Supplier;
 
 /**
  * The polar EXCHANGE ADAPTER: {@code ShardFile} ({@code .shard}) is the lib format - this codec exists to talk
@@ -60,6 +57,8 @@ public final class PolarShardCodec {
 
     private static final String UNTOUCHED = "minecraft:structure_void";
     private static final int FORMAT = 2;
+    /** polar's own MAX_HEIGHTMAPS (package-private there). */
+    private static final int MAX_HEIGHTMAPS = 32;
 
     private PolarShardCodec() {}
 
@@ -104,9 +103,7 @@ public final class PolarShardCodec {
     // one relay: separate diff/entity reads could straddle a tick and save an incoherent instant.
     // The snapshot stays NBT - canonicalize + serialize are pure CPU and run off the clock, in encode
     private static Capture capture(Shard shard, @Nullable Consumer<UserData.Writer> userData, boolean entities) {
-        var domain = shard.domain();
-        Supplier<Capture> snap = () -> new Capture(shard.diff(), userDataTag(shard, userData, entities));
-        return domain != null ? domain.relay(snap) : snap.get();
+        return shard.relay(() -> new Capture(shard.diff(), userDataTag(shard, userData, entities)));
     }
 
     private static byte[] encode(int minY, int maxY, Map<Point, Block> diff, CompoundBinaryTag userData) {
@@ -125,13 +122,8 @@ public final class PolarShardCodec {
             Block[] section = sections[si];
             if (section == null) section = sections[si] = new Block[PolarSection.BLOCK_PALETTE_SIZE];
             section[(pos.blockX() & 15) + (pos.blockY() & 15) * 256 + (pos.blockZ() & 15) * 16] = block;
-            // NBT/handler detail rides polar block entities; the palette carries the state string only
-            if (block.hasNbt() || block.handler() != null) {
-                BlockHandler handler = block.handler();
-                blockEntities.computeIfAbsent(key, k -> new ArrayList<>()).add(new PolarChunk.BlockEntity(
-                        pos.blockX() & 15, pos.blockY(), pos.blockZ() & 15,
-                        handler != null ? handler.getKey().asString() : null, block.nbt()));
-            }
+            PolarChunk.BlockEntity be = blockEntity(pos, block);
+            if (be != null) blockEntities.computeIfAbsent(key, k -> new ArrayList<>()).add(be);
         });
 
         Map<Block, String> stateStrings = new HashMap<>(); // one string build per unique state, not per block
@@ -144,27 +136,19 @@ public final class PolarShardCodec {
                     sections[si] = new PolarSection();
                     continue;
                 }
-                List<String> palette = new ArrayList<>();
-                palette.add(UNTOUCHED); // index 0 = the untouched default
-                Map<String, Integer> paletteIndex = new HashMap<>();
+                Nbt.Palette palette = new Nbt.Palette();
+                palette.reserve(UNTOUCHED); // index 0 = the untouched default
                 int[] data = new int[PolarSection.BLOCK_PALETTE_SIZE];
                 for (int i = 0; i < blocks.length; i++) {
                     if (blocks[i] == null) continue;
-                    String state = stateStrings.computeIfAbsent(blocks[i], Nbt::blockString);
-                    Integer index = paletteIndex.get(state);
-                    if (index == null) {
-                        index = palette.size();
-                        palette.add(state);
-                        paletteIndex.put(state, index);
-                    }
-                    data[i] = index;
+                    data[i] = palette.id(stateStrings.computeIfAbsent(blocks[i], Nbt::blockString));
                 }
-                sections[si] = new PolarSection(palette.toArray(String[]::new), data,
+                sections[si] = new PolarSection(palette.entries().toArray(String[]::new), data,
                         new String[]{"minecraft:plains"}, null,
                         PolarSection.LightContent.MISSING, null, PolarSection.LightContent.MISSING, null);
             }
             chunks.add(new PolarChunk(key.x(), key.z(), sections, blockEntities.getOrDefault(key, List.of()),
-                    new int[32][], new byte[0])); // 32 = polar's (package-private) MAX_HEIGHTMAPS
+                    new int[MAX_HEIGHTMAPS][], new byte[0]));
         });
 
         PolarWorld world = new PolarWorld(PolarWorld.LATEST_VERSION, MinecraftServer.DATA_VERSION,
@@ -211,7 +195,7 @@ public final class PolarShardCodec {
                 Block[] blocks = new Block[palette.length];
                 for (int i = 0; i < palette.length; i++) {
                     blocks[i] = isUntouched(palette[i]) ? null
-                            : parsed.computeIfAbsent(palette[i], PolarShardCodec::parseState);
+                            : parsed.computeIfAbsent(palette[i], Nbt::parseState);
                 }
                 int[] blockData = palette.length > 1 ? section.blockData() : null; // accessor asserts on single palettes
                 for (int i = 0; i < PolarSection.BLOCK_PALETTE_SIZE; i++) {
@@ -234,14 +218,6 @@ public final class PolarShardCodec {
             }
         }
         return diff;
-    }
-
-    private static Block parseState(String state) {
-        try {
-            return Nbt.block(state);
-        } catch (RuntimeException e) {
-            throw new IllegalArgumentException("unknown block state '" + state + "' (saved on a different Minecraft version?)", e);
-        }
     }
 
     public static @NotNull UserData.View load(@NotNull Shard shard, @NotNull Path path) throws IOException {
@@ -339,7 +315,7 @@ public final class PolarShardCodec {
             PolarSection[] sections = new PolarSection[sectionCount];
             for (int i = 0; i < sectionCount; i++) sections[i] = new PolarSection();
             PolarChunk bare = new PolarChunk(CoordConversion.chunkIndexGetX(key), CoordConversion.chunkIndexGetZ(key),
-                    sections, List.of(), new int[32][], new byte[0]); // 32 = polar's (package-private) MAX_HEIGHTMAPS
+                    sections, List.of(), new int[MAX_HEIGHTMAPS][], new byte[0]);
             chunks.add(overlaid(bare, byChunk.get(key), world.minSection(), sectionCount));
         }
         return PolarWriter.write(new PolarWorld(world.version(), world.dataVersion(), world.compression(),
@@ -355,11 +331,8 @@ public final class PolarShardCodec {
                     .put((pos.blockX() & 15) + (pos.blockY() & 15) * 256 + (pos.blockZ() & 15) * 16, block);
             // overlaid positions drop their old block entity; NBT/handler blocks bring a fresh one
             blockEntities.removeIf(be -> be.x() == (pos.blockX() & 15) && be.y() == pos.blockY() && be.z() == (pos.blockZ() & 15));
-            if (block.hasNbt() || block.handler() != null) {
-                BlockHandler handler = block.handler();
-                blockEntities.add(new PolarChunk.BlockEntity(pos.blockX() & 15, pos.blockY(), pos.blockZ() & 15,
-                        handler != null ? handler.getKey().asString() : null, block.nbt()));
-            }
+            PolarChunk.BlockEntity fresh = blockEntity(pos, block);
+            if (fresh != null) blockEntities.add(fresh);
         });
         bySection.forEach((si, blocks) -> {
             PolarSection section = sections[si];
@@ -372,25 +345,16 @@ public final class PolarShardCodec {
                 Arrays.fill(states, "minecraft:air");
             }
             blocks.forEach((local, block) -> states[local] = Nbt.blockString(block));
-            List<String> palette = new ArrayList<>();
-            Map<String, Integer> paletteIndex = new HashMap<>();
+            Nbt.Palette palette = new Nbt.Palette();
             int[] data = new int[states.length];
-            for (int i = 0; i < states.length; i++) {
-                Integer id = paletteIndex.get(states[i]);
-                if (id == null) {
-                    id = palette.size();
-                    palette.add(states[i]);
-                    paletteIndex.put(states[i], id);
-                }
-                data[i] = id;
-            }
+            for (int i = 0; i < states.length; i++) data[i] = palette.id(states[i]);
             // touched sections drop light; biomes ride along untouched (biomeData asserts on single palettes)
             String[] biomePalette = section.isEmpty() ? new String[]{"minecraft:plains"} : section.biomePalette();
             int[] biomeData = biomePalette.length > 1 ? section.biomeData() : null;
-            sections[si] = new PolarSection(palette.toArray(String[]::new), data, biomePalette, biomeData,
+            sections[si] = new PolarSection(palette.entries().toArray(String[]::new), data, biomePalette, biomeData,
                     PolarSection.LightContent.MISSING, null, PolarSection.LightContent.MISSING, null);
         });
-        int[][] heightmaps = new int[32][]; // 32 = polar's (package-private) MAX_HEIGHTMAPS
+        int[][] heightmaps = new int[MAX_HEIGHTMAPS][];
         for (int i = 0; i < heightmaps.length; i++) heightmaps[i] = chunk.heightmap(i);
         return new PolarChunk(chunk.x(), chunk.z(), sections, blockEntities, heightmaps, chunk.userData());
     }
@@ -429,11 +393,9 @@ public final class PolarShardCodec {
                 world.minSection(), world.maxSection(), userData, chunks));
     }
 
-    // deterministic column order so a shard -> polar -> shard round-trip is byte-exact
     private static CompoundBinaryTag beforeTunnel(Map<Point, Block> before) {
         List<Map.Entry<Point, Block>> entries = new ArrayList<>(before.entrySet());
-        entries.sort(Comparator.comparingInt((Map.Entry<Point, Block> en) -> en.getKey().blockY())
-                .thenComparingInt(en -> en.getKey().blockZ()).thenComparingInt(en -> en.getKey().blockX()));
+        entries.sort(Map.Entry.comparingByKey(Nbt.POSITION_ORDER));
         int[] xs = new int[entries.size()], ys = new int[entries.size()], zs = new int[entries.size()];
         ListBinaryTag.Builder<StringBinaryTag> states = ListBinaryTag.builder(BinaryTagTypes.STRING);
         int i = 0;
@@ -452,8 +414,16 @@ public final class PolarShardCodec {
         int[] xs = cols.getIntArray("x"), ys = cols.getIntArray("y"), zs = cols.getIntArray("z");
         ListBinaryTag states = cols.getList("state", BinaryTagTypes.STRING);
         Map<Point, Block> out = new HashMap<>();
-        for (int i = 0; i < xs.length; i++) out.put(new Vec(xs[i], ys[i], zs[i]), parseState(states.getString(i)));
+        for (int i = 0; i < xs.length; i++) out.put(new Vec(xs[i], ys[i], zs[i]), Nbt.parseState(states.getString(i)));
         return out;
+    }
+
+    // NBT/handler detail rides polar block entities; the palette carries the state string only
+    private static PolarChunk.@Nullable BlockEntity blockEntity(Point pos, Block block) {
+        BlockHandler handler = block.handler();
+        if (!block.hasNbt() && handler == null) return null;
+        return new PolarChunk.BlockEntity(pos.blockX() & 15, pos.blockY(), pos.blockZ() & 15,
+                handler != null ? handler.getKey().asString() : null, block.nbt());
     }
 
     private static CompoundBinaryTag with(CompoundBinaryTag tag, String key, BinaryTag value) {
@@ -478,12 +448,7 @@ public final class PolarShardCodec {
     }
 
     private static byte[] bytes(CompoundBinaryTag tag) {
-        try (ByteArrayOutputStream out = new ByteArrayOutputStream()) {
-            BinaryTagIO.writer().write(Nbt.canonical(tag), out);
-            return out.toByteArray();
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
-        }
+        return Nbt.writeBytes(tag, BinaryTagIO.Compression.NONE);
     }
 
     /** The parsed shard-save container, or empty for foreign/plain polar files (blocks still load). */

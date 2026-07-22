@@ -4,7 +4,6 @@ import io.github.term4.archipelago.replay.core.CoreChannels;
 import io.github.term4.archipelago.shard.Shard;
 import io.github.term4.archipelago.testsupport.FakePlayer;
 import io.github.term4.archipelago.testsupport.HeadlessServerTest;
-import net.minestom.server.MinecraftServer;
 import net.minestom.server.coordinate.Pos;
 import net.minestom.server.instance.Weather;
 import net.minestom.server.network.packet.server.play.SetTimePacket;
@@ -16,11 +15,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** A recorded {@code /shard sky} change (fixed time / weather) replays at its tick and reverses. */
 class ReplaySkyTest extends HeadlessServerTest {
-
-    private static void tick() {
-        MinecraftServer.getSchedulerManager().processTick();
-        MinecraftServer.getSchedulerManager().processTickEnd();
-    }
 
     @Test
     void skyOverridesReplayAndReverse() {

@@ -1,7 +1,6 @@
 package io.github.term4.archipelago.shard;
 
 import io.github.term4.archipelago.testsupport.FakePlayer;
-import net.minestom.server.MinecraftServer;
 import net.minestom.server.ServerFlag;
 import io.github.term4.archipelago.testsupport.HeadlessServerTest;
 import net.minestom.server.coordinate.Vec;
@@ -20,17 +19,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /** Shard relight: chain-effective light as per-viewer UpdateLight overlays (flushed ASYNC on the shard's clock,
  *  coalesced by the vanilla resend delay), base restored on the way out. */
 class ShardLightTest extends HeadlessServerTest {
-
-    private static void loadArea(int chunkX, int chunkZ) {
-        for (int dx = -1; dx <= 1; dx++) {
-            for (int dz = -1; dz <= 1; dz++) instance.loadChunk(chunkX + dx, chunkZ + dz).join();
-        }
-    }
-
-    private static void tick() {
-        MinecraftServer.getSchedulerManager().processTick();
-        MinecraftServer.getSchedulerManager().processTickEnd();
-    }
 
     /** Drives shard ticks past the coalescing window and awaits the async flush's packet. */
     private static UpdateLightPacket awaitLight(FakePlayer viewer, int chunkX, int chunkZ) {

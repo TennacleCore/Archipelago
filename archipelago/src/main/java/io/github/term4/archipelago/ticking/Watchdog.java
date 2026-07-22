@@ -22,7 +22,7 @@ final class Watchdog {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(Watchdog.class);
     private static final DateTimeFormatter STAMP = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS");
-    /** Zombie clock threads this JVM: each holds one carrier until process restart (a spinning tick cannot be killed). */
+    /** Each holds one carrier until process restart - a spinning tick cannot be killed. */
     private static final AtomicInteger ZOMBIES = new AtomicInteger();
     /** Stack fingerprint -> failures this JVM: a repeat = deterministic poison, not a one-off. */
     private static final Map<String, Integer> FINGERPRINTS = new ConcurrentHashMap<>();

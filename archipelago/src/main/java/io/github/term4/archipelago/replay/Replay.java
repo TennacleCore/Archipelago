@@ -56,10 +56,7 @@ public final class Replay {
         DISPATCHERS.add(factory);
     }
 
-    /** The twin-wire generation split: every viewer rides per-tick velocity; legacy (1.8-line)
-     *  viewers additionally get per-tick absolute anchors and hold pins (their renderers frame-lerp
-     *  only what their own sim moves, and their latched arrows obey positions alone), and fireball
-     *  aims differ per generation. Default: nobody - a pure-modern server needs no wiring. */
+    // default: nobody - a pure-modern server needs no wiring
     private static volatile java.util.function.Predicate<net.minestom.server.entity.Player> LEGACY = p -> false;
 
     /** Registers which viewers render the legacy (1.8-line) wire - see docs/replay-bridge.md. */

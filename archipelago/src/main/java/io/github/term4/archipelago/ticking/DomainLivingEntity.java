@@ -29,7 +29,6 @@ public class DomainLivingEntity extends LivingEntity implements DomainTicked {
         super.tick(time);
     }
 
-    /** {@link DomainTicked#foreignDriver}; subclasses overriding {@code tick} bail out first when true. */
     protected final boolean foreignDriver() {
         return DomainTicked.foreignDriver(this);
     }

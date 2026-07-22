@@ -31,7 +31,6 @@ public class DomainPlayer extends Player implements DomainTicked {
         super.tick(time);
     }
 
-    /** {@link DomainTicked#foreignDriver}; subclasses overriding {@code tick} bail out first when true. */
     protected final boolean foreignDriver() {
         return DomainTicked.foreignDriver(this);
     }

@@ -69,39 +69,29 @@ final class Domain {
         return manager;
     }
 
-    /**
-     * This domain's clock: +1 at the START of each tick, one fixed phase - a count always spans at least its
-     * wall time (overruns drop behind, never burst). Stamp AND judge on the SAME domain's clock; never mix
-     * clocks, and re-base tick-stamped state when an entity changes domains.
-     */
+    /** +1 at the START of each tick; overruns drop behind, never burst. */
     long ticks() {
         return ticks;
     }
 
-    /** Whether the current thread is this domain's clock thread. */
     boolean onThread() {
         DomainClock clock = DomainClock.current();
         return clock != null && clock.domain() == this;
     }
 
-    /** Whether the current thread is ANY domain clock thread (relay / join-deadlock guards). */
     static boolean onClockThread() {
         return DomainClock.current() != null;
     }
 
-    /** Whether this domain has a live clock (false once retired or quarantined). */
+    /** False once retired or quarantined. */
     boolean live() {
         return manager.hasClock(this);
     }
 
     /**
-     * Runs {@code task} on this domain's next tick - the cross-domain hand-off. Runs inline when the domain
-     * has no live clock. The queue is unbounded by design: it drains fully each tick, a stalled domain's
-     * growth window ends at quarantine (tasks then run inline), and a producer outpacing the drain gets
-     * one WARN - bounding would mean dropping or rerouting shard work, both off the table.
-     *
-     * <p>Post-death execution (inline here, or the quarantine drain) runs OFF the owner thread - the fail-stop
-     * recovery contract. A stuck zombie may still sit inside its final tick, so consistency then is best-effort.
+     * Runs {@code task} on this domain's next tick, or inline when the domain has no live clock. Post-death
+     * execution (inline here, or the quarantine drain) runs OFF the owner thread; a stuck zombie may still sit
+     * inside its final tick, so consistency then is best-effort.
      */
     void execute(@NotNull Runnable task) {
         tasks.add(task);
@@ -121,10 +111,9 @@ final class Domain {
     }
 
     /**
-     * Runs {@code task} on this domain's thread and waits - the synchronous snapshot/batch relay. Runs inline
-     * when already on the owner or the domain has no live clock; throws from any OTHER clock thread (two live
-     * clocks joining each other would deadlock). If the clock dies with the relay still queued, the task is
-     * reclaimed and runs on the caller instead of hanging it.
+     * Runs {@code task} on this domain's thread and waits. Inline when already on the owner or the domain has no
+     * live clock; throws from any OTHER clock thread (two live clocks joining each other would deadlock). If the
+     * clock dies with the relay still queued, the task is reclaimed and runs on the caller instead of hanging it.
      */
     <T> T relay(@NotNull Supplier<T> task) {
         if (onThread() || !live()) return task.get();
@@ -156,7 +145,7 @@ final class Domain {
         }
     }
 
-    /** Registers a per-tick hook (block ticking, samplers...), run before the entities with {@link #ticks()}. Returns its removal handle. */
+    /** Runs before the entities, given {@link #ticks()}. Returns its removal handle. */
     @NotNull Runnable onTick(@NotNull LongConsumer hook) {
         tickHooks.add(hook);
         return () -> tickHooks.remove(hook);

@@ -190,8 +190,6 @@ final class ShardLight implements ShardLighting {
         return out;
     }
 
-    // ---- the flush: one pass of Minestom's own section engine over our light state ----
-
     private void flush(Set<Long> sections, Set<Long> fullColumns, boolean reset) {
         if (closed) return;
         if (reset) {
@@ -216,7 +214,8 @@ final class ShardLight implements ShardLighting {
             }
         }
 
-        Set<Long> involved = expand(fullColumns);
+        Set<Long> expandedColumns = expand(fullColumns);
+        Set<Long> involved = new HashSet<>(expandedColumns);
         Set<Long> markColumns = new HashSet<>();
         for (long key : sections) {
             markColumns.add(CoordConversion.chunkIndex(ShardLighting.sectionKeyX(key), ShardLighting.sectionKeyZ(key)));
@@ -244,7 +243,7 @@ final class ShardLight implements ShardLighting {
 
         Ctx ctx = new Ctx(base, dim, minSection, maxSection);
         Set<Sec> blockSeeds = new HashSet<>(), skySeeds = new HashSet<>();
-        for (long index : expand(fullColumns)) {
+        for (long index : expandedColumns) {
             if (!seedable.contains(index)) continue;
             int cx = CoordConversion.chunkIndexGetX(index), cz = CoordConversion.chunkIndexGetZ(index);
             for (int sy = minSection; sy < maxSection; sy++) {
@@ -589,8 +588,6 @@ final class ShardLight implements ShardLighting {
         }
         return new LightData(skyMask, blockMask, emptySkyMask, emptyBlockMask, skyLights, blockLights);
     }
-
-    // ---- view routing ----
 
     @Override
     public int blockLight(int x, int y, int z) {

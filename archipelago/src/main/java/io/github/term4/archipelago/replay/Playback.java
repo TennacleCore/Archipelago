@@ -10,7 +10,6 @@ import io.github.term4.archipelago.replay.channel.Recorded;
 import io.github.term4.archipelago.replay.channel.StateFolder;
 import io.github.term4.archipelago.storage.DataKey;
 import io.github.term4.archipelago.storage.UserData;
-import io.github.term4.archipelago.ticking.ExecutionDomain;
 import net.kyori.adventure.nbt.BinaryTag;
 import net.kyori.adventure.nbt.BinaryTagTypes;
 import net.kyori.adventure.nbt.CompoundBinaryTag;
@@ -142,9 +141,7 @@ public final class Playback {
 
     // seek/halt arrive on command threads; playback state is owner-thread-only, like Recording's mutators
     private void onOwner(Runnable op) {
-        ExecutionDomain domain = shard.domain();
-        if (domain != null && !domain.onThread()) domain.execute(op);
-        else op.run();
+        shard.onOwner(op);
     }
 
     private static <T> Channel<T> decode(Recordable<T> type, ListBinaryTag ops) {
@@ -231,15 +228,10 @@ public final class Playback {
      * it relays onto the theater's owner thread and waits.
      */
     public void seek(long target) {
-        ExecutionDomain domain = shard.domain();
-        if (domain != null && !domain.onThread()) {
-            domain.relay(() -> {
-                seekNow(target);
-                return null;
-            });
-            return;
-        }
-        seekNow(target);
+        shard.relay(() -> {
+            seekNow(target);
+            return null;
+        });
     }
 
     private void seekNow(long target) {
@@ -285,7 +277,6 @@ public final class Playback {
         return carry;
     }
 
-    /** The current playback tick. */
     public long tick() {
         return tick;
     }
@@ -411,9 +402,7 @@ public final class Playback {
         if (gone.getInstance() == null) gone.scheduler().scheduleNextTick(gone::remove);
     }
 
-    // ops never change and rewind() re-creates appliers: indexes memo here so a rewind (or three appliers
-    // over one channel) builds each once. One index shape per channel id - every LookBack on a channel
-    // must use its canonical key
+    // one index shape per channel id - every LookBack on a channel must use its canonical key
     private final Map<String, Object> opIndexes = new HashMap<>();
 
     /** Per-playback memo for lazily built op-list indexes, keyed by channel id. Owner-thread only. */

@@ -32,7 +32,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -106,9 +105,7 @@ public final class Recording {
     // a domain shard's probes fire on assorted threads (its clock, main end-of-tick); ops land via the owner's
     // thread - stamps captured at CALL time so a hop doesn't shift the op a tick late
     private void onOwner(Runnable op) {
-        ExecutionDomain domain = shard.domain();
-        if (domain != null && !domain.onThread()) domain.execute(op);
-        else op.run();
+        shard.onOwner(op);
     }
 
     private void sample() {
@@ -148,8 +145,7 @@ public final class Recording {
         return entity.getTag(WorldAccess.ENTITY_TAG) instanceof Shard bound && inTree(bound);
     }
 
-    // the root always records; an excluded layer cuts off its whole subtree (a child's diff is
-    // meaningless without its parent)
+    // an excluded layer cuts off its whole subtree
     private boolean inTree(Shard bound) {
         for (Shard s = bound; s != null; s = s.parent()) {
             if (s == shard) return true;
@@ -196,8 +192,7 @@ public final class Recording {
         });
     }
 
-    // the write hook is THE block source - player edits, server setBlocks, playback writes and commits all
-    // record here (a cancelled place never writes, so it never records); event probes would double these
+    // the write hook is THE block source (a cancelled place never writes): event probes would double these
     private void watchBlocks(Shard layer, int id) {
         if (!active.get()) return;
         unhooks.add(layer.onBlockChange((pos, previous, block) -> {
@@ -395,8 +390,7 @@ public final class Recording {
         if (type != Channels.BLOCKS || covered.isEmpty()) return List.copyOf(queue);
         List<Recorded<?>> out = new ArrayList<>();
         covered.entrySet().stream()
-                .sorted(Comparator.comparingInt((Map.Entry<Point, String> en) -> en.getKey().blockY())
-                        .thenComparingInt(en -> en.getKey().blockZ()).thenComparingInt(en -> en.getKey().blockX()))
+                .sorted(Map.Entry.comparingByKey(Nbt.POSITION_ORDER))
                 .forEach(en -> out.add(new Recorded<>(0, new Channels.BlockOp(0, en.getKey().blockX(),
                         en.getKey().blockY(), en.getKey().blockZ(), en.getValue()))));
         out.addAll(queue);

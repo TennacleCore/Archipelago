@@ -381,14 +381,14 @@ class StorageBreakdownTest {
             i.f64(m.x()).f64(m.y()).f64(m.z()).f32(m.yaw()).f32(m.pitch()).u8(m.ground() ? 1 : 0);
         }
 
-        Bin c = new Bin();
         prev = 0;
         Bin[] cols = Bin.array(8);
         Bits grounds = new Bits(ops.size());
         for (int k = 0; k < ops.size(); k++) {
-            Channels.Move m = ops.get(k).op();
-            cols[0].zig(ops.get(k).tick() - prev);
-            prev = ops.get(k).tick();
+            Op<Channels.Move> op = ops.get(k);
+            Channels.Move m = op.op();
+            cols[0].zig(op.tick() - prev);
+            prev = op.tick();
             cols[1].var(names.id(m.player()));
             cols[2].f64(m.x());
             cols[3].f64(m.y());
@@ -404,13 +404,14 @@ class StorageBreakdownTest {
         for (Op<Channels.Move> op : ops) byKey.computeIfAbsent(op.op().player(), k -> new ArrayList<>()).add(op);
         Bin q = new Bin();
         for (var e : byKey.entrySet()) {
+            List<Op<Channels.Move>> group = e.getValue();
             q.var(names.id(e.getKey()));
-            q.var(e.getValue().size());
+            q.var(group.size());
             long pt = 0, px = 0, py = 0, pz = 0;
-            Bits g = new Bits(e.getValue().size());
+            Bits g = new Bits(group.size());
             Bin body = new Bin();
-            for (int k = 0; k < e.getValue().size(); k++) {
-                Op<Channels.Move> op = e.getValue().get(k);
+            for (int k = 0; k < group.size(); k++) {
+                Op<Channels.Move> op = group.get(k);
                 Channels.Move m = op.op();
                 long fx = Math.round(m.x() * 4096), fy = Math.round(m.y() * 4096), fz = Math.round(m.z() * 4096);
                 body.zig(op.tick() - pt).zig(fx - px).zig(fy - py).zig(fz - pz)
@@ -451,10 +452,11 @@ class StorageBreakdownTest {
         for (Op<Channels.EntityMove> op : ops) byKey.computeIfAbsent(op.op().seq(), k -> new ArrayList<>()).add(op);
         Bin q = new Bin();
         for (var e : byKey.entrySet()) {
+            List<Op<Channels.EntityMove>> group = e.getValue();
             q.var(e.getKey());
-            q.var(e.getValue().size());
+            q.var(group.size());
             long pt = 0, px = 0, py = 0, pz = 0;
-            for (Op<Channels.EntityMove> op : e.getValue()) {
+            for (Op<Channels.EntityMove> op : group) {
                 Channels.EntityMove m = op.op();
                 long fx = Math.round(m.x() * 4096), fy = Math.round(m.y() * 4096), fz = Math.round(m.z() * 4096);
                 q.zig(op.tick() - pt).zig(fx - px).zig(fy - py).zig(fz - pz).angle(m.yaw()).angle(m.pitch());
@@ -494,18 +496,20 @@ class StorageBreakdownTest {
         Bin i = new Bin();
         long prev = 0;
         for (Op<Channels.Act> op : ops) {
+            Channels.Act a = op.op();
             i.zig(op.tick() - prev);
             prev = op.tick();
-            i.var(names.id(op.op().player())).u8(op.op().kind()).zig(op.op().value());
+            i.var(names.id(a.player())).u8(a.kind()).zig(a.value());
         }
         Bin[] cols = Bin.array(4);
         prev = 0;
         for (Op<Channels.Act> op : ops) {
+            Channels.Act a = op.op();
             cols[0].zig(op.tick() - prev);
             prev = op.tick();
-            cols[1].var(names.id(op.op().player()));
-            cols[2].u8(op.op().kind());
-            cols[3].zig(op.op().value());
+            cols[1].var(names.id(a.player()));
+            cols[2].u8(a.kind());
+            cols[3].zig(a.value());
         }
         byte[] columnar = withPool(names, Bin.concat(cols));
         return new Enc(withPool(names, i), columnar, columnar);
@@ -546,9 +550,10 @@ class StorageBreakdownTest {
         prev = 0;
         Bits starts = new Bits(ops.size());
         for (int k = 0; k < ops.size(); k++) {
-            Channels.Dig d = ops.get(k).op();
-            cols[0].zig(ops.get(k).tick() - prev);
-            prev = ops.get(k).tick();
+            Op<Channels.Dig> op = ops.get(k);
+            Channels.Dig d = op.op();
+            cols[0].zig(op.tick() - prev);
+            prev = op.tick();
             cols[1].zig(d.x());
             cols[2].zig(d.y());
             cols[3].zig(d.z());
@@ -580,16 +585,17 @@ class StorageBreakdownTest {
         Bin i = new Bin();
         long prev = 0;
         for (Op<Channels.Equip> op : ops) {
+            var worn = op.op().items();
             i.zig(op.tick() - prev);
             prev = op.tick();
             i.var(names.id(op.op().player()));
             int mask = 0;
             for (int s = 0; s < slots.length; s++) {
-                if (op.op().items().get(slots[s].name()) != null) mask |= 1 << s;
+                if (worn.get(slots[s].name()) != null) mask |= 1 << s;
             }
             i.u8(mask);
             for (EquipmentSlot slot : slots) {
-                BinaryTag item = op.op().items().get(slot.name());
+                BinaryTag item = worn.get(slot.name());
                 if (item != null) i.var(items.id(nbt(CompoundBinaryTag.builder().put("i", item).build())));
             }
         }

@@ -7,7 +7,6 @@ import io.github.term4.archipelago.replay.core.StateChannels;
 import io.github.term4.archipelago.ticking.ExecutionDomain;
 import io.github.term4.archipelago.testsupport.FakePlayer;
 import io.github.term4.archipelago.testsupport.HeadlessServerTest;
-import net.minestom.server.MinecraftServer;
 import net.minestom.server.coordinate.Pos;
 import net.minestom.server.coordinate.Vec;
 import net.minestom.server.entity.Entity;
@@ -43,11 +42,6 @@ class ReplayWireTest extends HeadlessServerTest {
     @BeforeAll
     static void channels() {
         CoreChannels.register();
-    }
-
-    private static void tick() {
-        MinecraftServer.getSchedulerManager().processTick();
-        MinecraftServer.getSchedulerManager().processTickEnd();
     }
 
     @Test

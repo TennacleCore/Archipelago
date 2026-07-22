@@ -34,11 +34,10 @@ import net.minestom.server.world.DimensionType;
 
 /**
  * Minestom's stock {@code BlockPlacementListener} (2026.07.12-26.2, faithful copy) with TWO marked changes:
- * the entity-collision scan is scoped through {@link WorldPolicy#canAffect} (a co-located entity in a world
- * the placer can't affect is invisible to them and must never block their placement), and a replaceable
- * clicked block is replaced in place (vanilla/client-prediction parity, PR'd upstream). Shard members'
- * placements are packet-intercepted by {@link BlockRouting} and never reach this; it serves players OUTSIDE
- * any shard view on instances that co-locate shards. Re-sync the copy on Minestom bumps.
+ * the entity-collision scan is scoped through {@link WorldPolicy#canAffect}, and a replaceable clicked block
+ * is replaced in place (vanilla/client-prediction parity, PR'd upstream). Shard members' placements are
+ * packet-intercepted by {@link BlockRouting} and never reach this; it serves players OUTSIDE any shard view.
+ * Re-sync the copy on Minestom bumps.
  */
 final class BasePlacement {
     private static final BlockManager BLOCK_MANAGER = MinecraftServer.getBlockManager();
@@ -105,8 +104,8 @@ final class BasePlacement {
         // Get the newly placed block position
         Point placementPosition = blockPosition;
         var interactedPlacementRule = BLOCK_MANAGER.getBlockPlacementRule(interactedBlock);
-        // FIX (second local change, same as BlockRouting.place): a replaceable clicked block is replaced IN
-        // PLACE, like vanilla and the client's prediction - upstream bumps it to the neighbor (PR'd upstream)
+        // local change 2 (mirrors BlockRouting.place): replaceable clicked block replaced IN PLACE like
+        // vanilla/client prediction; upstream bumps it to the neighbor
         if (!interactedBlock.isAir() && !interactedBlock.registry().isReplaceable()
                 && (interactedPlacementRule == null || !interactedPlacementRule.isSelfReplaceable(
                 new BlockPlacementRule.Replacement(interactedBlock, blockFace, cursorPosition, false, useMaterial)))) {

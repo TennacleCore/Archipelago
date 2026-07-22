@@ -6,6 +6,8 @@ import net.minestom.server.entity.GameMode;
 import net.minestom.server.entity.Player;
 import net.minestom.server.entity.damage.Damage;
 import net.minestom.server.entity.metadata.avatar.PlayerMeta;
+import net.minestom.server.network.packet.server.SendablePacket;
+import net.minestom.server.network.packet.server.play.EntityEquipmentPacket;
 import net.minestom.server.network.packet.server.play.PlayerInfoRemovePacket;
 import net.minestom.server.network.packet.server.play.PlayerInfoUpdatePacket;
 import org.jetbrains.annotations.NotNull;
@@ -51,6 +53,18 @@ public final class Ghost extends DomainLivingEntity {
     public void updateOldViewer(@NotNull Player player) {
         super.updateOldViewer(player);
         player.sendPacket(new PlayerInfoRemovePacket(getUuid()));
+    }
+
+    // A grouped send shares one CachedPacket, which a per-viewer packet view can't rewrite - and an item's
+    // client-side use animation (a raised sword's block pose) is read off the VIEWER's copy of the held item.
+    // Equipment therefore goes out bare; a ghost re-equips only on a recorded change, so this is cheap.
+    @Override
+    public void sendPacketToViewers(@NotNull SendablePacket packet) {
+        if (packet instanceof EntityEquipmentPacket) {
+            for (Player viewer : getViewers()) viewer.sendPacket(packet);
+            return;
+        }
+        super.sendPacketToViewers(packet);
     }
 
     // replayed projectiles REALLY hit ghosts (period-accurate flash), but the recorded player may have healed

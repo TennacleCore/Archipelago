@@ -153,10 +153,11 @@ class DiffDensityTest {
         for (int i = 0; i < data.length; i++) {
             packed[i / perLong] |= ((long) data[i]) << ((i % perLong) * bits);
         }
-        byte[] out = new byte[packed.length * 8 + paletteBytes(section).length];
-        System.arraycopy(paletteBytes(section), 0, out, 0, paletteBytes(section).length);
+        byte[] palette = paletteBytes(section);
+        byte[] out = new byte[packed.length * 8 + palette.length];
+        System.arraycopy(palette, 0, out, 0, palette.length);
         for (int i = 0; i < packed.length; i++) {
-            for (int b = 0; b < 8; b++) out[paletteBytes(section).length + i * 8 + b] = (byte) (packed[i] >>> (b * 8));
+            for (int b = 0; b < 8; b++) out[palette.length + i * 8 + b] = (byte) (packed[i] >>> (b * 8));
         }
         return out;
     }

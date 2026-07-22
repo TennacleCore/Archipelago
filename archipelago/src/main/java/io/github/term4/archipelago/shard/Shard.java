@@ -195,7 +195,7 @@ public final class Shard implements WorldAccess {
      */
     public void relight(@Nullable ShardLighting lighting) {
         ShardLighting old = this.light;
-        if (old != null) old.close(); // stops its work (built-in: the flush tick hook, and the driver if last)
+        if (old != null) old.close();
         this.light = lighting;
     }
 
@@ -213,7 +213,6 @@ public final class Shard implements WorldAccess {
         return tabScope;
     }
 
-    // a write changed this level's view and every unmasked descendant's; each level's own light refreshes.
     // no mask pruning: shards without light cost nothing, and light bleeds past exact positions anyway
     private void lightChanged(Set<Long> sections) {
         ShardLighting l = light;
@@ -255,7 +254,6 @@ public final class Shard implements WorldAccess {
         return () -> blockHooks.remove(hook);
     }
 
-    // pre-write view, read only while someone listens (the common no-hook path costs nothing)
     private @Nullable Block preWrite(Point pos) {
         return blockHooks.isEmpty() ? null : getBlock(pos);
     }
@@ -326,7 +324,7 @@ public final class Shard implements WorldAccess {
 
     /** Drops the diff: every overlaid position reverts to the PARENT view (the base map for a root shard). */
     public void reset() {
-        onDomain(() -> {
+        relay(() -> {
             forEachDiff((pos, block) -> {
                 if (!base.isChunkLoaded(pos)) return; // never reached a client; nothing to revert
                 Block revert = parent != null ? parent.getBlock(pos) : base.getBlock(pos);
@@ -358,7 +356,7 @@ public final class Shard implements WorldAccess {
 
     /** A tick-consistent snapshot of the diff - the EXPORT half; load one back with {@link #setBlocks}. */
     public @NotNull Map<Point, Block> diff() {
-        return onDomain(() -> {
+        return relay(() -> {
             Map<Point, Block> out = new HashMap<>();
             forEachDiff(out::put);
             return out;
@@ -375,7 +373,7 @@ public final class Shard implements WorldAccess {
      * recipes; {@link #setBlocks} is the write half.
      */
     public @NotNull Map<Point, Block> effectiveDiff() {
-        return onDomain(() -> {
+        return relay(() -> {
             Map<Point, Block> out = new HashMap<>();
             effectiveDiff(out);
             return out;
@@ -471,7 +469,7 @@ public final class Shard implements WorldAccess {
 
     /** One overlay write pass, then one {@link MultiBlockChangePacket} per touched section to each block viewer. */
     @Override public void setBlocks(@NotNull Map<Point, Block> blocks) {
-        onDomain(() -> {
+        relay(() -> {
             Map<Point, Block> changed = new HashMap<>();
             blocks.forEach((pos, block) -> {
                 boolean reverts = revertsToParent(pos, block);
@@ -597,8 +595,7 @@ public final class Shard implements WorldAccess {
     @Override public boolean isInVoid(@NotNull Point pos) { return base.isInVoid(pos); }
 
     @Override public @NotNull Collection<@NotNull Entity> entities() {
-        // cleanup fused into the copy (this runs per layer per recording tick); the despawn
-        // listener is the primary cleanup
+        // cleanup fused into the copy; the despawn listener is the primary one
         List<Entity> all = new ArrayList<>(entities.size() + members.size());
         for (Entity e : entities) {
             if (e.isRemoved()) entities.remove(e);
@@ -639,11 +636,23 @@ public final class Shard implements WorldAccess {
         return entity.setInstance(base, position).thenRun(() -> ShardView.refireViewableRule(entity));
     }
 
-    // snapshots and batch writes relay to the domain thread, between its ticks - a fork/save can never capture
-    // half a setBlocks batch (relay runs inline on the owner or a dead tree, throws from a foreign clock)
-    private <T> T onDomain(Supplier<T> op) {
+    /**
+     * Runs {@code op} on this shard's clock and waits: snapshots and batch writes land between its ticks, so a
+     * fork/save can never capture half a {@link #setBlocks} batch. Inline on the owner (and on a shard without
+     * a live clock); NEVER relay from a foreign clock - two live clocks joining each other deadlock, so
+     * {@link ExecutionDomain#relay} throws there - {@link #onOwner} hands off instead.
+     */
+    public <T> T relay(@NotNull Supplier<T> op) {
         ExecutionDomain d = domain;
         return d == null ? op.get() : d.relay(op);
+    }
+
+    /** {@link #relay} without waiting: {@code op} runs inline when already on this shard's clock, else on its
+     *  next tick. The safe direction from another clock. */
+    public void onOwner(@NotNull Runnable op) {
+        ExecutionDomain d = domain;
+        if (d != null && !d.onThread()) d.execute(op);
+        else op.run();
     }
 
     // only opt-out-covered classes move to the domain; anything else would double-tick after a chunk crossing.
@@ -681,7 +690,7 @@ public final class Shard implements WorldAccess {
      */
     public @NotNull Shard fork(@NotNull BiFunction<Point, Block, @Nullable Block> blocks,
                                @Nullable Function<Entity, Entity> entityCloner) {
-        return onDomain(() -> { // the whole snapshot reads settled state, never mid-tick
+        return relay(() -> { // the whole snapshot reads settled state, never mid-tick
             Shard copy = parent != null ? new Shard(parent, null) : new Shard(base);
             Map<Point, Block> kept = new HashMap<>();
             forEachDiff((pos, block) -> {
@@ -729,12 +738,12 @@ public final class Shard implements WorldAccess {
         Layer bottomSide;
         Layer topSide;
         if (sameClock(bottom)) { // one relay: the whole combine reads one settled tick
-            Layer[] both = onDomain(() -> new Layer[]{bottom.snapshot(cloner), snapshot(cloner)});
+            Layer[] both = relay(() -> new Layer[]{bottom.snapshot(cloner), snapshot(cloner)});
             bottomSide = both[0];
             topSide = both[1];
         } else {
-            bottomSide = bottom.onDomain(() -> bottom.snapshot(cloner));
-            topSide = onDomain(() -> snapshot(cloner));
+            bottomSide = bottom.relay(() -> bottom.snapshot(cloner));
+            topSide = relay(() -> snapshot(cloner));
         }
         Shard flat = new Shard(base);
         Map<Point, Block> merged = new HashMap<>();
@@ -762,7 +771,7 @@ public final class Shard implements WorldAccess {
      * ancestor's entities read best-effort - one tree one clock is the recommended default).
      */
     public @NotNull Shard flatten(@Nullable Function<Entity, Entity> cloner) {
-        return onDomain(() -> {
+        return relay(() -> {
             Shard flat = new Shard(base);
             Map<Point, Block> blocks = new HashMap<>();
             effectiveDiff(blocks);
@@ -801,7 +810,7 @@ public final class Shard implements WorldAccess {
         }
     }
 
-    // one side's settled state; call inside this shard's onDomain
+    // one side's settled state; call inside this shard's relay
     private Layer snapshot(@Nullable Function<Entity, Entity> cloner) {
         Map<Point, Block> blocks = new HashMap<>();
         effectiveDiff(blocks);
@@ -853,7 +862,7 @@ public final class Shard implements WorldAccess {
             base.setBlock(pos, block);
             committed.put(pos, block);
         });
-        onDomain(() -> {
+        relay(() -> {
             // view unchanged where the chain now matches; a child's masked entries stay load-bearing
             committed.forEach((pos, block) -> {
                 if (revertsToParent(pos, block)) overlay.remove(pos);

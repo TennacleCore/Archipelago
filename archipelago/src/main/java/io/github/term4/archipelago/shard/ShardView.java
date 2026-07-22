@@ -191,10 +191,14 @@ public final class ShardView {
         }
     }
 
+    // the plain default can't know about views; don't clobber a custom policy
+    static void installDefaultPolicy() {
+        if (WorldPolicy.get() == WorldPolicy.SAME_WORLD) WorldPolicy.set(ShardPolicy.DEFAULT);
+    }
+
     /** Stamps + re-evaluates both visibility directions for {@code player} (rules read tags live, so re-stamping is idempotent). */
     static void applyRules(Player player) {
-        // the plain default can't know about views; don't clobber a custom policy
-        if (WorldPolicy.get() == WorldPolicy.SAME_WORLD) WorldPolicy.set(ShardPolicy.DEFAULT);
+        installDefaultPolicy();
         synchronized (RULE_LOCK) {
             player.updateViewableRule(v -> sees(v, player));
             player.updateViewerRule(e -> sees(player, e));
@@ -210,13 +214,14 @@ public final class ShardView {
         if (!player.isOnline()) return;
         var in = player.getInstance();
         Shard lca = lowestCommonAncestor(from, to);
-        Set<Point> positions = new HashSet<>();
         // each side only if the player is in that shard's world (a swap can cross instances)
-        if (from != null && in == from.instance()) collectChainDiff(from, lca, positions);
-        if (to != null && in == to.instance()) collectChainDiff(to, lca, positions);
+        Shard oldView = from != null && in == from.instance() ? from : null;
         Shard newView = to != null && in == to.instance() ? to : null;
+        Set<Point> positions = new HashSet<>();
+        if (oldView != null) collectChainDiff(oldView, lca, positions);
+        if (newView != null) collectChainDiff(newView, lca, positions);
         // light first: its unlit fallback re-sends BASE chunks whole, which would clobber the block sends below
-        Set<Long> resent = ShardLighting.onViewSwap(player, from != null && in == from.instance() ? from : null, newView);
+        Set<Long> resent = ShardLighting.onViewSwap(player, oldView, newView);
         if (newView != null && !resent.isEmpty()) {
             // a full base resend reverts the WHOLE chain's overlay in that chunk - shared-ancestor diffs the
             // LCA cut excluded included - so recover every chain position living in a resent chunk

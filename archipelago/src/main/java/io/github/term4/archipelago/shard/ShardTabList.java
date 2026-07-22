@@ -133,10 +133,11 @@ public final class ShardTabList {
         if (!installed || !player.isOnline()) return;
         List<PlayerInfoUpdatePacket.Entry> adds = new ArrayList<>();
         List<UUID> removes = new ArrayList<>();
+        PlayerInfoUpdatePacket.Entry self = entry(player);
         for (Player other : MinecraftServer.getConnectionManager().getOnlinePlayers()) {
             if (other == player) continue;
             // their list of the player
-            if (listed(other, player)) other.sendPacket(new PlayerInfoUpdatePacket(ALL_ACTIONS, List.of(entry(player))));
+            if (listed(other, player)) other.sendPacket(new PlayerInfoUpdatePacket(ALL_ACTIONS, List.of(self)));
             else other.sendPacket(new PlayerInfoRemovePacket(List.of(player.getUuid())));
             // the player's list of them
             if (listed(player, other)) adds.add(entry(other));

@@ -10,9 +10,8 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.locks.LockSupport;
 
 /**
- * One domain's clock: a free-running virtual-thread loop at the server tick rate, parked between ticks (a
- * blocked clock costs its carrier nothing). No clock waits for any other - a stall stays in its domain.
- * Ownership ops ({@link #submit}) drain first each cycle; overruns drop behind, never burst.
+ * One domain's clock: a free-running virtual-thread loop at the server tick rate, parked between ticks. No clock
+ * waits for any other. Ownership ops ({@link #submit}) drain first each cycle; overruns drop behind, never burst.
  */
 final class DomainClock {
 
@@ -36,7 +35,7 @@ final class DomainClock {
     volatile long tickStartNanos;
     /** One watchdog interrupt per stall episode; reset when the cycle completes. */
     volatile boolean interruptFired;
-    /** Tick cost gauges, single-writer on this thread (layout rule: per-clock counters live here). */
+    /** Single-writer on this thread. */
     private volatile double msptEwma;
     private volatile double msptLast;
     private volatile double msptMax;
@@ -65,19 +64,19 @@ final class DomainClock {
         return thread;
     }
 
-    /** Runs {@code op} on this clock's thread at the next cycle, before the domain ticks - the ownership seam. */
+    /** Runs {@code op} on this clock's thread at the next cycle, before the domain ticks. */
     void submit(Runnable op) {
         ops.add(op);
         LockSupport.unpark(thread);
     }
 
-    /** Ticks this domain is behind the wall clock - the honesty/saturation metric. */
+    /** Ticks this domain is behind the wall clock. */
     long lag() {
         long expected = baseTicks + (System.nanoTime() - baseNanos) / PERIOD_NANOS;
         return Math.max(0, expected - domain.ticks());
     }
 
-    /** Smoothed per-tick cost in ms (~16-tick horizon); lag() is lateness, this is the saturation gauge. */
+    /** Smoothed per-tick cost in ms (~16-tick horizon). */
     double mspt() {
         return msptEwma;
     }
@@ -95,7 +94,7 @@ final class DomainClock {
         return deadlineMisses;
     }
 
-    /** Ends the loop; {@code then} runs on THIS thread after the final cycle - adoption hand-offs hook here. */
+    /** Ends the loop; {@code then} runs on THIS thread after the final cycle. */
     void stop(@Nullable Runnable then) {
         afterStop = then;
         running = false;
@@ -134,8 +133,7 @@ final class DomainClock {
                 if (costNanos > PERIOD_NANOS) deadlineMisses++;
                 tickStartNanos = 0;
                 interruptFired = false;
-                // a watchdog interrupt that landed after the blockage freed must not poison the next park
-                Thread.interrupted();
+                Thread.interrupted(); // a late watchdog interrupt must not poison the next park
             }
         }
         // final cycle: stranded ops/relays complete before the hand-off hook; a quarantined domain keeps its

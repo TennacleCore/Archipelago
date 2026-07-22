@@ -15,8 +15,7 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * Where archipelago writes persistent files. Per key, first hit wins: {@link #set programmatic} > system property
  * {@code archipelago.<key>} > {@code archipelago.properties} in the working directory > the caller's default.
- * The library's own key is {@code crash-dir}; saves/replays are app-chosen paths - route them through here
- * (any key) for one config story.
+ * The library's own key is {@code crash-dir}.
  */
 public final class Storage {
 
