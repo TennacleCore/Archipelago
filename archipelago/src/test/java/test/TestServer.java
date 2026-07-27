@@ -36,7 +36,7 @@ import java.util.List;
 
 /**
  * Archipelago-only example server: shards over one shared map, per-shard clocks, lighting, saves, replays.
- * No external libraries beyond Minestom + polar. The combined playground with MinestomMechanics combat lives
+ * No external libraries beyond Minestom + polar. The combined playground with Polyp combat lives
  * in the Tennacle repo.
  */
 public final class TestServer {
