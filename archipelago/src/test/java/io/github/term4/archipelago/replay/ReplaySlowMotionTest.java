@@ -75,6 +75,57 @@ class ReplaySlowMotionTest extends HeadlessServerTest {
         }
     }
 
+    /**
+     * A TICK-DILATED actor ({@code simtps self 5}) only moves every 4th tick, and moves record on CHANGE, so
+     * its track is sparse. At full rate that used to render as 5Hz jumps - the glide paces the gap instead.
+     */
+    @Test
+    void dilatedActorGlidesAcrossItsSparseTrack() {
+        loadArea(800, 0);
+        CoreChannels.register();
+        Shard live = new Shard(instance);
+        FakePlayer actor = FakePlayer.connect(instance, new Pos(12800.5, 42, 0.5), "DilatedActor");
+        Playback pb = null;
+        try {
+            live.join(actor.player);
+            Recording rec = Replay.record(live);
+            for (int i = 0; i < 6; i++) { // a 5 TPS client: one 1-block step, then three still ticks
+                actor.player.teleport(new Pos(12800.5 + i, 42, 0.5));
+                tick();
+                for (int held = 0; held < 3; held++) tick();
+            }
+            rec.stop();
+            live.leave(actor.player);
+
+            Shard theater = new Shard(instance);
+            pb = Replay.play(theater, rec); // FULL rate: the choppy case
+            Ghost ghost = null;
+            for (int i = 0; i < 100 && ghost == null; i++) {
+                tick();
+                ghost = pb.ghost("DilatedActor");
+            }
+            assertNotNull(ghost, "the ghost rose");
+            for (int i = 0; i < 20 && ghost.getInstance() == null; i++) tick();
+
+            int moved = 0, sampled = 12;
+            double lastX = ghost.getPosition().x();
+            double maxStep = 0;
+            for (int i = 0; i < sampled; i++) {
+                tick();
+                double x = ghost.getPosition().x();
+                if (x > lastX + 1.0e-4) moved++;
+                maxStep = Math.max(maxStep, Math.abs(x - lastX));
+                lastX = x;
+            }
+            // op-cadence jumps would move on 1 in 4 ticks, a full block at a time
+            assertTrue(moved >= sampled / 2, "glide moved on " + moved + "/" + sampled + " ticks");
+            assertTrue(maxStep < 0.9, "no whole-gap hops (max step " + maxStep + ")");
+        } finally {
+            if (pb != null && pb.active()) pb.halt();
+            actor.player.remove();
+        }
+    }
+
     /** A revived PHYSICS twin parks at fractional rates: glide steps, never full-speed hops between corrections. */
     @Test
     void quarterRateParksThePhysicsTwin() {
