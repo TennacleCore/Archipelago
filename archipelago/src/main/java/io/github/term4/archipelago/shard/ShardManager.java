@@ -84,6 +84,21 @@ public final class ShardManager {
         return register(new Shard(base, domain), name);
     }
 
+    /** {@link #create(Instance)} seeded with copies of the base instance's entities ({@link Shard#seedFromBase}). */
+    public @NotNull Shard create(@NotNull Instance base, @Nullable Function<Entity, Entity> entityCloner) {
+        return register(new Shard(base).seedFromBase(entityCloner), null);
+    }
+
+    public @NotNull Shard create(@NotNull Instance base, @NotNull String name,
+                                 @Nullable Function<Entity, Entity> entityCloner) {
+        return register(new Shard(base).seedFromBase(entityCloner), name);
+    }
+
+    public @NotNull Shard create(@NotNull Instance base, @NotNull String name, @NotNull ExecutionDomain domain,
+                                 @Nullable Function<Entity, Entity> entityCloner) {
+        return register(new Shard(base, domain).seedFromBase(entityCloner), name);
+    }
+
     /** A child layer of {@code parent} ({@link Shard#Shard(Shard)}) registered under {@code name}. */
     public @NotNull Shard child(@NotNull Shard parent, @NotNull String name) {
         return register(new Shard(parent), name);

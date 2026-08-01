@@ -7,6 +7,7 @@ import org.slf4j.LoggerFactory;
 
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.LockSupport;
 
 /**
@@ -121,7 +122,11 @@ final class DomainClock {
             try {
                 Runnable op;
                 while ((op = ops.poll()) != null) safely(op);
-                domain.tick(System.currentTimeMillis());
+                // MONOTONIC millis, matching the server dispatcher's TickThread.tick (nanoTime -> toMillis) -
+                // not epoch millis, not raw nanos. Minestom stamps this value into Entity cooldowns (item
+                // pickup, xp) and judges them wherever the entity ticks next; a stamp in any larger unit reads
+                // as the far future on the server side and the cooldown never clears again
+                domain.tick(TimeUnit.NANOSECONDS.toMillis(System.nanoTime()));
             } catch (Throwable e) { // Errors included: a dead loop hangs every later relay into this domain
                 logOnce(e);
             } finally {
@@ -143,7 +148,7 @@ final class DomainClock {
                 Runnable op;
                 while ((op = ops.poll()) != null) safely(op);
             }
-            domain.drainTasks(System.currentTimeMillis());
+            domain.drainTasks(TimeUnit.NANOSECONDS.toMillis(System.nanoTime()));
         } catch (Throwable e) {
             logOnce(e);
         }

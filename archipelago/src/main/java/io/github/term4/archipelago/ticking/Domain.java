@@ -159,7 +159,10 @@ final class Domain {
         return tickHooks.size();
     }
 
-    /** Clock entry: hooks, then owned entities, on this domain's thread. */
+    /** Clock entry: hooks, then owned entities, on this domain's thread. {@code time} feeds {@code Entity#tick}
+     *  and must be the dispatcher's unit - monotonic millis, {@code TickThread}'s {@code toMillis(nanoTime)}.
+     *  Epoch millis or raw nanos stamp Minestom's cooldowns (item/xp pickup) with the far future, and they
+     *  never clear once the entity returns to server ticking. */
     void tick(long time) {
         long now = ++ticks;
         if (TICK_EVENT.hasListener()) safely(() -> TICK_EVENT.call(new DomainTickEvent(handle, now)), time);

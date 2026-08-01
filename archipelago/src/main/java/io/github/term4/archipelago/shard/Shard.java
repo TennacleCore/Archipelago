@@ -706,6 +706,21 @@ public final class Shard implements WorldAccess {
         });
     }
 
+    /**
+     * Seeds this shard with copies of the base instance's OWN entities ({@link #fork} semantics: a {@code null}
+     * clone skips that entity). Shard-owned entities and players never copy. A shard over a base otherwise
+     * starts empty - base entities are not shard-visible, so nothing carries over without this.
+     */
+    public @NotNull Shard seedFromBase(@Nullable Function<Entity, Entity> cloner) {
+        if (cloner == null) return this;
+        for (Entity entity : base.getEntities()) {
+            if (entity.isRemoved() || entity instanceof Player || of(entity) != null) continue;
+            Entity clone = cloner.apply(entity);
+            if (clone != null) spawn(clone, entity.getPosition());
+        }
+        return this;
+    }
+
     /** Per-position flatten rule: the block the combined shard keeps ({@code null} = none); a side absent at the position is {@code null}. */
     @FunctionalInterface
     public interface BlockMerge {

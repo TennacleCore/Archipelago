@@ -97,6 +97,31 @@ class DomainManagerTest {
         }
     }
 
+    /**
+     * Minestom stamps {@code Entity#tick}'s time into cooldowns (item pickup, xp) and judges them wherever the
+     * entity ticks NEXT, so a domain must hand out the exact unit the server dispatcher does: MONOTONIC millis
+     * ({@code TickThread.tick} converts the dispatcher's nanoStart with {@code toMillis}). Epoch millis and raw
+     * nanos both read as the far future server-side, and the cooldown never clears - a shard visitor silently
+     * loses item pickup on the way home.
+     */
+    @Test
+    void domainsTickInTheServerDispatchersTimeUnit() {
+        DomainManager domains = new DomainManager();
+        DetectorEntity probe = new DetectorEntity();
+        try {
+            domains.attach(domains.create(), probe);
+            probe.setInstance(instance, new Pos(4.5, 70, 4.5)).join();
+            await("the domain ticks", () -> probe.ticks.get() >= 3);
+            long seen = probe.tickTime.get();
+            long monotonicMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime());
+            assertTrue(Math.abs(monotonicMillis - seen) < 5_000,
+                    "domain tick time is not TickThread's monotonic millis: " + seen + " vs " + monotonicMillis);
+        } finally {
+            probe.remove();
+            domains.shutdown();
+        }
+    }
+
     @Test
     void aHungDomainNeverSlowsItsSiblings() {
         DomainManager domains = new DomainManager();

@@ -17,6 +17,8 @@ public class DetectorEntity extends DomainEntity {
 
     public final AtomicInteger overlaps = new AtomicInteger();
     public final AtomicLong ticks = new AtomicLong();
+    /** The {@code time} the driver passed - TickThread's unit is monotonic millis, and cooldowns are stamped with it. */
+    public final AtomicLong tickTime = new AtomicLong(-1);
     public volatile String thread = "";
     private final AtomicBoolean inTick = new AtomicBoolean();
     private final long parkNanos;
@@ -39,6 +41,7 @@ public class DetectorEntity extends DomainEntity {
         }
         try {
             thread = Thread.currentThread().getName();
+            tickTime.set(time);
             ticks.incrementAndGet();
             if (parkNanos > 0) LockSupport.parkNanos(parkNanos);
             super.tick(time);

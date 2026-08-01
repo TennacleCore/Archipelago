@@ -199,6 +199,30 @@ class ShardTest extends HeadlessServerTest {
     }
 
     @Test
+    void seedFromBaseCopiesLooseEntitiesAndSkipsShardOwnedOnes() {
+        ItemEntity loose = new ItemEntity(ItemStack.of(Material.EMERALD, 5));
+        loose.setInstance(instance, new Pos(60, 65, 60)).join();
+        Shard other = new Shard(instance);
+        ItemEntity owned = new ItemEntity(ItemStack.of(Material.DIAMOND, 2));
+        other.spawn(owned, new Pos(61, 65, 60)).join();
+        try {
+            Shard seeded = new Shard(instance).seedFromBase(Shard::copyEntity);
+            boolean copiedLoose = false;
+            for (Entity e : seeded.entities()) {
+                assertNotSame(loose, e, "seeding copies, it never adopts the original");
+                if (!(e instanceof ItemEntity item)) continue;
+                assertFalse(item.getItemStack().material() == Material.DIAMOND,
+                        "a shard-owned entity is not the base's to copy");
+                copiedLoose |= item.getItemStack().material() == Material.EMERALD;
+            }
+            assertTrue(copiedLoose, "the base instance's own item copies into the shard");
+        } finally {
+            loose.remove();
+            owned.remove();
+        }
+    }
+
+    @Test
     void defaultClonerCopiesWhatItSafelyCan() {
         Shard a = new Shard(instance);
         LivingEntity plain = new LivingEntity(EntityType.ZOMBIE);
