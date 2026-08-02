@@ -75,7 +75,7 @@ class SoakTest extends HeadlessServerTest {
 
         // stand-in server tick: the global dispatcher really drains, so a lost hand-off would double-tick
         workers.add(worker(run, failure, () -> {
-            MinecraftServer.process().dispatcher().updateAndAwait(System.currentTimeMillis());
+            MinecraftServer.process().dispatcher().updateAndAwait(System.nanoTime());
             LockSupport.parkNanos(5_000_000);
         }));
 

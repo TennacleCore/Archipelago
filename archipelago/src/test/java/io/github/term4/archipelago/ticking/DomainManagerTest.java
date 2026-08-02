@@ -187,7 +187,7 @@ class DomainManagerTest {
         AtomicBoolean serve = new AtomicBoolean(true);
         Thread server = new Thread(() -> { // headless stand-in for serverTick's updateAndAwait cadence
             while (serve.get()) {
-                dispatcher.updateAndAwait(System.currentTimeMillis());
+                dispatcher.updateAndAwait(System.nanoTime());
                 LockSupport.parkNanos(2_000_000);
             }
         });
@@ -222,7 +222,7 @@ class DomainManagerTest {
         AtomicBoolean serve = new AtomicBoolean(true);
         Thread server = new Thread(() -> {
             while (serve.get()) {
-                dispatcher.updateAndAwait(System.currentTimeMillis());
+                dispatcher.updateAndAwait(System.nanoTime());
                 LockSupport.parkNanos(2_000_000);
             }
         });
@@ -267,7 +267,7 @@ class DomainManagerTest {
             DomainManager.detach(evacuee); // the quarantine evacuation path - dropping it would freeze the entity forever
             assertNull(Domain.of(evacuee), "detach must work on a quarantined domain");
             long before = evacuee.ticks.get();
-            evacuee.tick(System.currentTimeMillis()); // server-tickable again (headless stand-in)
+            evacuee.tick(System.nanoTime() / 1_000_000); // server-tickable again (headless stand-in)
             assertEquals(before + 1, evacuee.ticks.get());
 
             domains.attach(refuge, rebound); // ...and so must moving survivors to a live domain
@@ -340,7 +340,7 @@ class DomainManagerTest {
             await("the entity is handed back to the server", () -> Domain.of(e) == null);
             long before = e.ticks.get();
             await("the global dispatcher really ticks it again", () -> {
-                MinecraftServer.process().dispatcher().updateAndAwait(System.currentTimeMillis());
+                MinecraftServer.process().dispatcher().updateAndAwait(System.nanoTime());
                 return e.ticks.get() > before;
             });
         } finally {

@@ -158,7 +158,7 @@ class ReplaySlowMotionTest extends HeadlessServerTest {
             int moved = 0, sampled = 24;
             double maxStep = 0;
             double lastX = twin.getPosition().x();
-            long time = System.currentTimeMillis();
+            long time = System.nanoTime() / 1_000_000; // Entity#tick takes monotonic millis (TickThread toMillis)
             for (int i = 0; i < sampled; i++) {
                 twin.tick(time + i * 50L); // leg-flight: the twin's own sim integrates (in-game the domain ticks it)
                 tick();
@@ -215,7 +215,7 @@ class ReplaySlowMotionTest extends HeadlessServerTest {
             pb.pause(false); // and the reverse flight: back along the arc, then gone at its spawn crossing
             double risen = twin.getPosition().x();
             double lowest = risen;
-            long time = System.currentTimeMillis();
+            long time = System.nanoTime() / 1_000_000; // Entity#tick takes monotonic millis (TickThread toMillis)
             for (int i = 0; i < 60; i++) {
                 if (!twin.isRemoved()) twin.tick(time + i * 50L); // leg-flight: its sim integrates (in-game the domain ticks it)
                 tick();
@@ -317,9 +317,9 @@ class ReplaySlowMotionTest extends HeadlessServerTest {
                     } else if (pk instanceof EntityPositionAndRotationPacket p && p.entityId() == id) {
                         clientPos = clientPos.add(p.deltaX() / 4096.0, p.deltaY() / 4096.0, p.deltaZ() / 4096.0);
                     } else if (pk instanceof EntityTeleportPacket p && p.entityId() == id) {
-                        clientPos = Pos.fromPoint(p.position());
+                        clientPos = p.position().asPos();
                     } else if (pk instanceof EntityPositionSyncPacket p && p.entityId() == id) {
-                        clientPos = Pos.fromPoint(p.position());
+                        clientPos = p.position().asPos();
                     } else if (pk instanceof EntityVelocityPacket p && p.entityId() == id) {
                         clientVel = p.velocity();
                     }

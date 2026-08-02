@@ -55,7 +55,7 @@ class DomainPlayerTest extends HeadlessServerTest {
                     () -> player.ticks.get() >= 3 && player.thread.startsWith("shard-domain:"));
 
             long gated = player.gated.get();
-            player.tick(System.currentTimeMillis()); // a stale driver (this thread): the gate must no-op it
+            player.tick(System.nanoTime() / 1_000_000); // a stale driver (this thread): the gate must no-op it
             assertEquals(gated + 1, player.gated.get(), "a foreign driver's call never runs the tick body");
 
             shard.leave(player);
