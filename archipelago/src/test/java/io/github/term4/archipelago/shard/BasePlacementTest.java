@@ -47,7 +47,7 @@ class BasePlacementTest extends HeadlessServerTest {
             local.setInstance(instance, new Pos(1902.5, 64, 1900.5)).join(); // the placer's own (base) world
             placer.sent.clear();
             Shard.placementListener(placeOnTopOf(1902, 63, 1900), placer.player);
-            assertTrue(instance.getBlock(1902, 64, 1900).isAir(), "a same-world entity still blocks it");
+            assertTrue(instance.getBlock(1902, 64, 1900).air(), "a same-world entity still blocks it");
             assertTrue(placer.sent(BlockChangePacket.class).stream()
                             .anyMatch(p -> p.blockPosition().sameBlock(new Vec(1902, 64, 1900))),
                     "with the stock targeted rollback, not a chunk resend");

@@ -52,7 +52,7 @@ class ShardFileTest extends HeadlessServerTest {
 
         Map<Point, Block> before = ShardFile.before(file);
         assertEquals(Block.STONE, before.get(buried), "the before column carries what the diff covered");
-        assertTrue(before.get(aired).isAir());
+        assertTrue(before.get(aired).air());
     }
 
     @Test
@@ -139,7 +139,7 @@ class ShardFileTest extends HeadlessServerTest {
         assertSame(m2, l2.parent());
         assertEquals(root.diff(), r2.diff());
         assertEquals(mid.diff(), m2.diff(), "the explicit-air mask survives");
-        assertTrue(m2.getBlock(a).isAir(), "the mask still masks the ancestor block");
+        assertTrue(m2.getBlock(a).air(), "the mask still masks the ancestor block");
         assertEquals(Block.GOLD_BLOCK, r2.getBlock(a));
         assertEquals(leaf.diff(), l2.diff());
         assertEquals(1000, r2.timeOverride());
@@ -227,9 +227,9 @@ class ShardFileTest extends HeadlessServerTest {
 
         Shard view = new Shard(instance);
         ShardFile.load(view, ShardFile.rollbackChain(List.of(f1, f2)));
-        assertTrue(view.getBlock(built).isAir(), "the OLDEST before wins - the pre-run state");
+        assertTrue(view.getBlock(built).air(), "the OLDEST before wins - the pre-run state");
         assertEquals(Block.STONE, view.getBlock(carved), "the carved base block restores");
-        assertTrue(view.getBlock(extra).isAir());
+        assertTrue(view.getBlock(extra).air());
         assertEquals(3, view.overlaySize(), "ten commits view as ONE overlay, not ten layers");
     }
 

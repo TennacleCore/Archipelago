@@ -47,7 +47,7 @@ repositories {
 }
 
 dependencies {
-    val minestomVersion = "2026.07.12-26.2"
+    val minestomVersion = "2026.08.16-26.2"
     val junitVersion = "6.0.3"
 
     compileOnly("net.minestom:minestom:$minestomVersion")

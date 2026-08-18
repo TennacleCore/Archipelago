@@ -96,7 +96,7 @@ final class BlockRouting {
             else if (bound != null || viewed != null) edited = null; // read-only: swallowed + resynced
             else return;
             // unclaimed packets (interactions, throwables, drops) stay Minestom's
-            if (place ? !player.getItemInHand(((ClientPlayerBlockPlacementPacket) packet).hand()).material().isBlock()
+            if (place ? player.getItemInHand(((ClientPlayerBlockPlacementPacket) packet).hand()).material().block() == null
                     : !digs((ClientPlayerActionPacket) packet)) {
                 return;
             }
@@ -189,14 +189,14 @@ final class BlockRouting {
         // bumps those to the neighbour; isSelfReplaceable = slab merging
         BlockVec target;
         var interactedRule = manager.getBlockPlacementRule(interacted);
-        if (interacted.registry().isReplaceable() || (interactedRule != null && interactedRule.isSelfReplaceable(
+        if (interacted.replaceable() || (interactedRule != null && interactedRule.isSelfReplaceable(
                 new BlockPlacementRule.Replacement(interacted, p.blockFace(), cursor, false, material)))) {
             target = clicked;
         } else {
             target = clicked.relative(p.blockFace());
             Block atTarget = shard.getBlock(target);
             var targetRule = manager.getBlockPlacementRule(atTarget);
-            if (!atTarget.registry().isReplaceable() && !(targetRule != null && targetRule.isSelfReplaceable(
+            if (!atTarget.replaceable() && !(targetRule != null && targetRule.isSelfReplaceable(
                     new BlockPlacementRule.Replacement(atTarget, p.blockFace(), cursor, true, material)))) {
                 canPlace = false;
             }
@@ -248,7 +248,7 @@ final class BlockRouting {
             EventDispatcher.call(new PlayerCancelDiggingEvent(player, base, block, pos));
             return;
         }
-        if (block.isAir()) return;
+        if (block.air()) return;
         if (shouldPreventBreaking(player, block)) {
             resync(shard, player, pos, pos);
             return;
@@ -319,7 +319,7 @@ final class BlockRouting {
     /** Whether a block at {@code pos} would overlap a shard entity/member (upstream canPlaceBlockAt over the shard). */
     private static boolean intersectsEntity(Shard shard, Point pos, Player placer, Block placing) {
         boolean placerExempt = selfPlaceExempt.test(placing);
-        Shape shape = placing.registry().collisionShape();
+        Shape shape = placing.collisionShape();
         for (Entity e : shard.entities) {
             if (!e.isRemoved() && intersects(shape, pos, e)) return true;
         }

@@ -48,9 +48,9 @@ class ShardTest extends HeadlessServerTest {
         Shard b = new Shard(instance);
         a.setBlock(new Vec(5, 70, 5), Block.STONE);
         assertEquals(Block.STONE, a.getBlock(5, 70, 5), "the writing shard sees its diff");
-        assertTrue(instance.getBlock(5, 70, 5).isAir(), "the base map is never written");
-        assertTrue(b.getBlock(5, 70, 5).isAir(), "a sibling shard sees the clean map");
-        assertTrue(WorldAccess.of(instance).getBlock(5, 70, 5).isAir(), "the base wrapper sees the clean map");
+        assertTrue(instance.getBlock(5, 70, 5).air(), "the base map is never written");
+        assertTrue(b.getBlock(5, 70, 5).air(), "a sibling shard sees the clean map");
+        assertTrue(WorldAccess.of(instance).getBlock(5, 70, 5).air(), "the base wrapper sees the clean map");
     }
 
     @Test
@@ -58,7 +58,7 @@ class ShardTest extends HeadlessServerTest {
         Shard a = new Shard(instance);
         assertTrue(instance.getBlock(3, 63, 3).compare(Block.STONE), "base surface present");
         a.setBlock(new Vec(3, 63, 3), Block.AIR);
-        assertTrue(a.getBlock(3, 63, 3).isAir(), "explicit air overrides the base block");
+        assertTrue(a.getBlock(3, 63, 3).air(), "explicit air overrides the base block");
         assertTrue(instance.getBlock(3, 63, 3).compare(Block.STONE), "the base keeps it");
     }
 
@@ -191,7 +191,7 @@ class ShardTest extends HeadlessServerTest {
             assertSame(a, WorldAccess.of(zombie), "the original keeps its own");
 
             b.setBlock(new Vec(42, 70, 40), Block.OAK_PLANKS);
-            assertTrue(a.getBlock(42, 70, 40).isAir(), "forks are independent");
+            assertTrue(a.getBlock(42, 70, 40).air(), "forks are independent");
             owned.get(0).remove();
         } finally {
             zombie.remove();
@@ -343,7 +343,7 @@ class ShardTest extends HeadlessServerTest {
             manager.destroy(game);
             assertNull(manager.byName("game1"));
             assertEquals(0, game.overlaySize(), "destroy drops the diff");
-            assertTrue(instance.getBlock(9, 70, 9).isAir(), "destroy never writes the base map");
+            assertTrue(instance.getBlock(9, 70, 9).air(), "destroy never writes the base map");
             assertTrue(fired.stream().anyMatch(e -> e instanceof ShardCreateEvent c && c.shard() == game));
             assertTrue(fired.stream().anyMatch(e -> e instanceof ShardDestroyEvent d && d.shard() == game));
         } finally {
@@ -372,7 +372,7 @@ class ShardTest extends HeadlessServerTest {
         assertEquals(1, a.overlaySize());
         a.reset();
         assertEquals(0, a.overlaySize());
-        assertTrue(a.getBlock(6, 70, 6).isAir(), "back to the base map");
+        assertTrue(a.getBlock(6, 70, 6).air(), "back to the base map");
     }
 
     @Test

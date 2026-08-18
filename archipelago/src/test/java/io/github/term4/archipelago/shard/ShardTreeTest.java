@@ -50,15 +50,15 @@ class ShardTreeTest extends HeadlessServerTest {
         root.setBlock(new Vec(1701, 70, 1700), Block.GOLD_BLOCK);
         assertEquals(Block.GOLD_BLOCK, child.getBlock(1701, 70, 1700), "child reads through to the parent layer");
         assertEquals(Block.GOLD_BLOCK, grandchild.getBlock(1701, 70, 1700), "and so does the grandchild");
-        assertTrue(instance.getBlock(1701, 70, 1700).isAir(), "the base map is never written");
+        assertTrue(instance.getBlock(1701, 70, 1700).air(), "the base map is never written");
 
         child.setBlock(new Vec(1701, 70, 1700), Block.AIR); // explicit air: the ancestor block is broken HERE
-        assertTrue(child.getBlock(1701, 70, 1700).isAir(), "explicit air masks the parent layer");
-        assertTrue(grandchild.getBlock(1701, 70, 1700).isAir(), "the mask carries down the chain");
+        assertTrue(child.getBlock(1701, 70, 1700).air(), "explicit air masks the parent layer");
+        assertTrue(grandchild.getBlock(1701, 70, 1700).air(), "the mask carries down the chain");
         assertEquals(Block.GOLD_BLOCK, root.getBlock(1701, 70, 1700), "the parent keeps its block");
 
         child.setBlock(new Vec(1702, 70, 1700), Block.DIAMOND_BLOCK);
-        assertTrue(root.getBlock(1702, 70, 1700).isAir(), "a child write never shows upward");
+        assertTrue(root.getBlock(1702, 70, 1700).air(), "a child write never shows upward");
         assertEquals(Block.STONE, grandchild.getBlock(1702, 63, 1700), "the base surface shows through the whole chain");
     }
 
@@ -268,7 +268,7 @@ class ShardTreeTest extends HeadlessServerTest {
         Map<Point, Block> diff = flat.diff();
         assertEquals(Block.GOLD_BLOCK, diff.get(under), "the root layer rides along");
         assertEquals(Block.DIAMOND_BLOCK, diff.get(over));
-        assertTrue(flat.getBlock(broken).isAir(), "the leaf's mask wins over the root's block");
+        assertTrue(flat.getBlock(broken).air(), "the leaf's mask wins over the root's block");
         assertNull(diff.get(broken), "air over base air is no diff - the mask normalized away");
         assertEquals(13000, flat.timeOverride(), "the nearest sky override carries");
         assertEquals(2, flat.entities().size(), "every LAYER's entities gathered, not just the leaf's");

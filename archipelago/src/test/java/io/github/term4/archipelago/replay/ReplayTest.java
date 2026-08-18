@@ -613,7 +613,7 @@ class ReplayTest {
             assertEquals(8, pb.tick());
             await("the ghost jumps to its latest folded position", () -> ghost.getPosition().x() == 8.5);
             assertEquals(Block.STONE, theater.getBlock(1, 70, 1), "block ops inside the window apply");
-            assertTrue(theater.getBlock(2, 70, 2).isAir(), "later ops don't");
+            assertTrue(theater.getBlock(2, 70, 2).air(), "later ops don't");
             assertNull(pb.entity(0), "a spawn cancelled by its remove never materializes");
 
             tick();
@@ -714,7 +714,7 @@ class ReplayTest {
             assertTrue(pb.reversed());
             tick(); // -> 1: two reversed steps, the op un-crosses
             assertEquals(1, pb.tick());
-            assertTrue(theater.getBlock(3, 72, 3).isAir(), "reverse honors the rate");
+            assertTrue(theater.getBlock(3, 72, 3).air(), "reverse honors the rate");
             pb.pause(true);
             pb.rate(1); // asking for motion resumes a paused timeline
             assertFalse(pb.paused());
@@ -737,7 +737,7 @@ class ReplayTest {
         theater.setBlock(new Pos(9, 71, 9), Block.DIRT);
         assertThrows(IllegalArgumentException.class, () -> Replay.play(theater, plainSave));
         assertEquals(Block.DIRT, theater.getBlock(9, 71, 9), "the failed play left the target's overlay alone");
-        assertTrue(theater.getBlock(5, 71, 5).isAir(), "and no t0 snapshot landed");
+        assertTrue(theater.getBlock(5, 71, 5).air(), "and no t0 snapshot landed");
     }
 
     @Test
@@ -804,7 +804,7 @@ class ReplayTest {
             pb.seek(1);
             assertEquals(Block.STONE, theater.getBlock(arena), "the edit recorded at the write hook");
             pb.seek(3);
-            assertTrue(theater.getBlock(arena).isAir(),
+            assertTrue(theater.getBlock(arena).air(),
                     "the commit recorded too - the footage shows time snapping back");
         } finally {
             pb.halt();
@@ -927,7 +927,7 @@ class ReplayTest {
 
             pb.seek(2); // instant time travel, 2 ticks back (rewind + refold)
             assertEquals(Block.STONE, theater.getBlock(kept), "tick 2's stone applied");
-            assertTrue(theater.getBlock(placed).isAir(),
+            assertTrue(theater.getBlock(placed).air(),
                     "the not-yet-built planks are masked off the live parent");
             assertEquals(Block.OAK_PLANKS, live.getBlock(placed), "the live present is untouched behind the mask");
             assertNotNull(pb.ghost("Steve"), "the past's fighter stands in the theater");
@@ -946,7 +946,7 @@ class ReplayTest {
         live.setBlocks(theater.diff());
         theater.reset();
         assertEquals(Block.GOLD_BLOCK, live.getBlock(kept), "time rewound for real");
-        assertTrue(live.getBlock(placed).isAir());
+        assertTrue(live.getBlock(placed).air());
         assertFalse(live.diff().containsKey(new Vec(12, 70, 3)), "the planks entry cleared - the rewind IS the undo");
     }
 
@@ -997,7 +997,7 @@ class ReplayTest {
             assertEquals(Block.GOLD_BLOCK, theater.getBlock(kept), "prior-less ops restore the t0 snapshot");
             tick(); // -> 0: the place un-crosses to the parent view; Steve un-sights
             assertEquals(0, pb.tick());
-            assertTrue(theater.getBlock(placed).isAir());
+            assertTrue(theater.getBlock(placed).air());
             assertNull(pb.ghost("Steve"), "before his first move he wasn't here");
             assertEquals(stage.diff(), theater.diff(), "fully unwound, the theater IS the t0 snapshot");
             tick(); // holds at 0
@@ -1043,7 +1043,7 @@ class ReplayTest {
             assertEquals(3, pb.tick());
             assertEquals(Block.GOLD_BLOCK, theater.getBlock(3, 70, 3), "t0 re-seeded");
             assertEquals(Block.STONE, theater.getBlock(1, 71, 1), "ops inside the window re-applied");
-            assertTrue(theater.getBlock(2, 71, 2).isAir(), "later blocks unwound");
+            assertTrue(theater.getBlock(2, 71, 2).air(), "later blocks unwound");
             assertNotNull(pb.entity(0), "the twin is alive again before its recorded removal");
 
             pb.seek(6); // and forward again

@@ -153,8 +153,8 @@ class ShardViewTest extends HeadlessServerTest {
         try {
             spectator.sent.clear();
             assertTrue(dispatch(spectator.player, placePacket(4, 63, 4)), "swallowed, never reaches Minestom");
-            assertTrue(shard.getBlock(4, 64, 4).isAir(), "nothing lands in the overlay");
-            assertTrue(instance.getBlock(4, 64, 4).isAir(), "nothing lands in the base map");
+            assertTrue(shard.getBlock(4, 64, 4).air(), "nothing lands in the overlay");
+            assertTrue(instance.getBlock(4, 64, 4).air(), "nothing lands in the base map");
             assertEquals(5, spectator.player.getItemInMainHand().amount(), "nothing consumed");
             assertFalse(spectator.sent(BlockChangePacket.class).isEmpty(), "the client's prediction is corrected");
 
@@ -178,7 +178,7 @@ class ShardViewTest extends HeadlessServerTest {
             // the write and the trailing ack run on the shard's own clock, not this thread
             await("the placement lands on the domain clock", () -> shard.getBlock(7, 64, 7).compare(Block.STONE));
             await("the ack follows the block work", () -> !member.sent(AcknowledgeBlockChangePacket.class).isEmpty());
-            assertTrue(instance.getBlock(7, 64, 7).isAir(), "the base map is never written");
+            assertTrue(instance.getBlock(7, 64, 7).air(), "the base map is never written");
         } finally {
             shard.leave(member.player);
             member.player.setItemInMainHand(ItemStack.AIR);
@@ -215,7 +215,7 @@ class ShardViewTest extends HeadlessServerTest {
         try {
             assertTrue(dispatch(member.player, placePacket(2, 63, 2)));
             assertTrue(shard.getBlock(2, 64, 2).compare(Block.STONE));
-            assertTrue(instance.getBlock(2, 64, 2).isAir(), "the base map is never written");
+            assertTrue(instance.getBlock(2, 64, 2).air(), "the base map is never written");
             assertEquals(4, member.player.getItemInMainHand().amount(), "survival consumes the block");
         } finally {
             shard.leave(member.player);
@@ -231,7 +231,7 @@ class ShardViewTest extends HeadlessServerTest {
         member.player.setItemInMainHand(ItemStack.of(Material.STONE));
         try {
             assertTrue(dispatch(member.player, placePacket(6, 63, 6)));
-            assertTrue(shard.getBlock(6, 64, 6).isAir(), "base-pipeline parity: spectators place nothing");
+            assertTrue(shard.getBlock(6, 64, 6).air(), "base-pipeline parity: spectators place nothing");
         } finally {
             member.player.setGameMode(GameMode.SURVIVAL);
             member.player.setItemInMainHand(ItemStack.AIR);
@@ -254,7 +254,7 @@ class ShardViewTest extends HeadlessServerTest {
             assertEquals(0, member.sent(BlockChangePacket.class).size(), "no per-block packets");
             assertEquals(0, bystander.sent(MultiBlockChangePacket.class).size());
             assertTrue(shard.getBlock(10, 80, 10).compare(Block.OAK_PLANKS));
-            assertTrue(instance.getBlock(10, 70, 10).isAir(), "the base map is never written");
+            assertTrue(instance.getBlock(10, 70, 10).air(), "the base map is never written");
         } finally {
             shard.leave(member.player);
             shard.reset();
@@ -274,7 +274,7 @@ class ShardViewTest extends HeadlessServerTest {
         try {
             assertTrue(dispatch(spectator.player, placePacket(9, 63, 9)));
             assertTrue(shard.getBlock(9, 64, 9).compare(Block.STONE), "granted build access lands in the viewed overlay");
-            assertTrue(instance.getBlock(9, 64, 9).isAir());
+            assertTrue(instance.getBlock(9, 64, 9).air());
         } finally {
             WorldPolicy.set(ShardPolicy.DEFAULT);
             ShardView.set(spectator.player, null);
@@ -340,7 +340,7 @@ class ShardViewTest extends HeadlessServerTest {
 
             member.sent.clear(); spectator.sent.clear();
             assertTrue(dispatch(member.player, digPacket(ClientPlayerActionPacket.Status.FINISHED_DIGGING, 3, 64, 3)));
-            assertTrue(shard.getBlock(3, 64, 3).isAir(), "the client's FINISHED completes the dig");
+            assertTrue(shard.getBlock(3, 64, 3).air(), "the client's FINISHED completes the dig");
             assertEquals(1, spectator.sent(WorldEventPacket.class).size(), "watchers get the destroy FX");
             assertEquals(0, member.sent(WorldEventPacket.class).size(), "the digger plays its own");
         } finally {

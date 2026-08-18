@@ -43,7 +43,7 @@ class ReadOnlyPlacementTest extends HeadlessServerTest {
             assertTrue(event.isCancelled(), "a read-only view swallows the placement");
             assertFalse(spectator.sent(WindowItemsPacket.class).isEmpty(),
                     "the refusal must resync the inventory - the client already predicted the stack decrement");
-            assertTrue(viewed.getBlock(new Vec(2000, 64, 2000)).isAir(), "and nothing was written");
+            assertTrue(viewed.getBlock(new Vec(2000, 64, 2000)).air(), "and nothing was written");
         } finally {
             ShardView.set(spectator.player, null);
             spectator.player.remove();

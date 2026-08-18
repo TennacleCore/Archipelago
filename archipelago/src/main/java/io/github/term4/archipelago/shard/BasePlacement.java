@@ -84,7 +84,7 @@ final class BasePlacement {
         }
 
         final Material useMaterial = usedItem.material();
-        if (!useMaterial.isBlock()) {
+        if (useMaterial.block() == null) {
             // Player didn't try to place a block but interacted with one
             PlayerUseItemOnBlockEvent event = new PlayerUseItemOnBlockEvent(player, hand, usedItem, blockPosition, cursorPosition, blockFace);
             EventDispatcher.call(event);
@@ -106,7 +106,7 @@ final class BasePlacement {
         var interactedPlacementRule = BLOCK_MANAGER.getBlockPlacementRule(interactedBlock);
         // local change 2 (mirrors BlockRouting.place): replaceable clicked block replaced IN PLACE like
         // vanilla/client prediction; upstream bumps it to the neighbor
-        if (!interactedBlock.isAir() && !interactedBlock.registry().isReplaceable()
+        if (!interactedBlock.air() && !interactedBlock.replaceable()
                 && (interactedPlacementRule == null || !interactedPlacementRule.isSelfReplaceable(
                 new BlockPlacementRule.Replacement(interactedBlock, blockFace, cursorPosition, false, useMaterial)))) {
             // If the block is not replaceable, try to place next to it.
@@ -114,7 +114,7 @@ final class BasePlacement {
 
             var placementBlock = instance.getBlock(placementPosition);
             var placementRule = BLOCK_MANAGER.getBlockPlacementRule(placementBlock);
-            if (!placementBlock.registry().isReplaceable() && !(placementRule != null && placementRule.isSelfReplaceable(
+            if (!placementBlock.replaceable() && !(placementRule != null && placementRule.isSelfReplaceable(
                     new BlockPlacementRule.Replacement(placementBlock, blockFace, cursorPosition, true, useMaterial)))) {
                 canPlaceBlock = false;
             }
@@ -193,9 +193,9 @@ final class BasePlacement {
             if (entity instanceof Player) {
                 // upstream: nudged off the block edge (a player exactly on the boundary would false-intersect)
                 Point playerPos = entity.getPosition().add(entity.getPosition().sub(blockPos).mul(0.0000001));
-                intersects = b.registry().collisionShape().intersectBox(playerPos.sub(blockPos), entity.getBoundingBox());
+                intersects = b.collisionShape().intersectBox(playerPos.sub(blockPos), entity.getBoundingBox());
             } else {
-                intersects = b.registry().collisionShape().intersectBox(entity.getPosition().sub(blockPos), entity.getBoundingBox());
+                intersects = b.collisionShape().intersectBox(entity.getPosition().sub(blockPos), entity.getBoundingBox());
             }
             if (intersects) return entity;
         }

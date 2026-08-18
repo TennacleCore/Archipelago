@@ -78,7 +78,7 @@ class PolarShardCodecTest {
         PolarShardCodec.load(restored, bytes);
 
         assertEquals(original.diff(), restored.diff(), "every entry round-trips, properties included");
-        assertTrue(restored.getBlock(4, 63, 4).isAir(), "explicit air survives");
+        assertTrue(restored.getBlock(4, 63, 4).air(), "explicit air survives");
         assertNull(restored.diff().get(new Vec(4, 64, 4)), "untouched positions stay absent from the diff");
         assertEquals(4, restored.overlaySize(), "no phantom entries from the untouched sentinel");
         assertEquals(18000, restored.timeOverride(), "fixed time restores as an override");
