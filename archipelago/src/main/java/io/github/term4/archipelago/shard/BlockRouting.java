@@ -29,6 +29,7 @@ import net.minestom.server.event.player.PlayerSpawnEvent;
 import net.minestom.server.event.player.PlayerStartDiggingEvent;
 import net.minestom.server.instance.Instance;
 import net.minestom.server.instance.block.Block;
+import net.minestom.server.instance.block.BlockFace;
 import net.minestom.server.instance.block.rule.BlockPlacementRule;
 import net.minestom.server.item.ItemStack;
 import net.minestom.server.item.Material;
@@ -54,6 +55,9 @@ final class BlockRouting {
 
     /** Blocks a placer may put into their OWN body (e.g. a 1.8-mechanics lib exempts ladders/vines/webs). */
     static volatile Predicate<Block> selfPlaceExempt = block -> false;
+
+    /** {@link Shard#breakFx}: replaceable so effects stay a mechanics concern, with a vanilla default. */
+    static volatile Shard.BreakFx breakFx = BlockRouting::defaultBreakFx;
 
     /** Wraps the installed base placement listener; re-applied whenever it changes, so registration order never matters. */
     private static volatile UnaryOperator<BiConsumer<ClientPlayerBlockPlacementPacket, Player>> placementDecorator =
@@ -204,14 +208,14 @@ final class BlockRouting {
 
         DimensionType dim = shard.dimension();
         if (target.y() >= dim.maxY() || target.y() < dim.minY()) {
-            rejectPlace(shard, player, clicked, target);
+            rejectPlace(shard, player, clicked, target, p.blockFace());
             return;
         }
         if (!base.getWorldBorder().inBounds(target)) canPlace = false;
 
         Block block = held.get(DataComponents.BLOCK_STATE, ItemBlockState.EMPTY).apply(material.block());
         if (!canPlace || intersectsEntity(shard, target, player, block)) {
-            rejectPlace(shard, player, clicked, target);
+            rejectPlace(shard, player, clicked, target, p.blockFace());
             return;
         }
         // orientation/shape rules over the SHARD view; the base pipeline runs them inside placeBlock - here pre-event
@@ -220,14 +224,14 @@ final class BlockRouting {
             Block ruled = rule.blockPlace(new BlockPlacementRule.PlacementState(
                     (x, y, z, cond) -> shard.getBlock(x, y, z, cond), block, p.blockFace(), target,
                     cursor, player.getPosition(), held, player.isSneaking()));
-            if (ruled == null) { rejectPlace(shard, player, clicked, target); return; } // rule rejected the spot
+            if (ruled == null) { rejectPlace(shard, player, clicked, target, p.blockFace()); return; } // rule rejected the spot
             block = ruled;
         }
         PlayerBlockPlaceEvent event = new PlayerBlockPlaceEvent(player, base, block, p.blockFace(), target, cursor, p.hand());
         event.consumeBlock(player.getGameMode() != GameMode.CREATIVE);
         EventDispatcher.call(event);
         if (event.isCancelled()) {
-            rejectPlace(shard, player, clicked, target);
+            rejectPlace(shard, player, clicked, target, p.blockFace());
             return;
         }
         shard.setBlock(target, event.getBlock());
@@ -275,9 +279,14 @@ final class BlockRouting {
             return;
         }
         shard.setBlock(pos, event.getResultBlock());
-        var fx = new WorldEventPacket(WorldEvent.PARTICLES_DESTROY_BLOCK.id(), pos, block.stateId(), false);
-        for (Player w : shard.watchers()) {
-            if (w != player) w.sendPacket(fx);
+        breakFx.play(player, shard, pos, block);
+    }
+
+    private static void defaultBreakFx(Player breaker, Shard shard, Point pos, Block broken) {
+        // world event 2001: the client derives sound + particles from the block id; the breaker predicts its own
+        var fx = new WorldEventPacket(WorldEvent.PARTICLES_DESTROY_BLOCK.id(), pos, broken.stateId(), false);
+        for (Player watcher : shard.watchers()) {
+            if (watcher != breaker) watcher.sendPacket(fx);
         }
     }
 
@@ -337,10 +346,19 @@ final class BlockRouting {
         return shape.intersectBox(ep.sub(pos), e.getBoundingBox());
     }
 
-    /** A rejected placement: the client already decremented its held stack, so refresh the inventory too. */
-    private static void rejectPlace(Shard shard, Player actor, Point clicked, Point target) {
+    /**
+     * A rejected placement: the client already decremented its held stack, so refresh the inventory too.
+     * The adjacent spot is re-asserted as well - the client picked adjacent-vs-replace on ITS view, so a
+     * lagged phantom at the clicked spot puts its prediction one block past the server's {@code target}.
+     */
+    private static void rejectPlace(Shard shard, Player actor, Point clicked, Point target, BlockFace face) {
         actor.getInventory().update();
         resync(shard, actor, clicked, target);
+        Point adjacent = clicked.relative(face);
+        if (!adjacent.equals(clicked) && !adjacent.equals(target) && actor.getInstance() != null
+                && actor.getInstance().isChunkLoaded(adjacent)) {
+            actor.sendPacket(new BlockChangePacket(adjacent, shard.getBlock(adjacent)));
+        }
     }
 
     /** Re-asserts the shard view of the interaction site to the actor (whose client predicted a change). */

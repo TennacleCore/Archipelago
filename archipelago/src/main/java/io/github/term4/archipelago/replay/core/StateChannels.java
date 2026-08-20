@@ -58,19 +58,22 @@ public final class StateChannels {
     public static final Recordable<Health> HEALTH = Recordable.of("replay:health", 1, 50, StructCodec.struct(
                     "p", Codec.STRING, Health::player, "h", Codec.FLOAT, Health::health, Health::new),
                     () -> new Latest<>(StateChannels.HEALTH, Health::player))
-            .folding((s, op) -> s.latest(StateChannels.HEALTH, op.op().player(), op));
+            .folding((s, op) -> s.latest(StateChannels.HEALTH, op.op().player(), op))
+            .keyframing();
 
     public static final Recordable<Hunger> HUNGER = Recordable.of("replay:hunger", 1, 50, StructCodec.struct(
                     "p", Codec.STRING, Hunger::player, "f", Codec.INT, Hunger::food,
                     "s", Codec.FLOAT, Hunger::saturation, Hunger::new),
                     () -> new Latest<>(StateChannels.HUNGER, Hunger::player))
-            .folding((s, op) -> s.latest(StateChannels.HUNGER, op.op().player(), op));
+            .folding((s, op) -> s.latest(StateChannels.HUNGER, op.op().player(), op))
+            .keyframing();
 
     public static final Recordable<Xp> XP = Recordable.of("replay:xp", 1, 50, StructCodec.struct(
                     "p", Codec.STRING, Xp::player, "l", Codec.INT, Xp::level,
                     "x", Codec.FLOAT, Xp::progress, Xp::new),
                     () -> new Latest<>(StateChannels.XP, Xp::player))
-            .folding((s, op) -> s.latest(StateChannels.XP, op.op().player(), op));
+            .folding((s, op) -> s.latest(StateChannels.XP, op.op().player(), op))
+            .keyframing();
 
     // one op per slot change: folds per (actor, slot), so seeks and reversals stay exact
     public static final Recordable<Slot> INVENTORY = Recordable.of("replay:inventory", 1, 50, StructCodec.struct(
@@ -78,7 +81,8 @@ public final class StateChannels {
                     "i", Codec.NBT, Slot::item, Slot::new),
                     () -> new Latest<>(StateChannels.INVENTORY, op -> new SlotKey(op.player(), op.slot())))
             .folding((s, op) -> s.latest(StateChannels.INVENTORY,
-                    new SlotKey(op.op().player(), op.op().slot()), op));
+                    new SlotKey(op.op().player(), op.op().slot()), op))
+            .keyframing();
 
     /** The folded health of {@code player} at the playback's current tick, or {@code null} (unseen). */
     public static @Nullable Float health(@NotNull Playback pb, @NotNull String player) {
@@ -153,14 +157,23 @@ public final class StateChannels {
     }
 
     /**
-     * Per-tick member sampling, delta-gated. Deltas are lossless here (a seek always folds from tick 0), so
-     * respawns need no re-emit - and refreshActor's flag stays the ActorSampler's to consume.
+     * Per-tick member sampling, delta-gated; a keyframe drops the memory so seeks can fold from the latest
+     * boundary. Respawns need no re-emit - refreshActor's flag stays the ActorSampler's to consume.
      */
     static final class StateSampler implements Dispatcher {
         private final Map<String, Health> lastVitals = new HashMap<>();
         private final Map<String, Hunger> lastHunger = new HashMap<>();
         private final Map<String, Xp> lastXp = new HashMap<>();
         private final Map<String, ItemStack[]> lastInventory = new HashMap<>();
+
+        /** Keyframe: current members re-emit everything (air slots stay implicit, as at first sight). */
+        @Override
+        public void reset(@NotNull Recording rec) {
+            lastVitals.clear();
+            lastHunger.clear();
+            lastXp.clear();
+            lastInventory.clear();
+        }
 
         @Override
         public void sample(@NotNull Recording rec) {

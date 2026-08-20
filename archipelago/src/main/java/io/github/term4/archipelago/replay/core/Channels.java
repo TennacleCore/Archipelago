@@ -43,6 +43,8 @@ public final class Channels {
     public record Fx(int kind, byte[] data) {}
     // a layer's sky override state at change time (time -1 = inherit; weatherSet gates rain/thunder)
     public record Sky(int layer, long time, boolean weatherSet, float rain, float thunder) {}
+    // a keyframe tick: every keyframed channel re-emitted full state here; backward seeks fold from the latest one
+    public record Boundary(int interval) {}
 
     public static final int FX_PARTICLE = 0, FX_SOUND = 1, FX_EVENT = 2, FX_EXPLOSION = 3;
 
@@ -69,11 +71,16 @@ public final class Channels {
                     "th", Codec.FLOAT, Sky::thunder, Sky::new), Appliers.SkyApplier::new)
             .folding((s, op) -> s.latest(Channels.SKIES, op.op().layer(), op));
 
+    // the boundary marker itself is transient: it only indexes where keyframed channels are fold-complete
+    public static final Recordable<Boundary> BOUNDARIES = Recordable.of("replay:keyframe", 1, -50,
+            StructCodec.struct("n", Codec.INT, Boundary::interval, Boundary::new), () -> (pb, op) -> {});
+
     public static final Recordable<Move> MOVES = Recordable.of("replay:move", 1, -20, StructCodec.struct(
                     "p", Codec.STRING, Move::player, "x", Codec.DOUBLE, Move::x, "y", Codec.DOUBLE, Move::y,
                     "z", Codec.DOUBLE, Move::z, "yaw", Codec.FLOAT, Move::yaw, "pitch", Codec.FLOAT, Move::pitch,
                     "g", Codec.BOOLEAN, Move::ground, Move::new), Appliers.MoveApplier::new)
-            .folding((s, op) -> s.latest(Channels.MOVES, op.op().player(), op));
+            .folding((s, op) -> s.latest(Channels.MOVES, op.op().player(), op))
+            .keyframing();
 
     public static final Recordable<Spawn> SPAWNS = Recordable.of("replay:spawn", 3, -10, StructCodec.struct(
                     "l", Codec.INT, Spawn::layer,
@@ -94,7 +101,8 @@ public final class Channels {
                     "y", Codec.DOUBLE, EntityMove::y, "z", Codec.DOUBLE, EntityMove::z,
                     "yaw", Codec.FLOAT, EntityMove::yaw, "pitch", Codec.FLOAT, EntityMove::pitch, EntityMove::new),
                     Appliers.EntityMoveApplier::new)
-            .folding((s, op) -> s.latest(Channels.ENTITY_MOVES, op.op().seq(), op));
+            .folding((s, op) -> s.latest(Channels.ENTITY_MOVES, op.op().seq(), op))
+            .keyframing();
 
     public static final Recordable<BlockOp> BLOCKS = Recordable.of("replay:block", 2, 0, StructCodec.struct(
                     "l", Codec.INT, BlockOp::layer,
@@ -106,7 +114,8 @@ public final class Channels {
     public static final Recordable<Equip> EQUIPS = Recordable.of("replay:equip", 1, 10, StructCodec.struct(
                     "p", Codec.STRING, Equip::player, "items", Codec.NBT_COMPOUND, Equip::items, Equip::new),
                     Appliers.EquipApplier::new)
-            .folding((s, op) -> s.latest(Channels.EQUIPS, op.op().player(), op));
+            .folding((s, op) -> s.latest(Channels.EQUIPS, op.op().player(), op))
+            .keyframing();
 
     public static final Recordable<Act> ACTS = Recordable.of("replay:act", 1, 20, StructCodec.struct(
                     "p", Codec.STRING, Act::player, "k", Codec.INT, Act::kind, "v", Codec.INT, Act::value, Act::new),

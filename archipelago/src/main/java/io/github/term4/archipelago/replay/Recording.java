@@ -80,6 +80,7 @@ public final class Recording {
     private final AtomicInteger nextLayer = new AtomicInteger();
     private final EventNode<Event> shardWatch;
     private volatile long tick;
+    private volatile int keyframeInterval;
     private volatile boolean understructure = true;
     private final AtomicBoolean active = new AtomicBoolean(true);
     private boolean loggedError;
@@ -113,6 +114,20 @@ public final class Recording {
         List<Shard> layers = new ArrayList<>();
         collectLayers(shard, layers);
         sampledLayers = List.copyOf(layers); // one tree walk per tick, not one per sampler
+        if (keyframeInterval > 0 && tick % keyframeInterval == 0) {
+            emit(Channels.BOUNDARIES, new Channels.Boundary(keyframeInterval));
+            // delta memory dropped BEFORE sampling: this tick's samples re-emit full state for keyframed channels
+            for (Dispatcher dispatcher : dispatchers) {
+                try {
+                    dispatcher.reset(this);
+                } catch (Exception e) {
+                    if (!loggedError) {
+                        loggedError = true;
+                        LOGGER.warn("recording dispatcher failed (logged once)", e);
+                    }
+                }
+            }
+        }
         for (Dispatcher dispatcher : dispatchers) {
             try {
                 dispatcher.sample(this);
@@ -285,6 +300,13 @@ public final class Recording {
     public @NotNull Recording understructure(boolean keep) {
         understructure = keep;
         if (!keep) covered.clear();
+        return this;
+    }
+
+    /** Emits a keyframe every {@code ticks} (0 = off, the default): keyframed channels re-emit full state
+     *  there, so a backward {@link Playback#seek} folds from the latest keyframe instead of tick 0. */
+    public @NotNull Recording keyframeInterval(int ticks) {
+        this.keyframeInterval = Math.max(0, ticks);
         return this;
     }
 

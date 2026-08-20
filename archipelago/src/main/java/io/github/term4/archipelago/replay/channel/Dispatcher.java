@@ -15,5 +15,9 @@ public interface Dispatcher {
     /** Once per recorded tick. */
     default void sample(@NotNull Recording recording) {}
 
+    /** A keyframe tick: drop delta memory so this tick's {@link #sample} re-emits full current state.
+     *  Required for any {@link Recordable#keyframed()} channel this dispatcher feeds. */
+    default void reset(@NotNull Recording recording) {}
+
     default void stop(@NotNull Recording recording) {}
 }

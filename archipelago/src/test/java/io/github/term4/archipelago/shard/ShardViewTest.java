@@ -18,6 +18,7 @@ import net.minestom.server.event.EventDispatcher;
 import net.minestom.server.event.EventNode;
 import net.minestom.server.event.item.PickupItemEvent;
 import net.minestom.server.event.player.PlayerPacketEvent;
+import net.minestom.server.event.player.PlayerBlockBreakEvent;
 import net.minestom.server.event.player.PlayerStartDiggingEvent;
 import net.minestom.server.instance.Weather;
 import net.minestom.server.instance.block.Block;
@@ -224,6 +225,31 @@ class ShardViewTest extends HeadlessServerTest {
     }
 
     @Test
+    void rejectedPlaceResyncsTheClientsAdjacentCandidate() {
+        Shard shard = new Shard(instance);
+        shard.join(member.player);
+        member.player.setItemInMainHand(ItemStack.of(Material.TNT, 5));
+        EventNode<Event> probe = EventNode.all("test:place-cancel");
+        probe.addListener(net.minestom.server.event.player.PlayerBlockPlaceEvent.class, e -> e.setCancelled(true));
+        MinecraftServer.getGlobalEventHandler().addChild(probe);
+        try {
+            member.sent.clear();
+            // clicked air: the server's target is the clicked spot itself, but a client with a lagged
+            // phantom block there predicted one PAST it - the rejection must re-assert both
+            assertTrue(dispatch(member.player, placePacket(3, 66, 3)));
+            var corrections = member.sent(BlockChangePacket.class);
+            assertTrue(corrections.stream().anyMatch(p -> p.blockPosition().blockY() == 66),
+                    "the server's target comes back");
+            assertTrue(corrections.stream().anyMatch(p -> p.blockPosition().blockY() == 67),
+                    "the adjacent candidate comes back too");
+        } finally {
+            MinecraftServer.getGlobalEventHandler().removeChild(probe);
+            member.player.setItemInMainHand(ItemStack.AIR);
+            shard.leave(member.player);
+        }
+    }
+
+    @Test
     void spectatorGamemodeCannotPlace() {
         Shard shard = new Shard(instance);
         shard.join(member.player);
@@ -330,8 +356,10 @@ class ShardViewTest extends HeadlessServerTest {
         ShardView.set(spectator.player, ShardView.of(shard));
         shard.setBlock(new BlockVec(3, 64, 3), Block.STONE);
         List<PlayerStartDiggingEvent> started = new ArrayList<>();
+        List<PlayerBlockBreakEvent> broken = new ArrayList<>();
         EventNode<Event> probe = EventNode.all("test:shard-dig-probe");
         probe.addListener(PlayerStartDiggingEvent.class, started::add);
+        probe.addListener(PlayerBlockBreakEvent.class, broken::add);
         MinecraftServer.getGlobalEventHandler().addChild(probe);
         try {
             assertTrue(dispatch(member.player, digPacket(ClientPlayerActionPacket.Status.STARTED_DIGGING, 3, 64, 3)));
@@ -341,10 +369,33 @@ class ShardViewTest extends HeadlessServerTest {
             member.sent.clear(); spectator.sent.clear();
             assertTrue(dispatch(member.player, digPacket(ClientPlayerActionPacket.Status.FINISHED_DIGGING, 3, 64, 3)));
             assertTrue(shard.getBlock(3, 64, 3).air(), "the client's FINISHED completes the dig");
-            assertEquals(1, spectator.sent(WorldEventPacket.class).size(), "watchers get the destroy FX");
-            assertEquals(0, member.sent(WorldEventPacket.class).size(), "the digger plays its own");
+            assertEquals(1, broken.size(), "the standard break event fires");
+            assertEquals(1, spectator.sent(WorldEventPacket.class).size(), "default break fx reaches watchers");
+            assertEquals(0, member.sent(WorldEventPacket.class).size(), "the breaker predicts its own break");
         } finally {
             MinecraftServer.getGlobalEventHandler().removeChild(probe);
+            ShardView.set(spectator.player, null);
+            shard.leave(member.player);
+            shard.reset();
+        }
+    }
+
+    @Test
+    void breakFxReplacementSupersedesTheDefault() {
+        Shard shard = new Shard(instance);
+        shard.join(member.player);
+        ShardView.set(spectator.player, ShardView.of(shard));
+        shard.setBlock(new BlockVec(3, 65, 3), Block.STONE);
+        Shard.BreakFx previous = BlockRouting.breakFx;
+        List<Block> routed = new ArrayList<>();
+        Shard.breakFx((breaker, in, pos, brokenBlock) -> routed.add(brokenBlock));
+        try {
+            spectator.sent.clear();
+            assertTrue(dispatch(member.player, digPacket(ClientPlayerActionPacket.Status.FINISHED_DIGGING, 3, 65, 3)));
+            assertEquals(List.of(Block.STONE), routed, "the replacement receives the broken block");
+            assertEquals(0, spectator.sent(WorldEventPacket.class).size(), "the default no longer emits");
+        } finally {
+            BlockRouting.breakFx = previous;
             ShardView.set(spectator.player, null);
             shard.leave(member.player);
             shard.reset();

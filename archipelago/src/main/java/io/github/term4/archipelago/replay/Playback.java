@@ -8,6 +8,7 @@ import io.github.term4.archipelago.replay.channel.EntityStates;
 import io.github.term4.archipelago.replay.channel.Recordable;
 import io.github.term4.archipelago.replay.channel.Recorded;
 import io.github.term4.archipelago.replay.channel.StateFolder;
+import io.github.term4.archipelago.replay.core.Channels;
 import io.github.term4.archipelago.storage.DataKey;
 import io.github.term4.archipelago.storage.UserData;
 import net.kyori.adventure.nbt.BinaryTag;
@@ -58,6 +59,8 @@ public final class Playback {
     private final long length;
     private final UserData.View data; // null on the in-memory path
     private final List<Replay.Bookmark> bookmarks;
+    /** Keyframe ticks, ascending; backward seeks fold keyframed channels from the latest one at or before the target. */
+    private final List<Long> keyframes = new ArrayList<>();
     private volatile Runnable ticker;
 
     // mutated on the owner thread only; concurrent for cross-thread status reads (commands, tests)
@@ -129,6 +132,8 @@ public final class Playback {
     private void start() {
         channels.sort(Comparator.comparingInt((Channel<?> c) -> c.type.order()).thenComparing(c -> c.type.id()));
         channels.forEach(c -> byType.put(c.type.id(), c));
+        Channel<?> marks = byType.get(Channels.BOUNDARIES.id());
+        if (marks != null) marks.ops.forEach(op -> keyframes.add(op.tick()));
         shardWatch = EventNode.all("archipelago:replay-playback@" + System.identityHashCode(this));
         shardWatch.addListener(ShardDestroyEvent.class, e -> {
             if (e.shard() == shard) halt();
@@ -238,11 +243,29 @@ public final class Playback {
         if (ended.get()) throw new IllegalStateException("playback ended");
         if (target < 0) throw new IllegalArgumentException("negative tick");
         if (target == tick) return;
-        if (target < tick) rewind();
+        if (target < tick) {
+            rewind();
+            long base = keyframeBefore(target);
+            if (base > 0) {
+                for (Channel<?> channel : channels) {
+                    if (channel.type.keyframed()) channel.seat(base);
+                }
+            }
+        }
         EntityStates states = new EntityStates();
         for (Channel<?> channel : channels) channel.fold(states, target);
         for (Channel<?> channel : channels) channel.applyLatest(this, states);
         tick = target;
+    }
+
+    /** The latest keyframe tick at or before {@code target}, or {@code 0} (fold from the start). */
+    private long keyframeBefore(long target) {
+        long base = 0;
+        for (Long mark : keyframes) {
+            if (mark > target) break;
+            base = mark;
+        }
+        return base;
     }
 
     // back to t0: the theater is the replay's to reset (don't co-host entities in it); husks of previously
@@ -509,6 +532,18 @@ public final class Playback {
         void rewind() {
             cursor = 0;
             applier = type.applier().get();
+        }
+
+        /** Seats the cursor at the first op of keyframe tick {@code base} - the keyframe's full re-emission
+         *  makes everything earlier redundant for this channel's fold. */
+        void seat(long base) {
+            int lo = 0, hi = ops.size();
+            while (lo < hi) {
+                int mid = (lo + hi) >>> 1;
+                if (ops.get(mid).tick() < base) lo = mid + 1;
+                else hi = mid;
+            }
+            cursor = lo;
         }
 
         void drain(Playback pb) {

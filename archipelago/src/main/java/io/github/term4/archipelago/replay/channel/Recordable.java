@@ -15,16 +15,23 @@ import java.util.function.Supplier;
  * @param applier one instance per playback (appliers may hold playback-local state)
  * @param folder seek support: keys ops so skipping time applies only each key's latest op; {@code null} = the
  *               channel is transient (skipped entirely when seeking)
+ * @param keyframed backward seeks fold this channel from the latest keyframe instead of tick 0 - only sound when
+ *                  its recorder re-emits every live key's state on keyframe ticks ({@link Dispatcher#reset})
  */
 public record Recordable<T>(@NotNull String id, int version, int order, @NotNull Codec<T> codec,
-                            @NotNull Supplier<? extends Applier<T>> applier, @Nullable StateFolder<T> folder) {
+                            @NotNull Supplier<? extends Applier<T>> applier, @Nullable StateFolder<T> folder,
+                            boolean keyframed) {
 
     public static <T> @NotNull Recordable<T> of(@NotNull String id, int version, int order, @NotNull Codec<T> codec,
                                                 @NotNull Supplier<? extends Applier<T>> applier) {
-        return new Recordable<>(id, version, order, codec, applier, null);
+        return new Recordable<>(id, version, order, codec, applier, null, false);
     }
 
     public @NotNull Recordable<T> folding(@NotNull StateFolder<T> folder) {
-        return new Recordable<>(id, version, order, codec, applier, folder);
+        return new Recordable<>(id, version, order, codec, applier, folder, keyframed);
+    }
+
+    public @NotNull Recordable<T> keyframing() {
+        return new Recordable<>(id, version, order, codec, applier, folder, true);
     }
 }

@@ -18,6 +18,7 @@ public final class CoreChannels {
     public static synchronized void register() {
         if (registered) return;
         registered = true;
+        Replay.register(Channels.BOUNDARIES);
         Replay.register(Channels.LAYERS);
         Replay.register(Channels.SKINS);
         Replay.register(Channels.SKIES);

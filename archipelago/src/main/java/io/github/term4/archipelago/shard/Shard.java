@@ -1052,6 +1052,18 @@ public final class Shard implements WorldAccess {
         BlockRouting.selfPlaceExempt = rule;
     }
 
+    /** The break effect of a routed dig. Default: the vanilla world event to the shard's watchers minus
+     *  the breaker (both client generations predict their own). */
+    @FunctionalInterface
+    public interface BreakFx {
+        void play(@NotNull Player breaker, @NotNull Shard shard, @NotNull Point pos, @NotNull Block broken);
+    }
+
+    /** Replaces the routed-dig break effect (a mechanics lib re-points it through its own fx pipeline). */
+    public static void breakFx(@NotNull BreakFx fx) {
+        BlockRouting.breakFx = fx;
+    }
+
     /**
      * Wraps the base placement listener {@link #blockRouting()} installs (a compat layer arming per-placement
      * state). Order-independent: registering before or after {@code blockRouting()} both work - the routing

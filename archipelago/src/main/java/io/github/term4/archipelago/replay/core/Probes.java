@@ -107,9 +107,17 @@ final class Probes {
         private final Map<String, Integer> lastArrows = new HashMap<>();
         private final Map<String, Boolean> lastViewable = new HashMap<>();
         private final Map<String, Integer> lastLayer = new HashMap<>();
+        private final Set<String> skinEmitted = new HashSet<>();
 
         private static <T> boolean changed(Map<String, T> last, String name, T now) {
             return !now.equals(last.put(name, now));
+        }
+
+        /** Keyframe: the keyframed streams (moves, equips) re-emit; skins/acts fold from tick 0 and stay gated. */
+        @Override
+        public void reset(@NotNull Recording rec) {
+            lastMove.clear();
+            lastEquip.clear();
         }
 
         @Override
@@ -136,8 +144,9 @@ final class Probes {
                 lastArrows.remove(name);
                 lastViewable.remove(name);
                 lastLayer.remove(name);
+                skinEmitted.remove(name);
             }
-            if (!lastEquip.containsKey(name)) { // first sight, or a refresh dropped the caches: skin re-emits
+            if (skinEmitted.add(name)) { // first sight, or a respawn refresh: skin re-emits
                 PlayerSkin skin = m.getSkin(); // null on offline setups without forwarded profiles
                 if (skin != null && skin.signature() != null) {
                     rec.emit(Channels.SKINS, new Channels.Skin(name, skin.textures(), skin.signature()));
@@ -175,6 +184,12 @@ final class Probes {
     static final class EntitySampler implements Dispatcher {
         private final Map<Entity, Pos> lastPos = new HashMap<>();
         private final Map<Entity, Integer> lastLayer = new HashMap<>();
+
+        /** Keyframe: every live track re-emits a position (spawns/layers fold from tick 0). */
+        @Override
+        public void reset(@NotNull Recording rec) {
+            lastPos.clear();
+        }
 
         @Override
         public void sample(@NotNull Recording rec) {
