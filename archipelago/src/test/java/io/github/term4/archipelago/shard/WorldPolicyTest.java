@@ -2,7 +2,7 @@ package io.github.term4.archipelago.shard;
 
 import io.github.term4.archipelago.testsupport.FakePlayer;
 import io.github.term4.archipelago.testsupport.HeadlessServerTest;
-import io.github.term4.archipelago.world.WorldPolicy;
+import io.github.term4.polyp.world.WorldPolicy;
 import net.minestom.server.coordinate.Pos;
 import net.minestom.server.entity.Entity;
 import net.minestom.server.entity.EntityType;

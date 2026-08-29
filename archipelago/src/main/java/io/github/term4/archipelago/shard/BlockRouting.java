@@ -1,7 +1,7 @@
 package io.github.term4.archipelago.shard;
 
-import io.github.term4.archipelago.world.WorldAccess;
-import io.github.term4.archipelago.world.WorldPolicy;
+import io.github.term4.polyp.world.MechanicsWorld;
+import io.github.term4.polyp.world.WorldPolicy;
 import net.minestom.server.MinecraftServer;
 import net.minestom.server.collision.Shape;
 import net.minestom.server.component.DataComponents;
@@ -92,7 +92,7 @@ final class BlockRouting {
             boolean place = packet instanceof ClientPlayerBlockPlacementPacket;
             if (!place && !(packet instanceof ClientPlayerActionPacket)) return;
             Player player = e.getPlayer();
-            Shard bound = player.getTag(WorldAccess.ENTITY_TAG) instanceof Shard d
+            Shard bound = player.getTag(MechanicsWorld.ENTITY_TAG) instanceof Shard d
                     && player.getInstance() == d.instance() ? d : null;
             Shard viewed = ShardView.of(player).blocks();
             if (viewed != null && player.getInstance() != viewed.instance()) viewed = null;
@@ -123,7 +123,7 @@ final class BlockRouting {
             Runnable work = () -> {
                 // the queue hop is a tick wide: re-check what can change under it (disconnect, destroy, demotion)
                 if (!player.isOnline() || edited.destroyed) return;
-                Shard nowBound = player.getTag(WorldAccess.ENTITY_TAG) instanceof Shard d ? d : null;
+                Shard nowBound = player.getTag(MechanicsWorld.ENTITY_TAG) instanceof Shard d ? d : null;
                 if (edited != nowBound && !(edited == ShardView.of(player).blocks() && WorldPolicy.canEdit(player, edited))) return;
                 if (place) place(edited, player, (ClientPlayerBlockPlacementPacket) packet);
                 else dig(edited, player, (ClientPlayerActionPacket) packet);
@@ -139,11 +139,11 @@ final class BlockRouting {
         });
         // membership dies with the connection - a stale member's body would keep blocking placements
         node.addListener(PlayerDisconnectEvent.class, e -> {
-            if (e.getPlayer().getTag(WorldAccess.ENTITY_TAG) instanceof Shard shard) shard.leave(e.getPlayer());
+            if (e.getPlayer().getTag(MechanicsWorld.ENTITY_TAG) instanceof Shard shard) shard.leave(e.getPlayer());
             ShardView.forget(e.getPlayer());
         });
         node.addListener(EntityDespawnEvent.class, e -> {
-            if (e.getEntity().getTag(WorldAccess.ENTITY_TAG) instanceof Shard shard) shard.entities.remove(e.getEntity());
+            if (e.getEntity().getTag(MechanicsWorld.ENTITY_TAG) instanceof Shard shard) shard.entities.remove(e.getEntity());
         });
         // Minestom's item-merge scan is instance-wide - co-located items from different worlds absorb each other
         node.addListener(EntityItemMergeEvent.class, e -> {

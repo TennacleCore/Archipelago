@@ -6,7 +6,7 @@ import io.github.term4.archipelago.storage.EntityDescriptors;
 import io.github.term4.archipelago.storage.Nbt;
 import io.github.term4.archipelago.storage.ShardFile;
 import io.github.term4.archipelago.storage.UserData;
-import io.github.term4.archipelago.world.WorldAccess;
+import io.github.term4.polyp.world.MechanicsWorld;
 import net.hollowcube.polar.PolarChunk;
 import net.hollowcube.polar.PolarReader;
 import net.hollowcube.polar.PolarSection;
@@ -50,7 +50,7 @@ import java.util.function.Consumer;
  * shard {@code <->} polar bytes via {@link #save}/{@link #load}; pure byte transcode via
  * {@link #fromShardFile}/{@link #toShardFile}. Touched chunks only, palette sentinel
  * {@code minecraft:structure_void} = "no diff entry" (real air = a break). Sky, owned entities
- * ({@link WorldAccess#ENTITY_SAVE} + generic tiers) and {@link DataKey} user data ride the world user-data;
+ * ({@link MechanicsWorld#ENTITY_SAVE} + generic tiers) and {@link DataKey} user data ride the world user-data;
  * blocks persist as version-stable string states.
  */
 public final class PolarShardCodec {

@@ -3,7 +3,7 @@ package io.github.term4.archipelago.shard;
 import io.github.term4.archipelago.testsupport.DetectorEntity;
 import io.github.term4.archipelago.testsupport.HeadlessServerTest;
 import io.github.term4.archipelago.ticking.ExecutionDomain;
-import io.github.term4.archipelago.world.WorldAccess;
+import io.github.term4.polyp.world.MechanicsWorld;
 import net.minestom.server.coordinate.Point;
 import net.minestom.server.coordinate.Pos;
 import net.minestom.server.coordinate.Vec;
@@ -101,8 +101,8 @@ class ShardDomainTest extends HeadlessServerTest {
             AtomicBoolean run = new AtomicBoolean(true);
             AtomicLong batches = new AtomicLong();
             // one whole-plot batch per domain tick, alternating state - a torn snapshot would mix the two
-            class Writer implements Consumer<WorldAccess> {
-                @Override public void accept(WorldAccess w) {
+            class Writer implements Consumer<MechanicsWorld> {
+                @Override public void accept(MechanicsWorld w) {
                     if (!run.get()) return;
                     Block state = batches.getAndIncrement() % 2 == 0 ? Block.STONE : Block.DIRT;
                     Map<Point, Block> batch = new HashMap<>();

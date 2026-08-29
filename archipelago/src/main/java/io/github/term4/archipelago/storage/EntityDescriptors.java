@@ -7,7 +7,7 @@ import io.github.term4.archipelago.ticking.DomainEntity;
 import io.github.term4.archipelago.ticking.DomainLivingEntity;
 import io.github.term4.archipelago.ticking.DomainTicked;
 import io.github.term4.archipelago.ticking.ExecutionDomain;
-import io.github.term4.archipelago.world.WorldAccess;
+import io.github.term4.polyp.world.MechanicsWorld;
 import net.minestom.server.coordinate.Pos;
 import net.minestom.server.coordinate.Vec;
 import net.minestom.server.entity.Entity;
@@ -37,7 +37,7 @@ import java.util.function.Supplier;
 
 /**
  * Entity {@code <->} save descriptor ({@code {id, pos, data}} compounds in the world user-data):
- * {@link WorldAccess#ENTITY_SAVE} stamps first, registered describers next, generic tiers for the plain
+ * {@link MechanicsWorld#ENTITY_SAVE} stamps first, registered describers next, generic tiers for the plain
  * classes; load revives per registered {@link #reviveEntity reviver}, unknown ids pass through untouched.
  */
 public final class EntityDescriptors {
@@ -70,11 +70,11 @@ public final class EntityDescriptors {
     // Shard.copyEntity's exact-class tiers can't see these classes; the copy stamp round-trips through the
     // descriptor instead, so forking a shard with revived entities still reproduces them
     private static Entity stampCopy(Entity entity) {
-        entity.setTag(WorldAccess.ENTITY_COPY, () -> reviveDescriptor(descriptor(entity)));
+        entity.setTag(MechanicsWorld.ENTITY_COPY, () -> reviveDescriptor(descriptor(entity)));
         return entity;
     }
 
-    /** Registers the load-side factory for {@code id} descriptors ({@link WorldAccess#ENTITY_SAVE} stamps); replacement WARNs. Returns the removal handle. */
+    /** Registers the load-side factory for {@code id} descriptors ({@link MechanicsWorld#ENTITY_SAVE} stamps); replacement WARNs. Returns the removal handle. */
     public static @NotNull Runnable reviveEntity(@NotNull String id, @NotNull Function<CompoundBinaryTag, Entity> reviver) {
         if (REVIVERS.put(id, reviver) != null) LOGGER.warn("entity reviver '{}' replaced", id);
         return () -> REVIVERS.remove(id, reviver);
@@ -118,7 +118,7 @@ public final class EntityDescriptors {
 
     /** {@code entity}'s save descriptor - its stamp, a registered describer's, or a generic tier - or {@code null}. */
     public static @Nullable CompoundBinaryTag descriptor(@NotNull Entity entity) {
-        Supplier<CompoundBinaryTag> stamped = entity.getTag(WorldAccess.ENTITY_SAVE);
+        Supplier<CompoundBinaryTag> stamped = entity.getTag(MechanicsWorld.ENTITY_SAVE);
         if (stamped != null) return stamped.get();
         for (Function<Entity, CompoundBinaryTag> describer : DESCRIBERS) {
             CompoundBinaryTag desc = describer.apply(entity);

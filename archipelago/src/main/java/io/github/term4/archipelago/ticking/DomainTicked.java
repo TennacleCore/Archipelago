@@ -1,5 +1,6 @@
 package io.github.term4.archipelago.ticking;
 
+import io.github.term4.polyp.world.ExternallyTickable;
 import net.minestom.server.entity.Entity;
 import org.jetbrains.annotations.NotNull;
 
@@ -21,7 +22,7 @@ public interface DomainTicked {
 
     /** Whether {@code entity}'s class opts out of the global dispatcher - safe to hand to a domain. */
     static boolean covers(@NotNull Entity entity) {
-        if (entity instanceof DomainTicked) return true;
+        if (entity instanceof DomainTicked || entity instanceof ExternallyTickable) return true;
         for (Predicate<Entity> rule : Holder.COVERED) {
             if (rule.test(entity)) return true;
         }

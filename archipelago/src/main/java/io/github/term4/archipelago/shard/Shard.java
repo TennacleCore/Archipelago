@@ -6,9 +6,9 @@ import io.github.term4.archipelago.event.ShardReclockEvent;
 import io.github.term4.archipelago.event.ShardTransferEvent;
 import io.github.term4.archipelago.ticking.DomainTicked;
 import io.github.term4.archipelago.ticking.ExecutionDomain;
-import io.github.term4.archipelago.world.InstanceWorldAccess;
-import io.github.term4.archipelago.world.WorldAccess;
-import io.github.term4.archipelago.world.WorldPolicy;
+import io.github.term4.polyp.world.InstanceWorld;
+import io.github.term4.polyp.world.MechanicsWorld;
+import io.github.term4.polyp.world.WorldPolicy;
 import net.minestom.server.collision.Aerodynamics;
 import net.minestom.server.collision.BoundingBox;
 import net.minestom.server.collision.CollisionUtils;
@@ -65,7 +65,7 @@ import java.util.function.Supplier;
 /**
  * A game world as a diff over a shared base map: block writes land in an overlay (the base instance is never
  * written), entities and viewers are shard-owned, N shards share one loaded map at the same coordinates.
- * Gameplay reaches a shard through the {@link WorldAccess#ENTITY_TAG} binding ({@link #join}/{@link #spawn}/
+ * Gameplay reaches a shard through the {@link MechanicsWorld#ENTITY_TAG} binding ({@link #join}/{@link #spawn}/
  * {@link #transfer} stamp it); {@link #players()} = members, {@link #watchers()} adds observers.
  *
  * <p>Shards chain: a {@link #Shard(Shard) child} layer's diff is RELATIVE to its parent - block reads fall
@@ -77,7 +77,7 @@ import java.util.function.Supplier;
  * hooks and entity ticks already land there). Snapshots and batch writes relay between domain ticks, and that
  * relay is the only cross-thread write consistency the shard guarantees.
  */
-public final class Shard implements WorldAccess {
+public final class Shard implements MechanicsWorld {
 
     private final Instance base;
     private final @Nullable Shard parent;
@@ -548,14 +548,14 @@ public final class Shard implements WorldAccess {
     @Override
     public PhysicsResult sweep(@NotNull BoundingBox box, @NotNull Pos position, @NotNull Vec velocity,
                                @Nullable PhysicsResult last, boolean singleCollision) {
-        return CollisionUtils.handlePhysics(overlaid(InstanceWorldAccess.solidGetter(base, position)),
+        return CollisionUtils.handlePhysics(overlaid(InstanceWorld.solidGetter(base, position)),
                 box, position, velocity, last, singleCollision);
     }
 
     @Override
     public PhysicsResult sweepLoaded(@NotNull BoundingBox box, @NotNull Pos position, @NotNull Vec velocity,
                                      @Nullable PhysicsResult last, boolean singleCollision) {
-        return CollisionUtils.handlePhysics(overlaid(InstanceWorldAccess.airGetter(base, position)),
+        return CollisionUtils.handlePhysics(overlaid(InstanceWorld.airGetter(base, position)),
                 box, position, velocity, last, singleCollision);
     }
 
@@ -573,7 +573,7 @@ public final class Shard implements WorldAccess {
                                           @NotNull Aerodynamics aerodynamics, boolean noGravity, boolean hasPhysics,
                                           boolean onGround, @Nullable PhysicsResult last) {
         return PhysicsUtils.simulateMovement(position, velocityPerTick, box, base.getWorldBorder(),
-                overlaid(InstanceWorldAccess.solidGetter(base, position)), aerodynamics, noGravity, hasPhysics, onGround, false, last);
+                overlaid(InstanceWorld.solidGetter(base, position)), aerodynamics, noGravity, hasPhysics, onGround, false, last);
     }
 
     /**
@@ -853,7 +853,7 @@ public final class Shard implements WorldAccess {
     }
 
     /**
-     * The default fork cloner: {@link WorldAccess#ENTITY_COPY} stamps win; exact-class {@code Entity}/
+     * The default fork cloner: {@link MechanicsWorld#ENTITY_COPY} stamps win; exact-class {@code Entity}/
      * {@code LivingEntity}/{@code ItemEntity}/{@code ExperienceOrb} get a data copy (velocity, serializable tags,
      * health/equipment/stack/xp). Unknown subclasses return {@code null} - behavior isn't data; stamp them, or
      * compose: {@code e -> e instanceof MyNpc n ? n.copy() : Shard.copyEntity(e)}.
@@ -1017,7 +1017,7 @@ public final class Shard implements WorldAccess {
 
     @Override public long worldAge() { return base.getWorldAge(); }
 
-    @Override public void scheduleNextTick(@NotNull Consumer<WorldAccess> task) {
+    @Override public void scheduleNextTick(@NotNull Consumer<MechanicsWorld> task) {
         ExecutionDomain d = domain;
         if (d != null) {
             d.execute(() -> task.accept(this));

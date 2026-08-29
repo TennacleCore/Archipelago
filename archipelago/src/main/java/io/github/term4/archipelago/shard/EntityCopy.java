@@ -1,6 +1,6 @@
 package io.github.term4.archipelago.shard;
 
-import io.github.term4.archipelago.world.WorldAccess;
+import io.github.term4.polyp.world.MechanicsWorld;
 import net.minestom.server.entity.Entity;
 import net.minestom.server.entity.EquipmentSlot;
 import net.minestom.server.entity.ExperienceOrb;
@@ -17,7 +17,7 @@ final class EntityCopy {
     private EntityCopy() {}
 
     static @Nullable Entity of(Entity entity) {
-        Supplier<Entity> stamped = entity.getTag(WorldAccess.ENTITY_COPY);
+        Supplier<Entity> stamped = entity.getTag(MechanicsWorld.ENTITY_COPY);
         if (stamped != null) return stamped.get();
         Class<?> type = entity.getClass();
         if (type == Entity.class) {

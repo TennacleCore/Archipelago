@@ -1,6 +1,6 @@
 package io.github.term4.archipelago.shard;
 
-import io.github.term4.archipelago.world.WorldPolicy;
+import io.github.term4.polyp.world.WorldPolicy;
 import net.minestom.server.MinecraftServer;
 import net.minestom.server.component.DataComponents;
 import net.minestom.server.coordinate.Point;

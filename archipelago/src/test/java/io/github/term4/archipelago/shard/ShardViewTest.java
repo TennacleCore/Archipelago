@@ -3,8 +3,8 @@ package io.github.term4.archipelago.shard;
 import io.github.term4.archipelago.testsupport.FakePlayer;
 import io.github.term4.archipelago.testsupport.HeadlessServerTest;
 import io.github.term4.archipelago.ticking.ExecutionDomain;
-import io.github.term4.archipelago.world.WorldAccess;
-import io.github.term4.archipelago.world.WorldPolicy;
+import io.github.term4.polyp.world.MechanicsWorld;
+import io.github.term4.polyp.world.WorldPolicy;
 import net.minestom.server.MinecraftServer;
 import net.minestom.server.coordinate.BlockVec;
 import net.minestom.server.coordinate.Point;
@@ -293,7 +293,7 @@ class ShardViewTest extends HeadlessServerTest {
         ShardView.set(spectator.player, ShardView.of(shard));
         spectator.player.setItemInMainHand(ItemStack.of(Material.STONE, 5));
         WorldPolicy.set(new ShardPolicy() {
-            @Override public boolean edits(@NotNull Player player, @NotNull WorldAccess viewed) {
+            @Override public boolean edits(@NotNull Player player, @NotNull MechanicsWorld viewed) {
                 return player == spectator.player;
             }
         });

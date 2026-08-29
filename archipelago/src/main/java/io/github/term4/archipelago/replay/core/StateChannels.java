@@ -125,13 +125,13 @@ public final class StateChannels {
     /** The generic state folder: latest op per key, reversal-aware. */
     static final class Latest<K, T> implements Applier<T> {
         private final Function<T, K> key;
-        private final Appliers.LookBack<K, T> history;
+        private final LookBack<K, T> history;
         // owner-thread mutated; concurrent for cross-thread take-over reads
         private final Map<K, T> state = new ConcurrentHashMap<>();
 
         Latest(Recordable<T> channel, Function<T, K> key) {
             this.key = key;
-            this.history = new Appliers.LookBack<>(channel, key);
+            this.history = new LookBack<>(channel, key);
         }
 
         @Override

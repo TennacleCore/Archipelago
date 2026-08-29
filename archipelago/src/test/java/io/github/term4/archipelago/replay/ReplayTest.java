@@ -15,7 +15,7 @@ import io.github.term4.archipelago.storage.DataKey;
 import io.github.term4.archipelago.storage.EntityDescriptors;
 import io.github.term4.archipelago.storage.Nbt;
 import io.github.term4.archipelago.ticking.ExecutionDomain;
-import io.github.term4.archipelago.world.WorldAccess;
+import io.github.term4.polyp.world.MechanicsWorld;
 import net.kyori.adventure.nbt.BinaryTagTypes;
 import net.kyori.adventure.nbt.CompoundBinaryTag;
 import net.kyori.adventure.nbt.ListBinaryTag;
@@ -138,7 +138,7 @@ class ReplayTest {
         ((ItemEntityMeta) foreignItem.getEntityMeta()).setItem(stack);
         // stamped with an id no reviver here knows: playback must still show SOMETHING
         Entity foreignStamp = new Entity(EntityType.ARMOR_STAND) {};
-        foreignStamp.setTag(WorldAccess.ENTITY_SAVE,
+        foreignStamp.setTag(MechanicsWorld.ENTITY_SAVE,
                 () -> CompoundBinaryTag.builder().putString("id", "foreign:widget").build());
 
         Recording rec = Replay.record(stage);

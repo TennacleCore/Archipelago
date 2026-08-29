@@ -11,7 +11,7 @@ import io.github.term4.archipelago.replay.channel.Recordable;
 import io.github.term4.archipelago.replay.channel.Recorded;
 import io.github.term4.archipelago.replay.core.Channels;
 import io.github.term4.archipelago.ticking.ExecutionDomain;
-import io.github.term4.archipelago.world.WorldAccess;
+import io.github.term4.polyp.world.MechanicsWorld;
 import net.kyori.adventure.nbt.BinaryTag;
 import net.kyori.adventure.nbt.BinaryTagTypes;
 import net.kyori.adventure.nbt.CompoundBinaryTag;
@@ -156,8 +156,8 @@ public final class Recording {
 
     /** Whether {@code entity} plays anywhere in the recorded tree - the filter for event probes. */
     public boolean covers(@NotNull Entity entity) {
-        // tag identity up the chain, not WorldAccess.of(): a wrapper can never match, and of() NPEs pre-spawn
-        return entity.getTag(WorldAccess.ENTITY_TAG) instanceof Shard bound && inTree(bound);
+        // tag identity up the chain, not MechanicsWorld.of(): a wrapper can never match, and of() NPEs pre-spawn
+        return entity.getTag(MechanicsWorld.ENTITY_TAG) instanceof Shard bound && inTree(bound);
     }
 
     // an excluded layer cuts off its whole subtree
@@ -231,7 +231,7 @@ public final class Recording {
 
     /** The layer id {@code entity} currently plays in (its binding), or {@code 0} when outside the tree. */
     public int layerOf(@NotNull Entity entity) {
-        return entity.getTag(WorldAccess.ENTITY_TAG) instanceof Shard bound && inTree(bound) ? layer(bound) : 0;
+        return entity.getTag(MechanicsWorld.ENTITY_TAG) instanceof Shard bound && inTree(bound) ? layer(bound) : 0;
     }
 
     /** Appends an op to {@code channel} at the current tick (dropped once stopped). */

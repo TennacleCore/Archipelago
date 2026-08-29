@@ -5,7 +5,7 @@ import io.github.term4.archipelago.storage.DataKey;
 import io.github.term4.archipelago.storage.EntityDescriptors;
 import io.github.term4.archipelago.storage.ShardFile;
 import io.github.term4.archipelago.storage.UserData;
-import io.github.term4.archipelago.world.WorldAccess;
+import io.github.term4.polyp.world.MechanicsWorld;
 import net.hollowcube.polar.PolarChunk;
 import net.hollowcube.polar.PolarSection;
 import net.hollowcube.polar.PolarWorld;
@@ -180,7 +180,7 @@ class PolarShardCodecTest {
         zombie.setTag(Tag.String("test:role"), "boss");
         original.spawn(zombie, new Pos(26.5, 71, 25.5)).join();
         LivingEntity stamped = new LivingEntity(EntityType.ZOMBIE) {}; // custom class: rides its ENTITY_SAVE stamp
-        stamped.setTag(WorldAccess.ENTITY_SAVE, () -> CompoundBinaryTag.builder().putString("id", "test:pig").build());
+        stamped.setTag(MechanicsWorld.ENTITY_SAVE, () -> CompoundBinaryTag.builder().putString("id", "test:pig").build());
         original.spawn(stamped, new Pos(27.5, 71, 25.5)).join();
         EntityDescriptors.reviveEntity("test:pig", data -> new LivingEntity(EntityType.PIG));
         try {
@@ -237,7 +237,7 @@ class PolarShardCodecTest {
     void foreignDescriptorsSurviveAReviverlessResave() throws InterruptedException {
         Shard original = new Shard(instance);
         LivingEntity alien = new LivingEntity(EntityType.ZOMBIE) {};
-        alien.setTag(WorldAccess.ENTITY_SAVE, () -> CompoundBinaryTag.builder().putString("id", "alien:thing").build());
+        alien.setTag(MechanicsWorld.ENTITY_SAVE, () -> CompoundBinaryTag.builder().putString("id", "alien:thing").build());
         original.spawn(alien, new Pos(33.5, 71, 33.5)).join();
         byte[] bytes = PolarShardCodec.save(original);
         alien.remove();

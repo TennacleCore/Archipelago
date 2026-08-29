@@ -7,7 +7,7 @@ import io.github.term4.archipelago.storage.polar.PolarShardCodec;
 import io.github.term4.archipelago.replay.core.Channels;
 import io.github.term4.archipelago.replay.core.CoreChannels;
 import io.github.term4.archipelago.testsupport.FakePlayer;
-import io.github.term4.archipelago.world.WorldAccess;
+import io.github.term4.polyp.world.MechanicsWorld;
 import net.minestom.server.MinecraftServer;
 import net.minestom.server.coordinate.Pos;
 import net.minestom.server.coordinate.Vec;
@@ -97,13 +97,13 @@ class ReplayTreeTest {
 
             Ghost ghost = pb.ghost("TreeSteve");
             assertNotNull(ghost);
-            assertEquals(theater, ghost.getTag(WorldAccess.ENTITY_TAG),
+            assertEquals(theater, ghost.getTag(MechanicsWorld.ENTITY_TAG),
                     "the recorded switch moved the ghost back to the root layer");
             assertNotNull(pb.entity(0));
-            assertEquals(theaterLayer, pb.entity(0).getTag(WorldAccess.ENTITY_TAG),
+            assertEquals(theaterLayer, pb.entity(0).getTag(MechanicsWorld.ENTITY_TAG),
                     "the layer-local twin plays in the layer theater");
             assertNotNull(pb.entity(1));
-            assertEquals(theater, pb.entity(1).getTag(WorldAccess.ENTITY_TAG),
+            assertEquals(theater, pb.entity(1).getTag(MechanicsWorld.ENTITY_TAG),
                     "the recorded entity layer switch moved its twin");
         } finally {
             if (pb != null) pb.halt();

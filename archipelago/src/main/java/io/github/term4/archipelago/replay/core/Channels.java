@@ -55,20 +55,20 @@ public final class Channels {
     // layers run first of all: they create the shards every layered op targets
     public static final Recordable<Layer> LAYERS = Recordable.of("replay:layer", 1, -40, StructCodec.struct(
                     "i", Codec.INT, Layer::id, "p", Codec.INT, Layer::parent,
-                    "a", Codec.BOOLEAN, Layer::alive, Layer::new), Appliers.LayerApplier::new)
+                    "a", Codec.BOOLEAN, Layer::alive, Layer::new), LayerApplier::new)
             .folding((s, op) -> s.latest(Channels.LAYERS, op.op().id(), op));
 
     // moves run before spawns/equips/acts: they create the ghosts same-tick ops reference (a bobber cast on the
     // ghost's first tick needs the ghost's id as its wire owner); skins earlier still (ghost creation reads them)
     public static final Recordable<Skin> SKINS = Recordable.of("replay:skin", 1, -30, StructCodec.struct(
                     "p", Codec.STRING, Skin::player, "t", Codec.STRING, Skin::textures,
-                    "s", Codec.STRING, Skin::signature, Skin::new), Appliers.SkinApplier::new)
+                    "s", Codec.STRING, Skin::signature, Skin::new), SkinApplier::new)
             .folding((s, op) -> s.latest(Channels.SKINS, op.op().player(), op));
 
     public static final Recordable<Sky> SKIES = Recordable.of("replay:sky", 1, -35, StructCodec.struct(
                     "l", Codec.INT, Sky::layer, "t", Codec.LONG, Sky::time,
                     "w", Codec.BOOLEAN, Sky::weatherSet, "r", Codec.FLOAT, Sky::rain,
-                    "th", Codec.FLOAT, Sky::thunder, Sky::new), Appliers.SkyApplier::new)
+                    "th", Codec.FLOAT, Sky::thunder, Sky::new), SkyApplier::new)
             .folding((s, op) -> s.latest(Channels.SKIES, op.op().layer(), op));
 
     // the boundary marker itself is transient: it only indexes where keyframed channels are fold-complete
@@ -78,7 +78,7 @@ public final class Channels {
     public static final Recordable<Move> MOVES = Recordable.of("replay:move", 1, -20, StructCodec.struct(
                     "p", Codec.STRING, Move::player, "x", Codec.DOUBLE, Move::x, "y", Codec.DOUBLE, Move::y,
                     "z", Codec.DOUBLE, Move::z, "yaw", Codec.FLOAT, Move::yaw, "pitch", Codec.FLOAT, Move::pitch,
-                    "g", Codec.BOOLEAN, Move::ground, Move::new), Appliers.MoveApplier::new)
+                    "g", Codec.BOOLEAN, Move::ground, Move::new), MoveApplier::new)
             .folding((s, op) -> s.latest(Channels.MOVES, op.op().player(), op))
             .keyframing();
 
@@ -88,38 +88,38 @@ public final class Channels {
                     "yaw", Codec.FLOAT, Spawn::yaw, "pitch", Codec.FLOAT, Spawn::pitch,
                     "s", Codec.INT, Spawn::seq, "vis", Codec.NBT_COMPOUND, Spawn::visual,
                     "o", Codec.STRING, Spawn::shooter, Spawn::new),
-                    Appliers.SpawnApplier::new)
+                    SpawnApplier::new)
             .folding((s, op) -> s.latest(Channels.SPAWNS, op.op().seq(), op));
 
     public static final Recordable<EntityLayer> ENTITY_LAYERS = Recordable.of("replay:elayer", 1, -7,
                     StructCodec.struct("s", Codec.INT, EntityLayer::seq, "l", Codec.INT, EntityLayer::layer,
-                    EntityLayer::new), Appliers.EntityLayerApplier::new)
+                    EntityLayer::new), EntityLayerApplier::new)
             .folding((s, op) -> s.latest(Channels.ENTITY_LAYERS, op.op().seq(), op));
 
     public static final Recordable<EntityMove> ENTITY_MOVES = Recordable.of("replay:emove", 2, -5, StructCodec.struct(
                     "s", Codec.INT, EntityMove::seq, "x", Codec.DOUBLE, EntityMove::x,
                     "y", Codec.DOUBLE, EntityMove::y, "z", Codec.DOUBLE, EntityMove::z,
                     "yaw", Codec.FLOAT, EntityMove::yaw, "pitch", Codec.FLOAT, EntityMove::pitch, EntityMove::new),
-                    Appliers.EntityMoveApplier::new)
+                    EntityMoveApplier::new)
             .folding((s, op) -> s.latest(Channels.ENTITY_MOVES, op.op().seq(), op))
             .keyframing();
 
     public static final Recordable<BlockOp> BLOCKS = Recordable.of("replay:block", 2, 0, StructCodec.struct(
                     "l", Codec.INT, BlockOp::layer,
                     "x", Codec.INT, BlockOp::x, "y", Codec.INT, BlockOp::y, "z", Codec.INT, BlockOp::z,
-                    "b", Codec.STRING, BlockOp::block, BlockOp::new), Appliers.BlockApplier::new)
+                    "b", Codec.STRING, BlockOp::block, BlockOp::new), BlockApplier::new)
             .folding((s, op) -> s.latest(Channels.BLOCKS,
                     op.op().layer() + ":" + op.op().x() + ":" + op.op().y() + ":" + op.op().z(), op));
 
     public static final Recordable<Equip> EQUIPS = Recordable.of("replay:equip", 1, 10, StructCodec.struct(
                     "p", Codec.STRING, Equip::player, "items", Codec.NBT_COMPOUND, Equip::items, Equip::new),
-                    Appliers.EquipApplier::new)
+                    EquipApplier::new)
             .folding((s, op) -> s.latest(Channels.EQUIPS, op.op().player(), op))
             .keyframing();
 
     public static final Recordable<Act> ACTS = Recordable.of("replay:act", 1, 20, StructCodec.struct(
                     "p", Codec.STRING, Act::player, "k", Codec.INT, Act::kind, "v", Codec.INT, Act::value, Act::new),
-                    Appliers.ActApplier::new)
+                    ActApplier::new)
             .folding((s, op) -> {
                 // stateful kinds fold to their latest; swings/hurts are moments, not state - skipped on seek
                 String group = switch (op.op().kind()) {
@@ -136,7 +136,7 @@ public final class Channels {
 
     public static final Recordable<Remove> REMOVES = Recordable.of("replay:remove", 1, 30, StructCodec.struct(
                     "s", Codec.INT, Remove::seq, "c", Codec.STRING, Remove::collector, Remove::new),
-                    Appliers.RemoveApplier::new)
+                    RemoveApplier::new)
             .folding((s, op) -> {
                 int seq = op.op().seq();
                 if (s.has(Channels.SPAWNS, seq)) { // spawned inside the seek window: never materializes
@@ -151,9 +151,9 @@ public final class Channels {
     public static final Recordable<Dig> DIGS = Recordable.of("replay:dig", 2, 40, StructCodec.struct(
             "l", Codec.INT, Dig::layer,
             "x", Codec.INT, Dig::x, "y", Codec.INT, Dig::y, "z", Codec.INT, Dig::z,
-            "p", Codec.STRING, Dig::digger, "s", Codec.BOOLEAN, Dig::start, Dig::new), Appliers.DigApplier::new);
+            "p", Codec.STRING, Dig::digger, "s", Codec.BOOLEAN, Dig::start, Dig::new), DigApplier::new);
     public static final Recordable<Fx> FX = Recordable.of("replay:fx", 1, 40, StructCodec.struct(
-            "k", Codec.INT, Fx::kind, "d", Codec.BYTE_ARRAY, Fx::data, Fx::new), Appliers.FxApplier::new);
+            "k", Codec.INT, Fx::kind, "d", Codec.BYTE_ARRAY, Fx::data, Fx::new), FxApplier::new);
 
     /** Whether {@link #fx} would record this packet - the cheap gate before any serialization. */
     public static boolean isFx(@NotNull ServerPacket packet) {

@@ -5,7 +5,7 @@ import io.github.term4.archipelago.event.ShardDestroyEvent;
 import io.github.term4.archipelago.event.ShardTransferEvent;
 import io.github.term4.archipelago.testsupport.FakePlayer;
 import io.github.term4.archipelago.testsupport.HeadlessServerTest;
-import io.github.term4.archipelago.world.WorldAccess;
+import io.github.term4.polyp.world.MechanicsWorld;
 import net.minestom.server.MinecraftServer;
 import net.minestom.server.collision.BoundingBox;
 import net.minestom.server.collision.PhysicsResult;
@@ -50,7 +50,7 @@ class ShardTest extends HeadlessServerTest {
         assertEquals(Block.STONE, a.getBlock(5, 70, 5), "the writing shard sees its diff");
         assertTrue(instance.getBlock(5, 70, 5).air(), "the base map is never written");
         assertTrue(b.getBlock(5, 70, 5).air(), "a sibling shard sees the clean map");
-        assertTrue(WorldAccess.of(instance).getBlock(5, 70, 5).air(), "the base wrapper sees the clean map");
+        assertTrue(MechanicsWorld.of(instance).getBlock(5, 70, 5).air(), "the base wrapper sees the clean map");
     }
 
     @Test
@@ -116,7 +116,7 @@ class ShardTest extends HeadlessServerTest {
         BoundingBox box = new BoundingBox(0.5, 0.5, 0.5);
         Pos from = new Pos(5.5, 70, 5.5);
         PhysicsResult onShard = a.sweep(box, from, new Vec(0, -2, 0), null, false);
-        PhysicsResult onBase = WorldAccess.of(instance).sweep(box, from, new Vec(0, -2, 0), null, false);
+        PhysicsResult onBase = MechanicsWorld.of(instance).sweep(box, from, new Vec(0, -2, 0), null, false);
         assertTrue(onShard.hasCollision(), "the falling box lands on the shard's placed block");
         assertFalse(onBase.hasCollision(), "the base map has only air there");
     }
@@ -128,7 +128,7 @@ class ShardTest extends HeadlessServerTest {
         LivingEntity zombie = new LivingEntity(EntityType.ZOMBIE);
         a.spawn(zombie, new Pos(8, 65, 8)).join();
         try {
-            assertSame(a, WorldAccess.of(zombie), "the entity resolves its shard binding");
+            assertSame(a, MechanicsWorld.of(zombie), "the entity resolves its shard binding");
             assertTrue(a.nearbyEntities(new Vec(8, 65, 8), 2).contains(zombie));
             assertTrue(b.nearbyEntities(new Vec(8, 65, 8), 2).isEmpty(), "a sibling shard has its own entity set");
         } finally {
@@ -187,8 +187,8 @@ class ShardTest extends HeadlessServerTest {
                     .filter(e -> !(e instanceof Player)).toList();
             assertEquals(1, owned.size(), "the cloner reproduced the zombie");
             assertNotSame(zombie, owned.get(0));
-            assertSame(b, WorldAccess.of(owned.get(0)), "the clone belongs to the fork");
-            assertSame(a, WorldAccess.of(zombie), "the original keeps its own");
+            assertSame(b, MechanicsWorld.of(owned.get(0)), "the clone belongs to the fork");
+            assertSame(a, MechanicsWorld.of(zombie), "the original keeps its own");
 
             b.setBlock(new Vec(42, 70, 40), Block.OAK_PLANKS);
             assertTrue(a.getBlock(42, 70, 40).air(), "forks are independent");
@@ -233,7 +233,7 @@ class ShardTest extends HeadlessServerTest {
         LivingEntity custom = new LivingEntity(EntityType.ZOMBIE) {}; // unknown subclass: behavior can't be guessed
         a.spawn(custom, new Pos(51, 65, 50)).join();
         LivingEntity stamped = new LivingEntity(EntityType.ZOMBIE) {}; // unknown subclass, but copy-stamped
-        stamped.setTag(WorldAccess.ENTITY_COPY, () -> new LivingEntity(EntityType.COW));
+        stamped.setTag(MechanicsWorld.ENTITY_COPY, () -> new LivingEntity(EntityType.COW));
         a.spawn(stamped, new Pos(52, 65, 50)).join();
         ItemEntity loot = new ItemEntity(ItemStack.of(Material.EMERALD, 5));
         a.spawn(loot, new Pos(53, 65, 50)).join();
@@ -312,7 +312,7 @@ class ShardTest extends HeadlessServerTest {
         MinecraftServer.getGlobalEventHandler().addChild(probe);
         try {
             b.transfer(zombie);
-            assertSame(b, WorldAccess.of(zombie), "ownership handed off");
+            assertSame(b, MechanicsWorld.of(zombie), "ownership handed off");
             assertTrue(a.nearbyEntities(new Vec(12, 65, 12), 2).isEmpty(), "the source no longer owns it");
             assertTrue(b.nearbyEntities(new Vec(12, 65, 12), 2).contains(zombie));
             assertEquals(1, fired.size());
@@ -415,6 +415,6 @@ class ShardTest extends HeadlessServerTest {
         Shard a = new Shard(instance);
         a.setTag(marker, "game-a");
         assertEquals("game-a", a.getTag(marker));
-        assertNull(WorldAccess.of(instance).getTag(marker), "world tags are per world, not per instance");
+        assertNull(MechanicsWorld.of(instance).getTag(marker), "world tags are per world, not per instance");
     }
 }

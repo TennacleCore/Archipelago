@@ -5,8 +5,8 @@ import io.github.term4.archipelago.testsupport.DetectorEntity;
 import io.github.term4.archipelago.testsupport.FakePlayer;
 import io.github.term4.archipelago.testsupport.HeadlessServerTest;
 import io.github.term4.archipelago.ticking.ExecutionDomain;
-import io.github.term4.archipelago.world.WorldAccess;
-import io.github.term4.archipelago.world.WorldPolicy;
+import io.github.term4.polyp.world.MechanicsWorld;
+import io.github.term4.polyp.world.WorldPolicy;
 import net.minestom.server.MinecraftServer;
 import net.minestom.server.collision.BoundingBox;
 import net.minestom.server.coordinate.Point;
@@ -291,7 +291,7 @@ class ShardTreeTest extends HeadlessServerTest {
             child.join(member.player);
             manager.destroy(parent);
             assertNull(manager.byName("tree-child"), "the child died with its parent");
-            assertNull(member.player.getTag(WorldAccess.ENTITY_TAG), "the child's member was evicted");
+            assertNull(member.player.getTag(MechanicsWorld.ENTITY_TAG), "the child's member was evicted");
             assertTrue(bare.destroyed, "bare layers cascade too");
             assertEquals(3, destroyEvents.get(), "one destroy event per shard in the subtree");
 

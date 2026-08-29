@@ -1,7 +1,7 @@
 package io.github.term4.archipelago.shard;
 
-import io.github.term4.archipelago.world.WorldAccess;
-import io.github.term4.archipelago.world.WorldPolicy;
+import io.github.term4.polyp.world.MechanicsWorld;
+import io.github.term4.polyp.world.WorldPolicy;
 import net.minestom.server.coordinate.CoordConversion;
 import net.minestom.server.coordinate.Point;
 import net.minestom.server.entity.Entity;
@@ -80,7 +80,7 @@ public final class ShardView {
     public @Nullable Shard blocks() { return blocks; }
 
     /** Whether entities bound to {@code shard} ({@code null}/non-diff = main world) are visible. */
-    public boolean seesEntitiesOf(@Nullable WorldAccess shard) {
+    public boolean seesEntitiesOf(@Nullable MechanicsWorld shard) {
         if (allEntities) return true;
         return shard instanceof Shard d ? entityShards.contains(d) : baseEntities;
     }
@@ -94,7 +94,7 @@ public final class ShardView {
     public static @NotNull ShardView of(@NotNull Player player) {
         ShardView explicit = player.getTag(TAG);
         if (explicit != null) return explicit;
-        return player.getTag(WorldAccess.ENTITY_TAG) instanceof Shard d ? d.memberView() : BASE;
+        return player.getTag(MechanicsWorld.ENTITY_TAG) instanceof Shard d ? d.memberView() : BASE;
     }
 
     /**

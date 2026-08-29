@@ -1,5 +1,6 @@
 package io.github.term4.archipelago.world;
 
+import io.github.term4.polyp.world.MechanicsWorld;
 import io.github.term4.archipelago.event.ShardJoinEvent;
 import io.github.term4.archipelago.event.ShardLeaveEvent;
 import io.github.term4.archipelago.event.ShardTransferEvent;
@@ -14,7 +15,7 @@ import java.util.function.Predicate;
 
 /**
  * World-scoped commands: registered like any Minestom command, but visible and executable only for players whose
- * {@link WorldAccess#of(net.minestom.server.entity.Entity) world} matches - a {@code /bed} that exists inside a bedwars shard and nowhere
+ * {@link MechanicsWorld#of(net.minestom.server.entity.Entity) world} matches - a {@code /bed} that exists inside a bedwars shard and nowhere
  * else. Scoping rides Minestom's own {@link CommandCondition}, so the client's command list and tab completion
  * follow it; the list re-sends itself whenever a player's world changes (shard join/leave/transfer, instance
  * spawn). Non-player senders (console) always pass.
@@ -29,13 +30,13 @@ public final class WorldCommands {
      * Registers {@code command} scoped to worlds matching {@code where} (composed onto any condition the command
      * already carries). Returns the unregister handle - it also re-sends affected players' command lists.
      */
-    public static @NotNull Runnable register(@NotNull Command command, @NotNull Predicate<@NotNull WorldAccess> where) {
+    public static @NotNull Runnable register(@NotNull Command command, @NotNull Predicate<@NotNull MechanicsWorld> where) {
         CommandCondition existing = command.getCondition();
         command.setCondition((sender, commandString) -> {
             if (existing != null && !existing.canUse(sender, commandString)) return false;
             if (!(sender instanceof Player p)) return true;
             if (p.getInstance() == null) return false; // pre-spawn command-list build
-            return where.test(WorldAccess.of(p));
+            return where.test(MechanicsWorld.of(p));
         });
         hookRefresh();
         MinecraftServer.getCommandManager().register(command);

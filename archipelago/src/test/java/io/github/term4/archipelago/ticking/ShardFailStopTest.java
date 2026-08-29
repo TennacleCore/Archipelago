@@ -5,7 +5,7 @@ import io.github.term4.archipelago.shard.ShardManager;
 import io.github.term4.archipelago.testsupport.DetectorEntity;
 import io.github.term4.archipelago.testsupport.FakePlayer;
 import io.github.term4.archipelago.testsupport.HeadlessServerTest;
-import io.github.term4.archipelago.world.WorldAccess;
+import io.github.term4.polyp.world.MechanicsWorld;
 import net.minestom.server.coordinate.Pos;
 import org.junit.jupiter.api.Test;
 
@@ -49,7 +49,7 @@ class ShardFailStopTest extends HeadlessServerTest {
 
             manager.destroy(shard);
             await("destroyed on demand", () -> manager.byName("doomed") == null);
-            assertNull(member.player.getTag(WorldAccess.ENTITY_TAG));
+            assertNull(member.player.getTag(MechanicsWorld.ENTITY_TAG));
             assertTrue(e.isRemoved());
         } finally {
             released.set(true);

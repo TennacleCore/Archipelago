@@ -3,7 +3,7 @@ package io.github.term4.archipelago.ticking;
 import io.github.term4.archipelago.shard.Shard;
 import io.github.term4.archipelago.testsupport.FakePlayer;
 import io.github.term4.archipelago.testsupport.HeadlessServerTest;
-import io.github.term4.archipelago.world.WorldAccess;
+import io.github.term4.polyp.world.MechanicsWorld;
 import net.minestom.server.MinecraftServer;
 import net.minestom.server.coordinate.Pos;
 import net.minestom.server.network.player.GameProfile;
@@ -60,7 +60,7 @@ class DomainPlayerTest extends HeadlessServerTest {
 
             shard.leave(player);
             await("leave hands the player back to the server", () -> ExecutionDomain.of(player) == null);
-            assertNull(player.getTag(WorldAccess.ENTITY_TAG));
+            assertNull(player.getTag(MechanicsWorld.ENTITY_TAG));
         } finally {
             MinecraftServer.getConnectionManager().setPlayerProvider(null);
             domain.retire();

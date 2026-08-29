@@ -1,7 +1,7 @@
 package io.github.term4.archipelago.shard;
 
-import io.github.term4.archipelago.world.WorldAccess;
-import io.github.term4.archipelago.world.WorldPolicy;
+import io.github.term4.polyp.world.MechanicsWorld;
+import io.github.term4.polyp.world.WorldPolicy;
 import net.minestom.server.entity.Entity;
 import net.minestom.server.entity.Player;
 import org.jetbrains.annotations.NotNull;
@@ -17,11 +17,11 @@ public interface ShardPolicy extends WorldPolicy {
 
     @Override
     default boolean sees(@NotNull Player viewer, @NotNull Entity subject) {
-        return ShardView.of(viewer).seesEntitiesOf(subject.getTag(WorldAccess.ENTITY_TAG));
+        return ShardView.of(viewer).seesEntitiesOf(subject.getTag(MechanicsWorld.ENTITY_TAG));
     }
 
     @Override
-    default boolean seesBlocksOf(@NotNull Player viewer, @NotNull WorldAccess world) {
+    default boolean seesBlocksOf(@NotNull Player viewer, @NotNull MechanicsWorld world) {
         Shard worldBlocks = world instanceof Shard s ? s : null;
         return ShardView.of(viewer).blocks() == worldBlocks && viewer.getInstance() == world.instance();
     }
