@@ -48,8 +48,12 @@ final class DomainClock {
     private volatile long baseNanos;
     private volatile long baseTicks;
 
-    DomainClock(Domain domain) {
+    /** This clock's cadence; {@link #PERIOD_NANOS} unless the domain was created at its own rate. */
+    private final long periodNanos;
+
+    DomainClock(Domain domain, long periodNanos) {
         this.domain = domain;
+        this.periodNanos = periodNanos;
         this.baseNanos = System.nanoTime();
         this.thread = Thread.ofVirtual()
                 .name("shard-domain:" + Integer.toHexString(System.identityHashCode(domain)))
@@ -73,8 +77,12 @@ final class DomainClock {
 
     /** Ticks this domain is behind the wall clock. */
     long lag() {
-        long expected = baseTicks + (System.nanoTime() - baseNanos) / PERIOD_NANOS;
+        long expected = baseTicks + (System.nanoTime() - baseNanos) / periodNanos;
         return Math.max(0, expected - domain.ticks());
+    }
+
+    long periodNanos() {
+        return periodNanos;
     }
 
     /** Smoothed per-tick cost in ms (~16-tick horizon). */
@@ -104,7 +112,7 @@ final class DomainClock {
 
     private void run() {
         CURRENT.set(this);
-        long next = System.nanoTime() + PERIOD_NANOS;
+        long next = System.nanoTime() + periodNanos;
         while (running) {
             long wait = next - System.nanoTime();
             if (wait > 0) {
@@ -112,9 +120,9 @@ final class DomainClock {
                 Thread.interrupted(); // a late watchdog interrupt must not turn the park into a spin
                 continue;
             }
-            next += PERIOD_NANOS;
+            next += periodNanos;
             if (next < System.nanoTime()) { // overran: drop behind, and lag re-bases so it reads CURRENT stall, not history
-                next = System.nanoTime() + PERIOD_NANOS;
+                next = System.nanoTime() + periodNanos;
                 baseNanos = System.nanoTime();
                 baseTicks = domain.ticks();
             }
@@ -135,7 +143,7 @@ final class DomainClock {
                 msptLast = cost;
                 if (cost > msptMax) msptMax = cost;
                 msptEwma += (cost - msptEwma) / 16;
-                if (costNanos > PERIOD_NANOS) deadlineMisses++;
+                if (costNanos > periodNanos) deadlineMisses++;
                 tickStartNanos = 0;
                 interruptFired = false;
                 Thread.interrupted(); // a late watchdog interrupt must not poison the next park

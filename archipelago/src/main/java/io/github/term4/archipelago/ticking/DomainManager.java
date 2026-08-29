@@ -43,10 +43,15 @@ final class DomainManager {
         this.watchdog = new Watchdog(this, interruptAfterMs, quarantineAfterMs);
     }
 
-    /** A new domain with its own clock. */
+    /** A new domain with its own clock at the server tick rate. */
     @NotNull Domain create() {
+        return create(DomainClock.PERIOD_NANOS);
+    }
+
+    /** A new domain whose clock ticks every {@code periodNanos}. */
+    @NotNull Domain create(long periodNanos) {
         Domain d = new Domain(this, false);
-        grantClock(d);
+        grantClock(d, periodNanos);
         return d;
     }
 
@@ -157,10 +162,10 @@ final class DomainManager {
         if (chunk != null && !entity.isRemoved()) globalDispatcher().updateElement(entity, chunk);
     }
 
-    private void grantClock(Domain node) {
+    private void grantClock(Domain node, long periodNanos) {
         synchronized (clockLock) {
             if (!running) return; // shutdown won the race
-            clocks.put(node, new DomainClock(node));
+            clocks.put(node, new DomainClock(node, periodNanos));
         }
     }
 

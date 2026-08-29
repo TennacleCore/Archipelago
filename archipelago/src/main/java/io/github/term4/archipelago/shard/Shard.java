@@ -1047,9 +1047,23 @@ public final class Shard implements WorldAccess {
         BasePlacement.listener(packet, player);
     }
 
-    /** Blocks a placer may put into their OWN body (a 1.8-mechanics lib exempts ladders/vines/webs). */
-    public static void selfPlaceExempt(@NotNull Predicate<Block> rule) {
-        BlockRouting.selfPlaceExempt = rule;
+    /** Blocks placed with NO entity check, matching 1.8's no-collision-box skip (a 1.8-mechanics lib exempts ladders/vines/webs/stairs). */
+    public static void placementCheckExempt(@NotNull Predicate<Block> rule) {
+        BlockRouting.placementCheckExempt = rule;
+    }
+
+    /**
+     * 1.8 neighbor physics for a change at {@code pos}: placement rules run over THIS shard's view, and every
+     * block they change cascades. Routed places/digs fire it themselves; call after direct {@link #setBlock}
+     * edits that should behave like gameplay (an explosion crater, a scripted break).
+     */
+    public void applyPhysics(@NotNull Point pos) {
+        ShardUpdates.applyPhysics(this, pos);
+    }
+
+    /** The shard behind a rule-facing view the router handed out, or {@code null} for any other getter. */
+    public static @Nullable Shard of(net.minestom.server.instance.block.Block.@NotNull Getter getter) {
+        return getter instanceof ShardBlockView view ? view.shard() : null;
     }
 
     /** The break effect of a routed dig. Default: the vanilla world event to the shard's watchers minus

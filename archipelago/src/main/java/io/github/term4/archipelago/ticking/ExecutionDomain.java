@@ -37,6 +37,15 @@ public final class ExecutionDomain {
     }
 
     /**
+     * A domain ticking at {@code tps} instead of the server rate - the whole timeline it drives (entity
+     * ticks, hooks, and everything counting its ticks) dilates with it.
+     */
+    public static @NotNull ExecutionDomain create(int tps) {
+        if (tps < 1 || tps > 1000) throw new IllegalArgumentException("tps out of range: " + tps);
+        return engine0().create(1_000_000_000L / tps).handle;
+    }
+
+    /**
      * A domain with NO clock: attaching an entity FREEZES it (nothing ever ticks it) until it moves to a live
      * domain or {@link #detach detaches}. {@code Shard.domain(null)} parks a shard here - stasis, not a silent
      * fallback to the server clock.
@@ -163,7 +172,8 @@ public final class ExecutionDomain {
                 clock == null ? 0 : clock.msptMax(),
                 clock == null ? 0 : clock.deadlineMisses(),
                 node.taskBacklog(), node.arrivals.size(), node.entities.size(), node.hookCount(),
-                clock == null ? null : clock.thread().getName(), clock != null, DomainClock.PERIOD_NANOS);
+                clock == null ? null : clock.thread().getName(), clock != null,
+                clock == null ? DomainClock.PERIOD_NANOS : clock.periodNanos());
     }
 
     /** One pull of the engine's raw counters. */

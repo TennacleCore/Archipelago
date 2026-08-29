@@ -19,6 +19,7 @@ import net.minestom.server.event.entity.EntityItemMergeEvent;
 import net.minestom.server.event.item.PickupItemEvent;
 import net.minestom.server.event.player.PlayerBlockBreakEvent;
 import net.minestom.server.event.player.PlayerBlockInteractEvent;
+import net.minestom.server.event.player.PlayerUseItemOnBlockEvent;
 import net.minestom.server.event.player.PlayerBlockPlaceEvent;
 import net.minestom.server.event.player.PlayerCancelDiggingEvent;
 import net.minestom.server.event.player.PlayerChunkLoadEvent;
@@ -29,6 +30,7 @@ import net.minestom.server.event.player.PlayerSpawnEvent;
 import net.minestom.server.event.player.PlayerStartDiggingEvent;
 import net.minestom.server.instance.Instance;
 import net.minestom.server.instance.block.Block;
+import net.minestom.server.instance.block.BlockHandler;
 import net.minestom.server.instance.block.BlockFace;
 import net.minestom.server.instance.block.rule.BlockPlacementRule;
 import net.minestom.server.item.ItemStack;
@@ -54,7 +56,7 @@ import java.util.function.UnaryOperator;
 final class BlockRouting {
 
     /** Blocks a placer may put into their OWN body (e.g. a 1.8-mechanics lib exempts ladders/vines/webs). */
-    static volatile Predicate<Block> selfPlaceExempt = block -> false;
+    static volatile Predicate<Block> placementCheckExempt = block -> false;
 
     /** {@link Shard#breakFx}: replaceable so effects stay a mechanics concern, with a vanilla default. */
     static volatile Shard.BreakFx breakFx = BlockRouting::defaultBreakFx;
@@ -99,8 +101,9 @@ final class BlockRouting {
             else if (viewed != null && bound != viewed && WorldPolicy.canEdit(player, viewed)) edited = viewed;
             else if (bound != null || viewed != null) edited = null; // read-only: swallowed + resynced
             else return;
-            // unclaimed packets (interactions, throwables, drops) stay Minestom's
+            // unclaimed packets (throwables, drops) stay Minestom's; a click on a handler'd shard block is ours
             if (place ? player.getItemInHand(((ClientPlayerBlockPlacementPacket) packet).hand()).material().block() == null
+                    && !handlerAt(edited != null ? edited : viewed, (ClientPlayerBlockPlacementPacket) packet)
                     : !digs((ClientPlayerActionPacket) packet)) {
                 return;
             }
@@ -159,6 +162,12 @@ final class BlockRouting {
         return node;
     }
 
+    private static boolean handlerAt(@Nullable Shard shard, ClientPlayerBlockPlacementPacket p) {
+        if (shard == null || !shard.instance().isChunkLoaded(p.blockPosition())) return false;
+        Block b = shard.getBlock(p.blockPosition().asBlockVec());
+        return b.handler() != null || MinecraftServer.getBlockManager().getHandler(b.name()) != null;
+    }
+
     /** The dig statuses this routing claims; drops and item-state actions stay Minestom's. */
     private static boolean digs(ClientPlayerActionPacket p) {
         var status = p.status();
@@ -177,10 +186,26 @@ final class BlockRouting {
         Vec cursor = new Vec(p.cursorPositionX(), p.cursorPositionY(), p.cursorPositionZ());
         Block interacted = shard.getBlock(clicked);
 
-        // block-handler onInteract is skipped: overlay writes never attach handlers
         PlayerBlockInteractEvent interact = new PlayerBlockInteractEvent(player, p.hand(), base, interacted, clicked, cursor, p.blockFace());
         EventDispatcher.call(interact);
-        if (interact.isBlockingItemUse()) return;
+        boolean blockUse = interact.isBlockingItemUse();
+        if (!interact.isCancelled()) {
+            // overlay writes never attach handlers; resolve the registered one by key (stock: false = consumed)
+            BlockHandler handler = interacted.handler() != null ? interacted.handler()
+                    : MinecraftServer.getBlockManager().getHandler(interacted.name());
+            if (handler != null) {
+                blockUse |= !handler.onInteract(new BlockHandler.Interaction(
+                        interacted, base, p.blockFace(), clicked, cursor, player, p.hand()));
+            }
+        }
+        if (blockUse) { // the routing's caller acks after the work
+            player.getInventory().update();
+            return;
+        }
+        if (material.block() == null) { // claimed for the handler; the stock non-block tail
+            EventDispatcher.call(new PlayerUseItemOnBlockEvent(player, p.hand(), held, clicked, cursor, p.blockFace()));
+            return;
+        }
 
         boolean canPlace = switch (player.getGameMode()) {
             case SPECTATOR -> false;
@@ -214,7 +239,7 @@ final class BlockRouting {
         if (!base.getWorldBorder().inBounds(target)) canPlace = false;
 
         Block block = held.get(DataComponents.BLOCK_STATE, ItemBlockState.EMPTY).apply(material.block());
-        if (!canPlace || intersectsEntity(shard, target, player, block)) {
+        if (!canPlace || intersectsEntity(shard, target, block)) {
             rejectPlace(shard, player, clicked, target, p.blockFace());
             return;
         }
@@ -222,7 +247,7 @@ final class BlockRouting {
         var rule = manager.getBlockPlacementRule(block);
         if (rule != null) {
             Block ruled = rule.blockPlace(new BlockPlacementRule.PlacementState(
-                    (x, y, z, cond) -> shard.getBlock(x, y, z, cond), block, p.blockFace(), target,
+                    new ShardBlockView(shard), block, p.blockFace(), target,
                     cursor, player.getPosition(), held, player.isSneaking()));
             if (ruled == null) { rejectPlace(shard, player, clicked, target, p.blockFace()); return; } // rule rejected the spot
             block = ruled;
@@ -235,6 +260,7 @@ final class BlockRouting {
             return;
         }
         shard.setBlock(target, event.getBlock());
+        ShardUpdates.applyPhysics(shard, target);
         if (event.doesConsumeBlock()) player.setItemInHand(p.hand(), held.consume(1));
         else player.getInventory().update();
     }
@@ -279,6 +305,7 @@ final class BlockRouting {
             return;
         }
         shard.setBlock(pos, event.getResultBlock());
+        ShardUpdates.applyPhysics(shard, pos);
         breakFx.play(player, shard, pos, block);
     }
 
@@ -326,14 +353,13 @@ final class BlockRouting {
     }
 
     /** Whether a block at {@code pos} would overlap a shard entity/member (upstream canPlaceBlockAt over the shard). */
-    private static boolean intersectsEntity(Shard shard, Point pos, Player placer, Block placing) {
-        boolean placerExempt = selfPlaceExempt.test(placing);
+    private static boolean intersectsEntity(Shard shard, Point pos, Block placing) {
+        if (placementCheckExempt.test(placing)) return false; // 1.8: no collision box, no entity check - for anyone
         Shape shape = placing.collisionShape();
         for (Entity e : shard.entities) {
             if (!e.isRemoved() && intersects(shape, pos, e)) return true;
         }
         for (Player m : shard.members()) {
-            if (m == placer && placerExempt) continue;
             if (intersects(shape, pos, m)) return true;
         }
         return false;
