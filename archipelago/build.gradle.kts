@@ -1,6 +1,6 @@
 ﻿plugins {
     `java-library`
-    id("com.vanniktech.maven.publish") version "0.36.0"
+    id("com.vanniktech.maven.publish") version "0.37.0"
 }
 
 description = "Isolated gameplay worlds over shared Minestom instances - diffs, views, per-shard ticking, polar saves, replays"
@@ -47,13 +47,13 @@ repositories {
 }
 
 dependencies {
-    val minestomVersion = "2026.08.16-26.2"
+    val minestomVersion = "2026.08.28-26.2"
     val junitVersion = "6.1.3"
 
     // the world seam is PROVIDED at runtime (by polyp, which embeds it, or an explicit polyp-world dep for
     // archipelago-without-mechanics) - the same contract as minestom below; so the published POM carries no deps
-    compileOnly("io.github.term4:polyp-world:0.3.0")
-    testImplementation("io.github.term4:polyp-world:0.3.0")
+    compileOnly("io.github.term4:polyp-world:0.3.1")
+    testImplementation("io.github.term4:polyp-world:0.3.1")
     compileOnly("net.minestom:minestom:$minestomVersion")
     compileOnly("org.slf4j:slf4j-api:2.0.18") // minestom's runtime always carries the binding
     // optional: only the polar/replay packages touch it - add polar to your app to use saves/replays
