@@ -7,7 +7,9 @@ import io.github.term4.archipelago.ticking.ExecutionDomain;
 import net.minestom.server.MinecraftServer;
 import net.minestom.server.entity.Entity;
 import net.minestom.server.entity.Player;
+import net.minestom.server.event.Event;
 import net.minestom.server.event.EventDispatcher;
+import net.minestom.server.event.EventNode;
 import net.minestom.server.instance.Instance;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -42,7 +44,9 @@ public final class ShardManager {
         synchronized (ShardManager.class) {
             if (!listenerInstalled) {
                 listenerInstalled = true;
-                MinecraftServer.getGlobalEventHandler().addListener(DomainQuarantineEvent.class, ShardManager::onQuarantine);
+                EventNode<Event> node = EventNode.all("archipelago:shard-manager");
+                node.addListener(DomainQuarantineEvent.class, ShardManager::onQuarantine);
+                MinecraftServer.getGlobalEventHandler().addChild(node);
             }
             MANAGERS.add(this);
         }

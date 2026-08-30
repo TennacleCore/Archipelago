@@ -1,4 +1,4 @@
-plugins {
+﻿plugins {
     `java-library`
     id("com.vanniktech.maven.publish") version "0.36.0"
 }
@@ -44,7 +44,6 @@ mavenPublishing {
 repositories {
     mavenLocal() // polyp-world when the sibling checkout is absent
     mavenCentral()
-    maven("https://jitpack.io")
 }
 
 dependencies {
