@@ -51,7 +51,10 @@ dependencies {
     val minestomVersion = "2026.08.16-26.2"
     val junitVersion = "6.0.3"
 
-    api("io.github.term4:polyp-world:0.2.0")
+    // the world seam is PROVIDED at runtime (by polyp, which embeds it, or an explicit polyp-world dep for
+    // archipelago-without-mechanics) - the same contract as minestom below; so the published POM carries no deps
+    compileOnly("io.github.term4:polyp-world:0.2.0")
+    testImplementation("io.github.term4:polyp-world:0.2.0")
     compileOnly("net.minestom:minestom:$minestomVersion")
     compileOnly("org.slf4j:slf4j-api:2.0.18") // minestom's runtime always carries the binding
     // optional: only the polar/replay packages touch it - add polar to your app to use saves/replays
