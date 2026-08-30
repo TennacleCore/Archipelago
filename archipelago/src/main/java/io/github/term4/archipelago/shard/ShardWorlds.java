@@ -13,6 +13,8 @@ import io.github.term4.polyp.world.WorldPolicy;
 import net.minestom.server.MinecraftServer;
 import net.minestom.server.entity.Entity;
 import net.minestom.server.entity.Player;
+import net.minestom.server.event.Event;
+import net.minestom.server.event.EventNode;
 import net.minestom.server.tag.Tag;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -67,25 +69,26 @@ public final class ShardWorlds {
         });
         // per-tick world systems (TickSystem hooks) follow a domain-bound shard onto its clock
         // (PRE_DISPATCH ordering holds: Domain.tick runs hooks before entities)
-        var events = MinecraftServer.getGlobalEventHandler();
-        events.addListener(ShardCreateEvent.class, e -> hookDomainTick(e.shard()));
-        events.addListener(ShardDestroyEvent.class, e -> {
+        EventNode<Event> node = EventNode.all("archipelago:worlds");
+        node.addListener(ShardCreateEvent.class, e -> hookDomainTick(e.shard()));
+        node.addListener(ShardDestroyEvent.class, e -> {
             Runnable stop = e.shard().getTag(TICK_HOOK);
             if (stop != null) stop.run();
         });
         // crossing a CLOCK boundary invalidates tick stamps (i-frames, sprint windows, motion clocks) - reset
         // them; same-clock layer switches stay combat-continuous and plain-shard hops keep the instance clock.
         // Events fire after the swap, so the entity's binding is the settled truth for all three.
-        events.addListener(ShardJoinEvent.class, e -> clockGate(e.player()));
-        events.addListener(ShardLeaveEvent.class, e -> clockGate(e.player()));
-        events.addListener(ShardTransferEvent.class, e -> clockGate(e.entity()));
+        node.addListener(ShardJoinEvent.class, e -> clockGate(e.player()));
+        node.addListener(ShardLeaveEvent.class, e -> clockGate(e.player()));
+        node.addListener(ShardTransferEvent.class, e -> clockGate(e.entity()));
         // a re-clock changes every member's/entity's clock with no join/transfer - gate them all. It is also the
         // moment a PLAIN shard can become domain-bound: its entities leave the main pass, so the world pass must exist.
-        events.addListener(ShardReclockEvent.class, e -> {
+        node.addListener(ShardReclockEvent.class, e -> {
             hookDomainTick(e.shard());
             e.shard().members().forEach(ShardWorlds::clockGate);
             e.shard().entities().forEach(ShardWorlds::clockGate);
         });
+        MinecraftServer.getGlobalEventHandler().addChild(node);
     }
 
     /** One tick hook per domain-bound shard (plain shards ride the main pass); survives later re-clocks with the driver. */
