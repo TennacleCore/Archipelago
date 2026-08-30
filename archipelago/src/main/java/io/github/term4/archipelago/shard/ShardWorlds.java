@@ -9,7 +9,6 @@ import io.github.term4.archipelago.event.ShardTransferEvent;
 import io.github.term4.archipelago.ticking.ExecutionDomain;
 import io.github.term4.polyp.util.tick.TickSystem;
 import io.github.term4.polyp.world.MechanicsWorld;
-import io.github.term4.polyp.world.WorldPolicy;
 import net.minestom.server.MinecraftServer;
 import net.minestom.server.entity.Entity;
 import net.minestom.server.entity.Player;
@@ -60,13 +59,9 @@ public final class ShardWorlds {
                 return domain == null || domain.onThread();
             }
         });
-        // block-anchored FX follow the shard block view
-        WorldPolicy.set(new WorldPolicy() {
-            @Override public boolean seesBlocksOf(@NotNull Player viewer, @NotNull MechanicsWorld world) {
-                Shard shard = world instanceof Shard s ? s : null;
-                return ShardView.of(viewer).blocks() == shard && viewer.getInstance() == world.instance();
-            }
-        });
+        // entity visibility and block-anchored FX follow the shard view. A bare seesBlocksOf override here once
+        // reverted sees() to binding equality - every unbound spectator went blind to bound players.
+        ShardView.installDefaultPolicy();
         // per-tick world systems (TickSystem hooks) follow a domain-bound shard onto its clock
         // (PRE_DISPATCH ordering holds: Domain.tick runs hooks before entities)
         EventNode<Event> node = EventNode.all("archipelago:worlds");
