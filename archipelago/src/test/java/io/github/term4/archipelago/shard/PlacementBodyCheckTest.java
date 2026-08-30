@@ -8,6 +8,7 @@ import net.minestom.server.coordinate.Vec;
 import net.minestom.server.entity.PlayerHand;
 import net.minestom.server.event.Event;
 import net.minestom.server.event.EventNode;
+import net.minestom.server.event.player.PlayerBlockPlaceEvent;
 import net.minestom.server.event.player.PlayerPacketEvent;
 import net.minestom.server.instance.block.Block;
 import net.minestom.server.instance.block.BlockFace;
@@ -43,6 +44,14 @@ class PlacementBodyCheckTest extends HeadlessServerTest {
         FakePlayer placer = FakePlayer.connect(instance, new Pos(2098.5, 64, 2100.5), "BodyPlacer");
         FakePlayer victim = FakePlayer.connect(instance, new Pos(2100.5, 64, 2100.5), "BodyVictim");
         FakePlayer victim2 = FakePlayer.connect(instance, new Pos(2102.5, 64, 2100.5), "BodyVictim2");
+        // the app-policy layer: a Hypixel-style anticheat is a plain PlayerBlockPlaceEvent cancel
+        EventNode<Event> veto = EventNode.all("test:self-place-veto");
+        veto.addListener(PlayerBlockPlaceEvent.class, e -> {
+            if (e.getBlock().collisionShape().intersectBox(
+                    e.getPlayer().getPosition().sub(e.getBlockPosition()), e.getPlayer().getBoundingBox())) {
+                e.setCancelled(true);
+            }
+        });
         Shard.placementBodyCheck((actor, body, block, rel, box) -> {
             if (body == actor) return false;        // Paper 1.8: the placer is excluded outright
             if (!block.blocksMotion()) return false; // no collision box: no check for anyone
@@ -64,7 +73,13 @@ class PlacementBodyCheckTest extends HeadlessServerTest {
             place(placer, Material.STONE, 2102, 63, 2100); // the second victim's feet cell
             assertTrue(shard.getBlock(new Vec(2102, 64, 2100)).air(),
                     "another body still blocks a motion-blocking placement");
+
+            MinecraftServer.getGlobalEventHandler().addChild(veto);
+            place(placer, Material.OAK_STAIRS, 2098, 64, 2100); // clicked = the placed stair, target = the placer's face
+            assertTrue(shard.getBlock(new Vec(2098, 65, 2100)).air(),
+                    "the app's event veto refuses what the mechanic allows");
         } finally {
+            MinecraftServer.getGlobalEventHandler().removeChild(veto);
             Shard.placementBodyCheck((actor, body, block, rel, box) -> block.collisionShape().intersectBox(rel, box));
             placer.player.remove();
             victim.player.remove();
