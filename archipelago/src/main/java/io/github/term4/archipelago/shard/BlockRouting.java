@@ -3,7 +3,6 @@ package io.github.term4.archipelago.shard;
 import io.github.term4.polyp.world.MechanicsWorld;
 import io.github.term4.polyp.world.WorldPolicy;
 import net.minestom.server.MinecraftServer;
-import net.minestom.server.collision.Shape;
 import net.minestom.server.component.DataComponents;
 import net.minestom.server.coordinate.BlockVec;
 import net.minestom.server.coordinate.Point;
@@ -49,14 +48,14 @@ import net.minestom.server.worldevent.WorldEvent;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.function.BiConsumer;
-import java.util.function.Predicate;
 import java.util.function.UnaryOperator;
 
 /** {@link Shard#blockRouting()}: the packet-level place/dig interception. */
 final class BlockRouting {
 
-    /** Blocks a placer may put into their OWN body (e.g. a 1.8-mechanics lib exempts ladders/vines/webs). */
-    static volatile Predicate<Block> placementCheckExempt = block -> false;
+    /** {@link Shard#placementBodyCheck}: one body vs one placement; default = precise collision-shape intersection. */
+    static volatile Shard.PlacementBodyCheck placementBodyCheck =
+            (block, rel, box) -> block.collisionShape().intersectBox(rel, box);
 
     /** {@link Shard#breakFx}: replaceable so effects stay a mechanics concern, with a vanilla default. */
     static volatile Shard.BreakFx breakFx = BlockRouting::defaultBreakFx;
@@ -354,22 +353,20 @@ final class BlockRouting {
 
     /** Whether a block at {@code pos} would overlap a shard entity/member (upstream canPlaceBlockAt over the shard). */
     private static boolean intersectsEntity(Shard shard, Point pos, Block placing) {
-        if (placementCheckExempt.test(placing)) return false; // 1.8: no collision box, no entity check - for anyone
-        Shape shape = placing.collisionShape();
         for (Entity e : shard.entities) {
-            if (!e.isRemoved() && intersects(shape, pos, e)) return true;
+            if (!e.isRemoved() && blocksPlacement(placing, pos, e)) return true;
         }
         for (Player m : shard.members()) {
-            if (intersects(shape, pos, m)) return true;
+            if (blocksPlacement(placing, pos, m)) return true;
         }
         return false;
     }
 
-    private static boolean intersects(Shape shape, Point pos, Entity e) {
+    static boolean blocksPlacement(Block placing, Point pos, Entity e) {
         if (!e.preventBlockPlacement()) return false; // items/arrows never block placement (vanilla)
         Point ep = e.getPosition();
         if (e instanceof Player) ep = ep.add(ep.sub(pos).mul(0.0000001)); // upstream: nudged off the block edge
-        return shape.intersectBox(ep.sub(pos), e.getBoundingBox());
+        return placementBodyCheck.blocks(placing, ep.sub(pos), e.getBoundingBox());
     }
 
     /**

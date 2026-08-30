@@ -184,20 +184,12 @@ final class BasePlacement {
         }
     }
 
-    // upstream BlockCollision.canPlaceBlockAt with the ONE local change: the policy scope
+    // upstream BlockCollision.canPlaceBlockAt with two local changes: the policy scope, and the per-body
+    // check routed through Shard.placementBodyCheck (so a 1.8-mechanics lib governs base and shard alike)
     private static Entity canPlaceBlockAt(Instance instance, Point blockPos, Block b, Player placer) {
         for (Entity entity : instance.getNearbyEntities(blockPos, 3)) {
-            if (!entity.preventBlockPlacement()) continue;
             if (!WorldPolicy.canAffect(placer, entity)) continue; // a co-located other-world entity is invisible to the placer
-            final boolean intersects;
-            if (entity instanceof Player) {
-                // upstream: nudged off the block edge (a player exactly on the boundary would false-intersect)
-                Point playerPos = entity.getPosition().add(entity.getPosition().sub(blockPos).mul(0.0000001));
-                intersects = b.collisionShape().intersectBox(playerPos.sub(blockPos), entity.getBoundingBox());
-            } else {
-                intersects = b.collisionShape().intersectBox(entity.getPosition().sub(blockPos), entity.getBoundingBox());
-            }
-            if (intersects) return entity;
+            if (BlockRouting.blocksPlacement(b, blockPos, entity)) return entity;
         }
         return null;
     }

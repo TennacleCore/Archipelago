@@ -59,7 +59,6 @@ import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.LongConsumer;
-import java.util.function.Predicate;
 import java.util.function.Supplier;
 
 /**
@@ -1047,9 +1046,19 @@ public final class Shard implements MechanicsWorld {
         BasePlacement.listener(packet, player);
     }
 
-    /** Blocks placed with NO entity check, matching 1.8's no-collision-box skip (a 1.8-mechanics lib exempts ladders/vines/webs/stairs). */
-    public static void placementCheckExempt(@NotNull Predicate<Block> rule) {
-        BlockRouting.placementCheckExempt = rule;
+    /** One body vs one placement: whether the body blocks placing {@code block} at the cell ({@code cellRelativeEntity} = entity pos minus the cell). */
+    @FunctionalInterface
+    public interface PlacementBodyCheck {
+        boolean blocks(@NotNull Block block, @NotNull Point cellRelativeEntity, @NotNull BoundingBox entityBox);
+    }
+
+    /**
+     * Replaces the per-body placement entity check (default: precise collision-shape intersection). A
+     * 1.8-mechanics lib substitutes the legacy semantics - no check for no-collision-box blocks, the
+     * stale-raytrace remnant for stairs. Applies to every body: the placer, members, entities.
+     */
+    public static void placementBodyCheck(@NotNull PlacementBodyCheck rule) {
+        BlockRouting.placementBodyCheck = rule;
     }
 
     /**
