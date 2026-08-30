@@ -55,7 +55,7 @@ final class BlockRouting {
 
     /** {@link Shard#placementBodyCheck}: one body vs one placement; default = precise collision-shape intersection. */
     static volatile Shard.PlacementBodyCheck placementBodyCheck =
-            (placer, block, rel, box) -> block.collisionShape().intersectBox(rel, box);
+            (placer, body, block, rel, box) -> block.collisionShape().intersectBox(rel, box);
 
     /** {@link Shard#breakFx}: replaceable so effects stay a mechanics concern, with a vanilla default. */
     static volatile Shard.BreakFx breakFx = BlockRouting::defaultBreakFx;
@@ -366,7 +366,7 @@ final class BlockRouting {
         if (!e.preventBlockPlacement()) return false; // items/arrows never block placement (vanilla)
         Point ep = e.getPosition();
         if (e instanceof Player) ep = ep.add(ep.sub(pos).mul(0.0000001)); // upstream: nudged off the block edge
-        return placementBodyCheck.blocks(placer, placing, ep.sub(pos), e.getBoundingBox());
+        return placementBodyCheck.blocks(placer, e, placing, ep.sub(pos), e.getBoundingBox());
     }
 
     /**
