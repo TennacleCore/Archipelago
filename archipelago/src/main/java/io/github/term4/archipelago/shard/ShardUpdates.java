@@ -38,7 +38,7 @@ final class ShardUpdates {
             Point neighborPos = pos.add(direction.normalX(), direction.normalY(), direction.normalZ());
             if (!shard.instance().isChunkLoaded(neighborPos)) continue;
             Block neighbor = shard.getBlock(neighborPos);
-            if (neighbor.isAir()) continue;
+            if (neighbor.air()) continue;
             BlockPlacementRule rule = manager.getBlockPlacementRule(neighbor);
             if (rule == null) continue;
             Block updated = rule.blockUpdate(new BlockPlacementRule.UpdateState(
