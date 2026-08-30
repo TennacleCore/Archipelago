@@ -55,7 +55,7 @@ final class BlockRouting {
 
     /** {@link Shard#placementBodyCheck}: one body vs one placement; default = precise collision-shape intersection. */
     static volatile Shard.PlacementBodyCheck placementBodyCheck =
-            (block, rel, box) -> block.collisionShape().intersectBox(rel, box);
+            (placer, block, rel, box) -> block.collisionShape().intersectBox(rel, box);
 
     /** {@link Shard#breakFx}: replaceable so effects stay a mechanics concern, with a vanilla default. */
     static volatile Shard.BreakFx breakFx = BlockRouting::defaultBreakFx;
@@ -238,7 +238,7 @@ final class BlockRouting {
         if (!base.getWorldBorder().inBounds(target)) canPlace = false;
 
         Block block = held.get(DataComponents.BLOCK_STATE, ItemBlockState.EMPTY).apply(material.block());
-        if (!canPlace || intersectsEntity(shard, target, block)) {
+        if (!canPlace || intersectsEntity(shard, player, target, block)) {
             rejectPlace(shard, player, clicked, target, p.blockFace());
             return;
         }
@@ -352,21 +352,21 @@ final class BlockRouting {
     }
 
     /** Whether a block at {@code pos} would overlap a shard entity/member (upstream canPlaceBlockAt over the shard). */
-    private static boolean intersectsEntity(Shard shard, Point pos, Block placing) {
+    private static boolean intersectsEntity(Shard shard, Player placer, Point pos, Block placing) {
         for (Entity e : shard.entities) {
-            if (!e.isRemoved() && blocksPlacement(placing, pos, e)) return true;
+            if (!e.isRemoved() && blocksPlacement(placer, placing, pos, e)) return true;
         }
         for (Player m : shard.members()) {
-            if (blocksPlacement(placing, pos, m)) return true;
+            if (blocksPlacement(placer, placing, pos, m)) return true;
         }
         return false;
     }
 
-    static boolean blocksPlacement(Block placing, Point pos, Entity e) {
+    static boolean blocksPlacement(Player placer, Block placing, Point pos, Entity e) {
         if (!e.preventBlockPlacement()) return false; // items/arrows never block placement (vanilla)
         Point ep = e.getPosition();
         if (e instanceof Player) ep = ep.add(ep.sub(pos).mul(0.0000001)); // upstream: nudged off the block edge
-        return placementBodyCheck.blocks(placing, ep.sub(pos), e.getBoundingBox());
+        return placementBodyCheck.blocks(placer, placing, ep.sub(pos), e.getBoundingBox());
     }
 
     /**

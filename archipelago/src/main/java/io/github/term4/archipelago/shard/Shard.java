@@ -1046,16 +1046,17 @@ public final class Shard implements MechanicsWorld {
         BasePlacement.listener(packet, player);
     }
 
-    /** One body vs one placement: whether the body blocks placing {@code block} at the cell ({@code cellRelativeEntity} = entity pos minus the cell). */
+    /** One body vs one placement: whether the body blocks {@code placer} placing {@code block} at the cell ({@code cellRelativeEntity} = entity pos minus the cell). */
     @FunctionalInterface
     public interface PlacementBodyCheck {
-        boolean blocks(@NotNull Block block, @NotNull Point cellRelativeEntity, @NotNull BoundingBox entityBox);
+        boolean blocks(@NotNull Player placer, @NotNull Block block, @NotNull Point cellRelativeEntity, @NotNull BoundingBox entityBox);
     }
 
     /**
-     * Replaces the per-body placement entity check (default: precise collision-shape intersection). A
-     * 1.8-mechanics lib substitutes the legacy semantics - no check for no-collision-box blocks, the
-     * stale-raytrace remnant for stairs. Applies to every body: the placer, members, entities.
+     * Replaces the per-body placement entity check (default: precise collision-shape intersection). The placer
+     * is in hand so the rule can follow their client - a 1.8-mechanics lib gives LEGACY placers the legacy
+     * semantics (no check for no-collision-box blocks, the stale-raytrace remnant for stairs) and leaves modern
+     * placers precise. Applies to every body: the placer, members, entities.
      */
     public static void placementBodyCheck(@NotNull PlacementBodyCheck rule) {
         BlockRouting.placementBodyCheck = rule;

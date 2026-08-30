@@ -189,7 +189,7 @@ final class BasePlacement {
     private static Entity canPlaceBlockAt(Instance instance, Point blockPos, Block b, Player placer) {
         for (Entity entity : instance.getNearbyEntities(blockPos, 3)) {
             if (!WorldPolicy.canAffect(placer, entity)) continue; // a co-located other-world entity is invisible to the placer
-            if (BlockRouting.blocksPlacement(b, blockPos, entity)) return entity;
+            if (BlockRouting.blocksPlacement(placer, b, blockPos, entity)) return entity;
         }
         return null;
     }

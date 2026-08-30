@@ -45,7 +45,7 @@ class PlacementBodyCheckTest extends HeadlessServerTest {
         FakePlayer victim = FakePlayer.connect(instance, new Pos(2100.5, 64, 2100.5), "BodyVictim");
         FakePlayer victim2 = FakePlayer.connect(instance, new Pos(2102.5, 64, 2100.5), "BodyVictim2");
         FakePlayer edger = FakePlayer.connect(instance, new Pos(2104.8, 64, 2100.5), "BodyEdger");
-        Shard.placementBodyCheck((block, rel, box) -> {
+        Shard.placementBodyCheck((actor, block, rel, box) -> {
             if (!block.blocksMotion()) return false; // 1.8: no collision box, no check - for anyone
             if (block.name().endsWith("_stairs")) {
                 return rel.x() + box.minX() < 0.5 && rel.x() + box.maxX() > 0.5
@@ -80,7 +80,7 @@ class PlacementBodyCheckTest extends HeadlessServerTest {
             assertTrue(shard.getBlock(new Vec(2105, 64, 2100)).compare(Block.OAK_STAIRS),
                     "an edge overlap leaves the center free - the 1.8 clutch placement");
         } finally {
-            Shard.placementBodyCheck((block, rel, box) -> block.collisionShape().intersectBox(rel, box));
+            Shard.placementBodyCheck((actor, block, rel, box) -> block.collisionShape().intersectBox(rel, box));
             placer.player.remove();
             victim.player.remove();
             victim2.player.remove();
