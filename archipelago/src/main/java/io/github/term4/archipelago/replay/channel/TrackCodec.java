@@ -1,6 +1,5 @@
-package io.github.term4.archipelago.replay.track;
+package io.github.term4.archipelago.replay.channel;
 
-import io.github.term4.archipelago.replay.channel.Recorded;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.List;
@@ -10,7 +9,7 @@ import java.util.List;
  * (~5x smaller), noise for the rest.
  *
  * <p>Ops arrive tick-ascending and must come back tick-ascending; reordering within a tick is fine, so only
- * channels whose same-tick ops are independent qualify. Positions/angles land on {@link BinWriter}'s grids.
+ * channels whose same-tick ops are independent qualify. Positions/angles land on {@link io.github.term4.archipelago.replay.track.BinWriter}'s grids.
  */
 public interface TrackCodec<T> {
 

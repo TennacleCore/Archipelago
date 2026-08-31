@@ -3,6 +3,7 @@ package io.github.term4.archipelago.replay.core;
 import io.github.term4.archipelago.replay.channel.Recordable;
 import io.github.term4.archipelago.replay.track.EntityMoveTrack;
 import io.github.term4.archipelago.replay.track.MoveTrack;
+import io.github.term4.archipelago.replay.track.SpawnTrack;
 import net.kyori.adventure.nbt.CompoundBinaryTag;
 import net.minestom.server.MinecraftServer;
 import net.minestom.server.network.NetworkBuffer;
@@ -92,7 +93,8 @@ public final class Channels {
                     "s", Codec.INT, Spawn::seq, "vis", Codec.NBT_COMPOUND, Spawn::visual,
                     "o", Codec.STRING, Spawn::shooter, Spawn::new),
                     SpawnApplier::new)
-            .folding((s, op) -> s.latest(Channels.SPAWNS, op.op().seq(), op));
+            .folding((s, op) -> s.latest(Channels.SPAWNS, op.op().seq(), op))
+            .packing(new SpawnTrack());
 
     public static final Recordable<EntityLayer> ENTITY_LAYERS = Recordable.of("replay:elayer", 1, -7,
                     StructCodec.struct("s", Codec.INT, EntityLayer::seq, "l", Codec.INT, EntityLayer::layer,

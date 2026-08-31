@@ -1,6 +1,5 @@
 package io.github.term4.archipelago.replay.channel;
 
-import io.github.term4.archipelago.replay.track.TrackCodec;
 import net.minestom.server.codec.Codec;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;

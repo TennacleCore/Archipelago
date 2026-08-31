@@ -45,6 +45,13 @@ public final class BinReader {
         return (bits[i >> 3] & (1 << (i & 7))) != 0;
     }
 
+    public byte @NotNull [] bytes(int count) {
+        byte[] out = new byte[count];
+        System.arraycopy(buf, at, out, 0, count);
+        at += count;
+        return out;
+    }
+
     public byte @NotNull [] bits(int count) {
         byte[] out = new byte[(count + 7) / 8];
         System.arraycopy(buf, at, out, 0, out.length);

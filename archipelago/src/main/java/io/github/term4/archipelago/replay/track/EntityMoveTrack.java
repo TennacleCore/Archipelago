@@ -1,6 +1,7 @@
 package io.github.term4.archipelago.replay.track;
 
 import io.github.term4.archipelago.replay.channel.Recorded;
+import io.github.term4.archipelago.replay.channel.TrackCodec;
 import io.github.term4.archipelago.replay.core.Channels;
 import org.jetbrains.annotations.NotNull;
 

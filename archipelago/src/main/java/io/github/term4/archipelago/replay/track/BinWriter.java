@@ -1,5 +1,6 @@
 package io.github.term4.archipelago.replay.track;
 
+import io.github.term4.archipelago.replay.channel.TrackCodec;
 import org.jetbrains.annotations.NotNull;
 
 import java.io.ByteArrayOutputStream;

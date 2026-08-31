@@ -3,7 +3,9 @@ package io.github.term4.archipelago.replay;
 import io.github.term4.archipelago.replay.channel.Recorded;
 import io.github.term4.archipelago.replay.core.Channels;
 import io.github.term4.archipelago.replay.track.EntityMoveTrack;
+import io.github.term4.archipelago.replay.track.SpawnTrack;
 import io.github.term4.archipelago.replay.track.MoveTrack;
+import net.kyori.adventure.nbt.CompoundBinaryTag;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -90,6 +92,35 @@ class TrackPackingTest {
         List<Recorded<Channels.Move>> back = new MoveTrack().decode(new MoveTrack().encode(moves(3, 50)));
         for (int i = 1; i < back.size(); i++) {
             assertTrue(back.get(i - 1).tick() <= back.get(i).tick(), "tick order at " + i);
+        }
+    }
+
+    @Test
+    void spawnsSurviveThePackRoundTripWithPalettedVisuals() {
+        CompoundBinaryTag arrow = CompoundBinaryTag.builder().putString("type", "minecraft:arrow").build();
+        CompoundBinaryTag item = CompoundBinaryTag.builder().putString("type", "minecraft:item")
+                .put("stack", CompoundBinaryTag.builder().putString("id", "minecraft:diamond").putInt("count", 3).build())
+                .build();
+        List<Recorded<Channels.Spawn>> ops = new ArrayList<>();
+        for (int i = 0; i < 40; i++) { // 40 spawns, 2 distinct visuals: the palette carries the weight
+            ops.add(new Recorded<>(i * 3L, new Channels.Spawn(i % 2, 100.25 + i, 64, -20.5 - i,
+                    35.5f, -10.25f, i, i % 2 == 0 ? arrow : item, i % 4 == 0 ? "Shooter" + (i % 3) : "")));
+        }
+        List<Recorded<Channels.Spawn>> back = new SpawnTrack().decode(new SpawnTrack().encode(ops));
+
+        assertEquals(ops.size(), back.size());
+        for (int i = 0; i < ops.size(); i++) {
+            Channels.Spawn a = ops.get(i).op(), b = back.get(i).op();
+            assertEquals(ops.get(i).tick(), back.get(i).tick());
+            assertEquals(a.layer(), b.layer());
+            assertEquals(a.seq(), b.seq());
+            assertEquals(a.x(), b.x(), POS_EPSILON);
+            assertEquals(a.y(), b.y(), POS_EPSILON);
+            assertEquals(a.z(), b.z(), POS_EPSILON);
+            assertEquals(a.yaw(), b.yaw(), ANGLE_EPSILON);
+            assertEquals(a.pitch(), b.pitch(), ANGLE_EPSILON);
+            assertEquals(a.visual(), b.visual(), "the exact nbt snapshot, via the palette");
+            assertEquals(a.shooter(), b.shooter());
         }
     }
 
