@@ -1,5 +1,6 @@
 package io.github.term4.archipelago.replay.channel;
 
+import io.github.term4.archipelago.replay.track.TrackCodec;
 import net.minestom.server.codec.Codec;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -20,18 +21,23 @@ import java.util.function.Supplier;
  */
 public record Recordable<T>(@NotNull String id, int version, int order, @NotNull Codec<T> codec,
                             @NotNull Supplier<? extends Applier<T>> applier, @Nullable StateFolder<T> folder,
-                            boolean keyframed) {
+                            boolean keyframed, @Nullable TrackCodec<T> pack) {
 
     public static <T> @NotNull Recordable<T> of(@NotNull String id, int version, int order, @NotNull Codec<T> codec,
                                                 @NotNull Supplier<? extends Applier<T>> applier) {
-        return new Recordable<>(id, version, order, codec, applier, null, false);
+        return new Recordable<>(id, version, order, codec, applier, null, false, null);
     }
 
     public @NotNull Recordable<T> folding(@NotNull StateFolder<T> folder) {
-        return new Recordable<>(id, version, order, codec, applier, folder, keyframed);
+        return new Recordable<>(id, version, order, codec, applier, folder, keyframed, pack);
     }
 
     public @NotNull Recordable<T> keyframing() {
-        return new Recordable<>(id, version, order, codec, applier, folder, true);
+        return new Recordable<>(id, version, order, codec, applier, folder, true, pack);
+    }
+
+    /** Stores this channel's ops as one packed blob instead of per-op NBT - see {@link TrackCodec}. */
+    public @NotNull Recordable<T> packing(@NotNull TrackCodec<T> pack) {
+        return new Recordable<>(id, version, order, codec, applier, folder, keyframed, pack);
     }
 }

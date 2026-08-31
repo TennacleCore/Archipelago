@@ -35,6 +35,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -391,12 +392,17 @@ public final class Recording {
         ops.forEach((type, list) -> {
             List<Recorded<?>> all = materialize(type, list);
             if (all.isEmpty()) return;
-            ListBinaryTag.Builder<CompoundBinaryTag> encoded = ListBinaryTag.builder(BinaryTagTypes.COMPOUND);
-            for (Recorded<?> op : all) {
-                encoded.add(CompoundBinaryTag.builder().putLong("t", op.tick()).put("op", encode(type, op)).build());
+            CompoundBinaryTag.Builder channel = CompoundBinaryTag.builder().putInt("v", type.version());
+            if (type.pack() != null) {
+                channel.putByteArray("bin", pack(type, all)); // motion channels: one blob, no per-op tags
+            } else {
+                ListBinaryTag.Builder<CompoundBinaryTag> encoded = ListBinaryTag.builder(BinaryTagTypes.COMPOUND);
+                for (Recorded<?> op : all) {
+                    encoded.add(CompoundBinaryTag.builder().putLong("t", op.tick()).put("op", encode(type, op)).build());
+                }
+                channel.put("ops", encoded.build());
             }
-            channels.put(type.id(), CompoundBinaryTag.builder()
-                    .putInt("v", type.version()).put("ops", encoded.build()).build());
+            channels.put(type.id(), channel.build());
         });
         CompoundBinaryTag container = CompoundBinaryTag.builder()
                 .putInt("v", 1).putLong("ticks", tick).put("channels", channels.build()).build();
@@ -435,6 +441,11 @@ public final class Recording {
     @SuppressWarnings("unchecked")
     private static <T> BinaryTag encode(Recordable<T> type, Recorded<?> op) {
         return type.codec().encode(Transcoder.NBT, (T) op.op()).orElseThrow();
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T> byte[] pack(Recordable<T> type, List<Recorded<?>> ops) {
+        return Objects.requireNonNull(type.pack()).encode((List<Recorded<T>>) (List<?>) ops);
     }
 
     /** Op counts per channel id, for status messages. */

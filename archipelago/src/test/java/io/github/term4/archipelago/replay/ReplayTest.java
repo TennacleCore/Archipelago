@@ -480,7 +480,10 @@ class ReplayTest {
             assertNotNull(standIn);
             await("stand-in lands", () -> standIn.getInstance() != null);
             tick();
-            await("the stand-in takes the in-band point exactly", () -> standIn.getPosition().x() == 5.6);
+            // hard track-driven, so it takes the recorded point itself - on the packed 1/4096 grid the file
+            // stores it on (the unit relative-move packets already use), not the source double
+            await("the stand-in takes the in-band point",
+                    () -> Math.abs(standIn.getPosition().x() - 5.6) < 1.0 / 4096);
         } finally {
             visualPb.halt();
         }

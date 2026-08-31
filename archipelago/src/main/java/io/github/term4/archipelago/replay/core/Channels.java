@@ -1,6 +1,8 @@
 package io.github.term4.archipelago.replay.core;
 
 import io.github.term4.archipelago.replay.channel.Recordable;
+import io.github.term4.archipelago.replay.track.EntityMoveTrack;
+import io.github.term4.archipelago.replay.track.MoveTrack;
 import net.kyori.adventure.nbt.CompoundBinaryTag;
 import net.minestom.server.MinecraftServer;
 import net.minestom.server.network.NetworkBuffer;
@@ -80,7 +82,8 @@ public final class Channels {
                     "z", Codec.DOUBLE, Move::z, "yaw", Codec.FLOAT, Move::yaw, "pitch", Codec.FLOAT, Move::pitch,
                     "g", Codec.BOOLEAN, Move::ground, Move::new), MoveApplier::new)
             .folding((s, op) -> s.latest(Channels.MOVES, op.op().player(), op))
-            .keyframing();
+            .keyframing()
+            .packing(new MoveTrack());
 
     public static final Recordable<Spawn> SPAWNS = Recordable.of("replay:spawn", 3, -10, StructCodec.struct(
                     "l", Codec.INT, Spawn::layer,
@@ -102,7 +105,8 @@ public final class Channels {
                     "yaw", Codec.FLOAT, EntityMove::yaw, "pitch", Codec.FLOAT, EntityMove::pitch, EntityMove::new),
                     EntityMoveApplier::new)
             .folding((s, op) -> s.latest(Channels.ENTITY_MOVES, op.op().seq(), op))
-            .keyframing();
+            .keyframing()
+            .packing(new EntityMoveTrack());
 
     public static final Recordable<BlockOp> BLOCKS = Recordable.of("replay:block", 2, 0, StructCodec.struct(
                     "l", Codec.INT, BlockOp::layer,

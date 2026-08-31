@@ -252,6 +252,12 @@ class StorageBreakdownTest {
         for (String id : channelsTag.keySet()) {
             CompoundBinaryTag channel = channelsTag.getCompound(id);
             int version = channel.getInt("v");
+            byte[] packed = channel.get("bin") == null ? null : channel.getByteArray("bin");
+            if (packed != null) { // already shipping a TrackCodec blob: nothing here to prototype against
+                out.append(String.format("%-14s %6s | %,9d %6s %,8d | %8s%n",
+                        id + " v" + version, "packed", packed.length, "", z(packed), "(TrackCodec)"));
+                continue;
+            }
             ListBinaryTag opsList = channel.getList("ops", BinaryTagTypes.COMPOUND);
             byte[] nbtBytes = nbt(channel);
             totOps += opsList.size();

@@ -35,6 +35,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -103,7 +104,9 @@ public final class Playback {
                 continue;
             }
             try {
-                channels.add(decode(type, channel.getList("ops", BinaryTagTypes.COMPOUND)));
+                channels.add(type.pack() != null && channel.get("bin") != null
+                        ? unpack(type, channel.getByteArray("bin"))
+                        : decode(type, channel.getList("ops", BinaryTagTypes.COMPOUND)));
             } catch (RuntimeException e) {
                 skipped.add(id + " v" + version + " (undecodable: " + e.getMessage() + ")");
             }
@@ -147,6 +150,10 @@ public final class Playback {
     // seek/halt arrive on command threads; playback state is owner-thread-only, like Recording's mutators
     private void onOwner(Runnable op) {
         shard.onOwner(op);
+    }
+
+    private static <T> Channel<T> unpack(Recordable<T> type, byte[] blob) {
+        return new Channel<>(type, Objects.requireNonNull(type.pack()).decode(blob));
     }
 
     private static <T> Channel<T> decode(Recordable<T> type, ListBinaryTag ops) {
