@@ -6,13 +6,11 @@ import org.jetbrains.annotations.NotNull;
 import java.util.List;
 
 /**
- * A channel's whole op list as one packed blob, in place of the per-op NBT the file otherwise stores. Worth
- * writing only where the volume is: motion channels pack ~5x smaller than their NBT, everything else is noise
- * next to them and stays on the plain path.
+ * A channel's whole op list as one packed blob instead of per-op NBT - worth it for the motion channels
+ * (~5x smaller), noise for the rest.
  *
- * <p>Ops arrive tick-ascending and must come back tick-ascending; a codec is free to reorder within a tick
- * (grouping by key is what makes the deltas small), so only channels whose same-tick ops are independent
- * qualify. Positions and angles land on a fixed grid finer than the wire carries - see {@link BinWriter}.
+ * <p>Ops arrive tick-ascending and must come back tick-ascending; reordering within a tick is fine, so only
+ * channels whose same-tick ops are independent qualify. Positions/angles land on {@link BinWriter}'s grids.
  */
 public interface TrackCodec<T> {
 

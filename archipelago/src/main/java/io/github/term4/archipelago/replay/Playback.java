@@ -103,8 +103,12 @@ public final class Playback {
                 skipped.add(id + " v" + version);
                 continue;
             }
+            if (channel.get("bin") != null && type.pack() == null) {
+                skipped.add(id + " v" + version + " (packed; no track codec)"); // never play a silently-empty channel
+                continue;
+            }
             try {
-                channels.add(type.pack() != null && channel.get("bin") != null
+                channels.add(channel.get("bin") != null
                         ? unpack(type, channel.getByteArray("bin"))
                         : decode(type, channel.getList("ops", BinaryTagTypes.COMPOUND)));
             } catch (RuntimeException e) {

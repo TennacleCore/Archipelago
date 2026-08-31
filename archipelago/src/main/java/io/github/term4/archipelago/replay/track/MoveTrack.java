@@ -10,10 +10,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/**
- * Player motion, grouped per player so ticks and coordinates ride delta chains - a walking player's op costs a
- * handful of bytes instead of ~94 as NBT. The single biggest channel in any recording.
- */
+/** Player motion grouped per player, ticks and coordinates on delta chains - a walking player's op costs a
+ *  handful of bytes instead of ~94 as NBT. */
 public final class MoveTrack implements TrackCodec<Channels.Move> {
 
     @Override

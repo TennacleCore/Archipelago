@@ -8,10 +8,9 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * Byte primitives for {@link TrackCodec}: varints, zigzag for delta chains, a string pool, and the two grids
- * motion lands on - positions at 1/4096 block (the unit modern relative-move packets themselves carry) and
- * angles at 1/65536 turn (256x finer than the byte angles the wire sends). Both are below anything a client
- * can render, so a packed track plays back indistinguishably from the doubles it came from.
+ * Byte primitives for {@link TrackCodec}: varints, zigzag deltas, a string pool, and the motion grids -
+ * positions at 1/4096 block (the wire's own relative-move unit), angles at 1/65536 turn. Both finer than
+ * a client can render.
  */
 public final class BinWriter {
 
