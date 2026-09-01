@@ -17,7 +17,7 @@ public interface ShardPolicy extends WorldPolicy {
 
     @Override
     default boolean sees(@NotNull Player viewer, @NotNull Entity subject) {
-        return ShardView.of(viewer).seesEntitiesOf(subject.getTag(MechanicsWorld.ENTITY_TAG));
+        return ShardView.of(viewer).seesEntity(subject);
     }
 
     @Override

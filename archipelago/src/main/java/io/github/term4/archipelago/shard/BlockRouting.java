@@ -312,7 +312,7 @@ final class BlockRouting {
     private static void defaultBreakFx(Player breaker, Shard shard, Point pos, Block broken) {
         // world event 2001: the client derives sound + particles from the block id; the breaker predicts its own
         var fx = new WorldEventPacket(WorldEvent.PARTICLES_DESTROY_BLOCK.id(), pos, broken.stateId(), false);
-        Recipients.except(Recipients.WATCHERS, Recipients.SOURCE).each(shard, pos, breaker, (watcher, at) -> watcher.sendPacket(fx));
+        Recipients.except(Recipients.BLOCK_VIEWERS, Recipients.SOURCE).each(shard, pos, breaker, (watcher, at) -> watcher.sendPacket(fx));
     }
 
     // upstream PlayerActionListener.shouldPreventBreaking

@@ -1,6 +1,9 @@
 package io.github.term4.archipelago.shard;
 
 import io.github.term4.polyp.world.MechanicsWorld;
+import java.util.function.Predicate;
+import java.util.HashMap;
+import java.util.Map;
 import io.github.term4.polyp.world.WorldPolicy;
 import net.minestom.server.coordinate.CoordConversion;
 import net.minestom.server.coordinate.Point;
@@ -29,14 +32,18 @@ public final class ShardView {
     /** Observers whose view has {@code allEntities} - watchers of every shard. */
     private static final Set<Player> ALL_SEEING = ConcurrentHashMap.newKeySet();
 
-    private static final ShardView BASE = new ShardView(null, false, true, Set.of());
+    /** The default entity filter: everything the shard holds. */
+    public static final Predicate<Entity> ALL_ENTITIES = e -> true;
+
+    private static final ShardView BASE = new ShardView(null, false, true, Map.of());
 
     private final @Nullable Shard blocks;
     private final boolean allEntities;
     private final boolean baseEntities;
-    private final Set<Shard> entityShards;
+    // which shards' entities, and WHICH of them: a spectator can watch only the mobs, or only the players
+    private final Map<Shard, Predicate<Entity>> entityShards;
 
-    private ShardView(@Nullable Shard blocks, boolean allEntities, boolean baseEntities, Set<Shard> entityShards) {
+    private ShardView(@Nullable Shard blocks, boolean allEntities, boolean baseEntities, Map<Shard, Predicate<Entity>> entityShards) {
         this.blocks = blocks;
         this.allEntities = allEntities;
         this.baseEntities = baseEntities;
@@ -49,7 +56,7 @@ public final class ShardView {
     /** {@code shard}'s world as its members see it: overlay blocks + that shard's entities only. */
     public static @NotNull ShardView of(@NotNull Shard shard) { return shard.memberView(); }
 
-    static ShardView newMemberView(Shard shard) { return new ShardView(shard, false, false, Set.of(shard)); }
+    static ShardView newMemberView(Shard shard) { return new ShardView(shard, false, false, Map.of(shard, ALL_ENTITIES)); }
 
     public @NotNull ShardView withBlocks(@Nullable Shard shard) {
         return new ShardView(shard, allEntities, baseEntities, entityShards);
@@ -57,9 +64,14 @@ public final class ShardView {
 
     /** Adds {@code shards}' entities to the visible set. */
     public @NotNull ShardView withEntities(@NotNull Shard... shards) {
-        Set<Shard> set = new HashSet<>(entityShards);
-        for (Shard s : shards) set.add(s);
-        return new ShardView(blocks, allEntities, baseEntities, Set.copyOf(set));
+        return withEntities(ALL_ENTITIES, shards);
+    }
+
+    /** Sees only the entities of {@code shards} that {@code filter} accepts - {@code e -> !(e instanceof Player)} is "the mobs, not the players". */
+    public @NotNull ShardView withEntities(@NotNull Predicate<Entity> filter, @NotNull Shard... shards) {
+        Map<Shard, Predicate<Entity>> map = new HashMap<>(entityShards);
+        for (Shard s : shards) map.put(s, filter);
+        return new ShardView(blocks, allEntities, baseEntities, Map.copyOf(map));
     }
 
     public @NotNull ShardView withBaseEntities(boolean visible) {
@@ -80,9 +92,19 @@ public final class ShardView {
     public @Nullable Shard blocks() { return blocks; }
 
     /** Whether entities bound to {@code shard} ({@code null}/non-diff = main world) are visible. */
+    /** Whether ANY entity of {@code shard} is in view - the coarse check; {@link #seesEntity} decides per entity. */
     public boolean seesEntitiesOf(@Nullable MechanicsWorld shard) {
         if (allEntities) return true;
-        return shard instanceof Shard d ? entityShards.contains(d) : baseEntities;
+        return shard instanceof Shard d ? entityShards.containsKey(d) : baseEntities;
+    }
+
+    /** Whether {@code subject} itself is in view: its shard must be watched, and its shard's filter must accept it. */
+    public boolean seesEntity(@NotNull Entity subject) {
+        if (allEntities) return true;
+        Object bound = subject.getTag(MechanicsWorld.ENTITY_TAG);
+        if (!(bound instanceof Shard d)) return baseEntities;
+        Predicate<Entity> filter = entityShards.get(d);
+        return filter != null && filter.test(subject);
     }
 
     /** Whether this view shows any aspect of {@code shard} (its blocks or its entities) - the FX audience test. */
@@ -121,10 +143,10 @@ public final class ShardView {
     /** This view with every reference to {@code shard} dropped; {@code null} when nothing shard-specific remains. */
     @Nullable ShardView without(Shard shard) {
         Shard newBlocks = blocks == shard ? null : blocks;
-        Set<Shard> rest = new HashSet<>(entityShards);
+        Map<Shard, Predicate<Entity>> rest = new HashMap<>(entityShards);
         rest.remove(shard);
         if (newBlocks == null && rest.isEmpty() && !allEntities) return null;
-        return new ShardView(newBlocks, allEntities, baseEntities, Set.copyOf(rest));
+        return new ShardView(newBlocks, allEntities, baseEntities, Map.copyOf(rest));
     }
 
     static @Nullable ShardView explicit(Player player) { return player.getTag(TAG); }
@@ -139,13 +161,13 @@ public final class ShardView {
 
     private void register(Player player) {
         if (blocks != null) blocks.observers.add(player);
-        for (Shard s : entityShards) s.observers.add(player);
+        for (Shard s : entityShards.keySet()) s.observers.add(player);
         if (allEntities) ALL_SEEING.add(player);
     }
 
     private void unregister(Player player) {
         if (blocks != null) blocks.observers.remove(player);
-        for (Shard s : entityShards) s.observers.remove(player);
+        for (Shard s : entityShards.keySet()) s.observers.remove(player);
         ALL_SEEING.remove(player);
     }
 

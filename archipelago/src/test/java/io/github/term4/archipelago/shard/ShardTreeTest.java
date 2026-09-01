@@ -462,4 +462,28 @@ class ShardTreeTest extends HeadlessServerTest {
         return player.sent(BlockChangePacket.class).stream().map(BlockChangePacket::blockPosition)
                 .collect(Collectors.toSet());
     }
+
+    @Test
+    void anEntityViewCanFilterByType() {
+        instance.loadChunk(1880 >> 4, 1880 >> 4).join();
+        Shard shard = new Shard(instance);
+        FakePlayer member = FakePlayer.connect(instance, new Pos(1880.5, 66, 1880.5), "FilterMember");
+        FakePlayer mobsOnly = FakePlayer.connect(instance, new Pos(1880.5, 66, 1880.5), "FilterMobs");
+        Entity stand = new Entity(EntityType.ARMOR_STAND);
+        try {
+            shard.join(member.player);
+            // the shard's entities, but only the non-players: the member stays hidden, the stand shows
+            ShardView.set(mobsOnly.player, ShardView.base().withEntities(
+                    e -> !(e instanceof net.minestom.server.entity.Player), shard));
+            shard.spawn(stand, new Pos(1881.5, 66, 1880.5)).join();
+            await("the filter admits the stand", () -> stand.getViewers().contains(mobsOnly.player));
+            assertFalse(member.player.getViewers().contains(mobsOnly.player), "the filter rejects the player");
+            assertFalse(WorldPolicy.canSee(mobsOnly.player, member.player));
+            assertTrue(WorldPolicy.canSee(mobsOnly.player, stand));
+        } finally {
+            stand.remove();
+            member.player.remove();
+            mobsOnly.player.remove();
+        }
+    }
 }

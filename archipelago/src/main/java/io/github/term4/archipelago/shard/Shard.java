@@ -1,6 +1,7 @@
 package io.github.term4.archipelago.shard;
 
 import io.github.term4.archipelago.event.ShardJoinEvent;
+import io.github.term4.polyp.world.Recipients;
 import io.github.term4.archipelago.event.ShardLeaveEvent;
 import io.github.term4.archipelago.event.ShardReclockEvent;
 import io.github.term4.archipelago.event.ShardTransferEvent;
@@ -939,12 +940,7 @@ public final class Shard implements MechanicsWorld {
     }
 
     void sendToBlockViewers(SendablePacket packet) {
-        for (Player m : members) {
-            if (blockViewer(m)) m.sendPacket(packet);
-        }
-        for (Player o : observers) {
-            if (!members.contains(o) && blockViewer(o)) o.sendPacket(packet);
-        }
+        Recipients.BLOCK_VIEWERS.each(this, Vec.ZERO, null, (p, at) -> p.sendPacket(packet));
     }
 
     private boolean blockViewer(Player p) {
