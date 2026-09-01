@@ -1,6 +1,7 @@
 package io.github.term4.archipelago.shard;
 
 import io.github.term4.polyp.world.MechanicsWorld;
+import io.github.term4.polyp.world.Recipients;
 import io.github.term4.polyp.world.WorldPolicy;
 import net.minestom.server.MinecraftServer;
 import net.minestom.server.component.DataComponents;
@@ -311,9 +312,7 @@ final class BlockRouting {
     private static void defaultBreakFx(Player breaker, Shard shard, Point pos, Block broken) {
         // world event 2001: the client derives sound + particles from the block id; the breaker predicts its own
         var fx = new WorldEventPacket(WorldEvent.PARTICLES_DESTROY_BLOCK.id(), pos, broken.stateId(), false);
-        for (Player watcher : shard.watchers()) {
-            if (watcher != breaker) watcher.sendPacket(fx);
-        }
+        Recipients.except(Recipients.WATCHERS, Recipients.SOURCE).each(shard, pos, breaker, (watcher, at) -> watcher.sendPacket(fx));
     }
 
     // upstream PlayerActionListener.shouldPreventBreaking

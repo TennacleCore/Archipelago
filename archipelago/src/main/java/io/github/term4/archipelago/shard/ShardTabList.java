@@ -120,12 +120,7 @@ public final class ShardTabList {
     }
 
     private static boolean sameTree(Shard a, Shard b) {
-        return a != null && b != null && root(a) == root(b);
-    }
-
-    private static Shard root(Shard s) {
-        while (s.parent() != null) s = s.parent();
-        return s;
+        return a != null && b != null && a.root() == b.root();
     }
 
     /** {@code player}'s world changed: full re-sync of their own list, and of their entry in everyone else's. */

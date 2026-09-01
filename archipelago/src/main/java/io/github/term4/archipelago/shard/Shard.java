@@ -173,9 +173,9 @@ public final class Shard implements MechanicsWorld {
         return parent;
     }
 
-    /** This shard's direct child layers (a snapshot). */
+    /** This shard's direct child layers; copy-on-write, so iterating is a snapshot without copying. */
     public @NotNull List<Shard> children() {
-        return List.copyOf(children);
+        return Collections.unmodifiableList(children);
     }
 
     /**
@@ -447,6 +447,8 @@ public final class Shard implements MechanicsWorld {
 
     private void changed(Point pos, Block block) {
         fanBlock(pos, new BlockChangePacket(pos, block));
+        // no lighting anywhere below: skip the per-block section set and the descent
+        if (light == null && children.isEmpty()) return;
         lightChanged(Set.of(ShardLighting.sectionKey(pos.blockX() >> 4, pos.blockY() >> 4, pos.blockZ() >> 4)));
     }
 
@@ -907,21 +909,33 @@ public final class Shard implements MechanicsWorld {
         Set<Player> allSeeing = ShardView.allSeeing();
         if (observers.isEmpty() && allSeeing.isEmpty()) return membersView;
         List<Player> out = new ArrayList<>(members);
-        for (Player o : observers) {
-            if (!members.contains(o)) out.add(o);
-        }
-        for (Player o : allSeeing) {
-            if (!members.contains(o) && !observers.contains(o)) out.add(o);
-        }
+        forEachExtraWatcher(out::add);
         return out;
     }
 
+    /** {@link #watchers()} without the snapshot - what every send iterates. */
+    @Override public void forEachWatcher(@NotNull Consumer<Player> action) {
+        for (Player m : members) action.accept(m);
+        forEachExtraWatcher(action);
+    }
+
+    // all-seeing is process-wide: only someone on THIS base instance renders this world, so a positional
+    // packet must never cross to another instance
+    private void forEachExtraWatcher(Consumer<Player> action) {
+        for (Player o : observers) {
+            if (!members.contains(o)) action.accept(o);
+        }
+        for (Player o : ShardView.allSeeing()) {
+            if (o.getInstance() == base && !members.contains(o) && !observers.contains(o)) action.accept(o);
+        }
+    }
+
     @Override public void broadcast(@NotNull ServerPacket packet) {
-        for (Player p : watchers()) p.sendPacket(packet);
+        forEachWatcher(p -> p.sendPacket(packet));
     }
 
     @Override public void playSound(@NotNull Sound sound, @NotNull Point pos) {
-        for (Player p : watchers()) p.playSound(sound, pos.x(), pos.y(), pos.z());
+        forEachWatcher(p -> p.playSound(sound, pos.x(), pos.y(), pos.z()));
     }
 
     void sendToBlockViewers(SendablePacket packet) {
