@@ -62,7 +62,7 @@ public final class ShardView {
         return new ShardView(shard, allEntities, baseEntities, entityShards);
     }
 
-    /** Adds {@code shards}' entities to the visible set. */
+    /** Adds {@code shards}' entities to the visible set - all of them; a repeat call for a shard replaces its filter. */
     public @NotNull ShardView withEntities(@NotNull Shard... shards) {
         return withEntities(ALL_ENTITIES, shards);
     }
@@ -91,7 +91,6 @@ public final class ShardView {
      */
     public @Nullable Shard blocks() { return blocks; }
 
-    /** Whether entities bound to {@code shard} ({@code null}/non-diff = main world) are visible. */
     /** Whether ANY entity of {@code shard} is in view - the coarse check; {@link #seesEntity} decides per entity. */
     public boolean seesEntitiesOf(@Nullable MechanicsWorld shard) {
         if (allEntities) return true;
