@@ -1,6 +1,7 @@
 package io.github.term4.archipelago.shard;
 
 import io.github.term4.archipelago.event.ShardJoinEvent;
+import net.minestom.server.instance.EntityTracker;
 import io.github.term4.polyp.world.Recipients;
 import io.github.term4.archipelago.event.ShardLeaveEvent;
 import io.github.term4.archipelago.event.ShardReclockEvent;
@@ -906,6 +907,13 @@ public final class Shard implements MechanicsWorld {
         List<Player> out = new ArrayList<>(members);
         forEachExtraWatcher(out::add);
         return out;
+    }
+
+    // the base instance's chunk index, filtered to this shard's members: O(what is near), not O(members)
+    @Override public void forEachMemberWithin(@NotNull Point point, double range, @NotNull Consumer<Player> action) {
+        base.getEntityTracker().nearbyEntities(point, range, EntityTracker.Target.PLAYERS, p -> {
+            if (members.contains(p)) action.accept(p);
+        });
     }
 
     /** {@link #watchers()} without the snapshot - what every send iterates. */
