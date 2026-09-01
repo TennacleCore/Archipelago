@@ -622,12 +622,6 @@ public final class Shard implements MechanicsWorld {
         return found;
     }
 
-    @Override public void nearbyPlayers(@NotNull Point point, double range, @NotNull Consumer<Player> consumer) {
-        double rangeSq = range * range;
-        for (Player p : members) {
-            if (p.getPosition().distanceSquared(point) <= rangeSq) consumer.accept(p);
-        }
-    }
 
     @Override public @NotNull CompletableFuture<Void> spawn(@NotNull Entity entity, @NotNull Pos position) {
         entity.setTag(ENTITY_TAG, this);
