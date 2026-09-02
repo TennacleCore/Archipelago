@@ -8,6 +8,7 @@ import net.minestom.server.event.player.PlayerPacketOutEvent;
 import net.minestom.server.event.player.PlayerSpawnEvent;
 import net.minestom.server.network.packet.server.play.PlayerInfoRemovePacket;
 import net.minestom.server.network.packet.server.play.PlayerInfoUpdatePacket;
+import net.kyori.adventure.text.Component;
 import net.minestom.server.tag.Tag;
 import org.jetbrains.annotations.NotNull;
 
@@ -161,6 +162,13 @@ public final class ShardTabList {
     private static final EnumSet<PlayerInfoUpdatePacket.Action> ALL_ACTIONS =
             EnumSet.allOf(PlayerInfoUpdatePacket.Action.class);
 
+    /** The name {@code player} lists under in tab: the sort-key override, else the real name. A tab-slot objective's
+     *  score must use THIS to line up with the entry - a fake sort name replaces the score holder otherwise. */
+    public static @NotNull String listName(@NotNull Player player) {
+        String sort = player.getTag(SORT_NAME);
+        return sort != null ? sort : player.getUsername();
+    }
+
     // the shape Player.infoEntry() builds (no chat session: re-added entries lose the signing badge, like proxies)
     private static PlayerInfoUpdatePacket.Entry entry(Player player) {
         PlayerSkin skin = player.getSkin();
@@ -169,8 +177,10 @@ public final class ShardTabList {
                 : List.of();
         String sort = player.getTag(SORT_NAME);
         Integer order = player.getTag(LIST_ORDER);
+        Component display = player.getDisplayName();
+        if (sort != null && display == null) display = Component.text(player.getUsername()); // a sort key never shows raw
         return new PlayerInfoUpdatePacket.Entry(player.getUuid(), sort != null ? sort : player.getUsername(), properties, true,
-                player.getLatency(), player.getGameMode(), player.getDisplayName(), null, order != null ? order : 0, true);
+                player.getLatency(), player.getGameMode(), display, null, order != null ? order : 0, true);
     }
 
     // an entry Minestom built with the real name/order, re-shaped to the player's tab overrides
@@ -181,10 +191,12 @@ public final class ShardTabList {
         Integer order = p.getTag(LIST_ORDER);
         String name = sort != null ? sort : base.username();
         int listOrder = order != null ? order : base.listOrder();
+        Component display = base.displayName();
+        if (sort != null && display == null) display = Component.text(base.username()); // a sort key never shows raw
         // idempotent: a re-send of an already-shaped entry returns the SAME object, so the out filter terminates
-        if (name.equals(base.username()) && listOrder == base.listOrder()) return base;
+        if (name.equals(base.username()) && listOrder == base.listOrder() && display == base.displayName()) return base;
         return new PlayerInfoUpdatePacket.Entry(base.uuid(), name, base.properties(),
-                base.listed(), base.latency(), base.gameMode(), base.displayName(), base.chatSession(),
+                base.listed(), base.latency(), base.gameMode(), display, base.chatSession(),
                 listOrder, base.displayHat());
     }
 }
