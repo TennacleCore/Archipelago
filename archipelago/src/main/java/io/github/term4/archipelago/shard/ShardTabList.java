@@ -189,6 +189,12 @@ public final class ShardTabList {
         }
         if (!removes.isEmpty()) player.sendPacket(new PlayerInfoRemovePacket(removes)); // REMOVEs first, so a re-ADD renames
         if (!adds.isEmpty()) player.sendPacket(new PlayerInfoUpdatePacket(ALL_ACTIONS, adds));
+        // the loop above never touches the viewer's own row, so without this a renamed player keeps sorting under
+        // their raw name in their OWN tab - which floats them out of their team group
+        if (renameSelf && viewerLegacy) {
+            player.sendPacket(new PlayerInfoRemovePacket(selfId));
+            player.sendPacket(new PlayerInfoUpdatePacket(ALL_ACTIONS, List.of(entry(player, player))));
+        }
         for (java.util.function.Consumer<Player> hook : RESYNCED) hook.accept(player);
     }
 
