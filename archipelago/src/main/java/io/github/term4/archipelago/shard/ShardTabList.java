@@ -303,19 +303,21 @@ public final class ShardTabList {
                 player.getLatency(), mode, player.getDisplayName(), null, order != null ? order : 0, true);
     }
 
-    // an entry Minestom built with the real name/order, re-shaped to the player's tab overrides for THIS viewer
+    /**
+     * The entry as it must read AT WRITE TIME. {@code sendPacket} only enqueues; this event fires when the
+     * connection's write thread drains the queue, so an entry built before a join coloured its player can be
+     * written after the colour - and an entry this filter cancels is re-enqueued at the TAIL, behind everything
+     * queued since, the NAME packet included. Patching the stale snapshot forwarded its null display and blanked
+     * a row that packet had just coloured. So a reshaped entry is rebuilt from live state, and the original
+     * object is kept only when nothing differs - which is also what lets the filter's own re-send terminate.
+     */
     private static PlayerInfoUpdatePacket.Entry shape(Player viewer, PlayerInfoUpdatePacket.Entry base) {
         Player p = MinecraftServer.getConnectionManager().getOnlinePlayerByUuid(base.uuid());
         if (p == null) return base;
-        String sort = legacy(viewer) ? p.getTag(SORT_NAME) : null;
-        Integer order = p.getTag(LIST_ORDER);
-        String name = sort != null ? sort : base.username();
-        int listOrder = order != null ? order : base.listOrder();
-        GameMode mode = spectatorTo(viewer, p) ? GameMode.SPECTATOR : base.gameMode();
-        // idempotent: a re-send of an already-shaped entry returns the SAME object, so the out filter terminates
-        if (name.equals(base.username()) && listOrder == base.listOrder() && mode == base.gameMode()) return base;
-        return new PlayerInfoUpdatePacket.Entry(base.uuid(), name, base.properties(),
-                base.listed(), base.latency(), mode, base.displayName(), base.chatSession(),
-                listOrder, base.displayHat());
+        PlayerInfoUpdatePacket.Entry fresh = entry(viewer, p);
+        boolean same = fresh.username().equals(base.username()) && fresh.listOrder() == base.listOrder()
+                && fresh.gameMode() == base.gameMode()
+                && java.util.Objects.equals(fresh.displayName(), base.displayName());
+        return same ? base : fresh;
     }
 }
