@@ -144,7 +144,7 @@ public final class ShardTabList {
                 && !actions.contains(PlayerInfoUpdatePacket.Action.UPDATE_GAME_MODE)
                 && !actions.contains(PlayerInfoUpdatePacket.Action.UPDATE_LIST_ORDER)) return;
         StringBuilder line = new StringBuilder();
-        line.append(System.currentTimeMillis() % 1_000_000).append(' ');
+        line.append(java.time.LocalTime.now().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss.SSS"))).append(' ');
         if (actions.size() == PlayerInfoUpdatePacket.Action.values().length) line.append("ALL");
         else for (PlayerInfoUpdatePacket.Action a : actions) line.append(switch (a) {
             case ADD_PLAYER -> "ADD "; case UPDATE_DISPLAY_NAME -> "NAME "; case UPDATE_GAME_MODE -> "MODE ";
