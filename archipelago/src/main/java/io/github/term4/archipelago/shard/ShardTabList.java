@@ -9,7 +9,6 @@ import net.minestom.server.event.player.PlayerPacketOutEvent;
 import net.minestom.server.event.player.PlayerSpawnEvent;
 import net.minestom.server.network.packet.server.play.PlayerInfoRemovePacket;
 import net.minestom.server.network.packet.server.play.PlayerInfoUpdatePacket;
-import net.kyori.adventure.text.Component;
 import net.minestom.server.tag.Tag;
 import org.jetbrains.annotations.NotNull;
 
@@ -171,33 +170,21 @@ public final class ShardTabList {
         List<PlayerInfoUpdatePacket.Entry> adds = new ArrayList<>();
         List<UUID> removes = new ArrayList<>();
         List<UUID> selfId = List.of(player.getUuid());
-        boolean renameSelf = player.getTag(SORT_NAME) != null;
-        boolean viewerLegacy = legacy(player);
         for (Player other : MinecraftServer.getConnectionManager().getOnlinePlayers()) {
             if (other == player) continue;
             // their list of the player - the entry is shaped for THEIR client generation
-            if (listed(other, player)) {
-                if (renameSelf && legacy(other)) other.sendPacket(new PlayerInfoRemovePacket(selfId)); // rename = remove-then-add
-                other.sendPacket(new PlayerInfoUpdatePacket(ALL_ACTIONS, List.of(entry(other, player))));
-            } else {
-                other.sendPacket(new PlayerInfoRemovePacket(selfId));
-            }
+            if (listed(other, player)) other.sendPacket(new PlayerInfoUpdatePacket(ALL_ACTIONS, List.of(entry(other, player))));
+            else other.sendPacket(new PlayerInfoRemovePacket(selfId));
             // the player's list of them
-            if (listed(player, other)) {
-                if (viewerLegacy && other.getTag(SORT_NAME) != null) removes.add(other.getUuid()); // remove-before-add renames
-                adds.add(entry(player, other));
-            } else {
-                removes.add(other.getUuid());
-            }
+            if (listed(player, other)) adds.add(entry(player, other));
+            else removes.add(other.getUuid());
         }
-        if (!removes.isEmpty()) player.sendPacket(new PlayerInfoRemovePacket(removes)); // REMOVEs first, so a re-ADD renames
-        if (!adds.isEmpty()) player.sendPacket(new PlayerInfoUpdatePacket(ALL_ACTIONS, adds));
-        // the loop above never touches the viewer's own row, so without this a renamed player keeps sorting under
-        // their raw name in their OWN tab - which floats them out of their team group
-        if (renameSelf && viewerLegacy) {
-            player.sendPacket(new PlayerInfoRemovePacket(selfId));
-            player.sendPacket(new PlayerInfoUpdatePacket(ALL_ACTIONS, List.of(entry(player, player))));
-        }
+        if (!removes.isEmpty()) player.sendPacket(new PlayerInfoRemovePacket(removes));
+        // the loop skips the viewer's own row, and it needs the same refresh - otherwise a player keeps sorting
+        // under whatever name they logged in with. ADD_PLAYER REPLACES the whole entry on both eras
+        // (1.8 NetHandlerPlayClient builds a new NetworkPlayerInfo), so a plain re-send is enough to rename.
+        adds.add(entry(player, player));
+        player.sendPacket(new PlayerInfoUpdatePacket(ALL_ACTIONS, adds));
         for (java.util.function.Consumer<Player> hook : RESYNCED) hook.accept(player);
     }
 
@@ -241,11 +228,11 @@ public final class ShardTabList {
                 : List.of();
         String sort = legacy(viewer) ? player.getTag(SORT_NAME) : null;
         Integer order = player.getTag(LIST_ORDER);
-        Component display = player.getDisplayName();
-        if (display == null) display = Component.text(player.getUsername()); // the row always reads as the player
+        // no display-name fallback: a null one lets the client draw the profile name itself, which already reads
+        // as the player. Pinning one here would freeze the pre-colour white name onto entries built before it lands.
         GameMode mode = spectatorTo(viewer, player) ? GameMode.SPECTATOR : player.getGameMode();
         return new PlayerInfoUpdatePacket.Entry(player.getUuid(), sort != null ? sort : player.getUsername(), properties, true,
-                player.getLatency(), mode, display, null, order != null ? order : 0, true);
+                player.getLatency(), mode, player.getDisplayName(), null, order != null ? order : 0, true);
     }
 
     // an entry Minestom built with the real name/order, re-shaped to the player's tab overrides for THIS viewer
@@ -256,14 +243,11 @@ public final class ShardTabList {
         Integer order = p.getTag(LIST_ORDER);
         String name = sort != null ? sort : base.username();
         int listOrder = order != null ? order : base.listOrder();
-        Component display = base.displayName();
-        if (display == null) display = Component.text(base.username()); // the row always reads as the player
         GameMode mode = spectatorTo(viewer, p) ? GameMode.SPECTATOR : base.gameMode();
         // idempotent: a re-send of an already-shaped entry returns the SAME object, so the out filter terminates
-        if (name.equals(base.username()) && listOrder == base.listOrder()
-                && display == base.displayName() && mode == base.gameMode()) return base;
+        if (name.equals(base.username()) && listOrder == base.listOrder() && mode == base.gameMode()) return base;
         return new PlayerInfoUpdatePacket.Entry(base.uuid(), name, base.properties(),
-                base.listed(), base.latency(), mode, display, base.chatSession(),
+                base.listed(), base.latency(), mode, base.displayName(), base.chatSession(),
                 listOrder, base.displayHat());
     }
 }
