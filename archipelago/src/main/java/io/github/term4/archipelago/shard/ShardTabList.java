@@ -145,7 +145,11 @@ public final class ShardTabList {
                 && !actions.contains(PlayerInfoUpdatePacket.Action.UPDATE_LIST_ORDER)) return;
         StringBuilder line = new StringBuilder();
         line.append(System.currentTimeMillis() % 1_000_000).append(' ');
-        for (PlayerInfoUpdatePacket.Action a : actions) line.append(a.name().charAt(0)).append(a.name().charAt(a.name().length() - 1));
+        if (actions.size() == PlayerInfoUpdatePacket.Action.values().length) line.append("ALL");
+        else for (PlayerInfoUpdatePacket.Action a : actions) line.append(switch (a) {
+            case ADD_PLAYER -> "ADD "; case UPDATE_DISPLAY_NAME -> "NAME "; case UPDATE_GAME_MODE -> "MODE ";
+            case UPDATE_LIST_ORDER -> "ORDER "; case UPDATE_LISTED -> "LISTED "; default -> a.name().charAt(0) + " ";
+        });
         for (PlayerInfoUpdatePacket.Entry e : info.entries()) {
             String display = e.displayName() == null ? "-"
                     : net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer.plainText()
