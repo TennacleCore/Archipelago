@@ -179,9 +179,12 @@ public final class ShardTabList {
         if (p == null) return base;
         String sort = p.getTag(SORT_NAME);
         Integer order = p.getTag(LIST_ORDER);
-        if (sort == null && order == null) return base;
-        return new PlayerInfoUpdatePacket.Entry(base.uuid(), sort != null ? sort : base.username(), base.properties(),
+        String name = sort != null ? sort : base.username();
+        int listOrder = order != null ? order : base.listOrder();
+        // idempotent: a re-send of an already-shaped entry returns the SAME object, so the out filter terminates
+        if (name.equals(base.username()) && listOrder == base.listOrder()) return base;
+        return new PlayerInfoUpdatePacket.Entry(base.uuid(), name, base.properties(),
                 base.listed(), base.latency(), base.gameMode(), base.displayName(), base.chatSession(),
-                order != null ? order : base.listOrder(), base.displayHat());
+                listOrder, base.displayHat());
     }
 }
