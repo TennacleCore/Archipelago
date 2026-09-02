@@ -136,12 +136,15 @@ public final class ShardTabList {
         for (Player p : MinecraftServer.getConnectionManager().getOnlinePlayers()) {
             if (p != viewer && !listed(viewer, p)) continue;
             PlayerInfoUpdatePacket.Entry e = entry(viewer, p);
+            String team = p.getTeam() == null ? "-" : p.getTeam().getTeamName();
+            String display = e.displayName() == null ? "null"
+                    : net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer.plainText()
+                            .serialize(e.displayName()) + "@" + e.displayName().color();
             lines.add((p == viewer ? "SELF " : "     ") + p.getUsername()
                     + " name=" + e.username().replace('§', '&')
+                    + " team=" + team // outranks the name in BOTH comparators
                     + " order=" + e.listOrder() + " mode=" + e.gameMode()
-                    + " display=" + (e.displayName() == null ? "null" : "set")
-                    + " | tags sort=" + String.valueOf(p.getTag(SORT_NAME)).replace('§', '&')
-                    + " order=" + p.getTag(LIST_ORDER) + " spec=" + p.getTag(SPECTATOR));
+                    + " display=" + display);
         }
         return lines;
     }
