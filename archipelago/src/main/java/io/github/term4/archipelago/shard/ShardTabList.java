@@ -33,7 +33,7 @@ public final class ShardTabList {
      * orders by team name then by the PROFILE name, and the same profile name is what it draws over the player's
      * head ({@code EntityPlayer.getName()}) and keys a below-name score by. So the sort name must still READ as
      * the player - {@link io.github.term4.archipelago.shard.ShardTabList} callers build it as a two-char section
-     * prefix plus the real username, which sorts on the prefix and renders as the coloured name. Sent to LEGACY
+     * prefix plus the real username, which sorts on the prefix and renders as the colored name. Sent to LEGACY
      * viewers only; a modern client would draw the section codes literally and sorts on {@link #LIST_ORDER}.
      */
     public static final Tag<String> SORT_NAME = Tag.String("tab:sort-name");
@@ -129,14 +129,14 @@ public final class ShardTabList {
     private static final java.util.Map<UUID, java.util.ArrayDeque<String>> SENT = new java.util.concurrent.ConcurrentHashMap<>();
 
     /** The last {@value #HISTORY} tab packets that actually reached {@code viewer}, oldest first: the evidence for
-     *  an intermittent row (a colour that came and went) - the SEQUENCE is what a snapshot cannot show. */
+     *  an intermittent row (a color that came and went) - the SEQUENCE is what a snapshot cannot show. */
     public static @NotNull List<String> history(@NotNull Player viewer) {
         java.util.ArrayDeque<String> log = SENT.get(viewer.getUuid());
         return log == null ? List.of() : List.copyOf(log);
     }
 
     // recorded only for a packet that passes through to the client (a cancelled original never arrives). Latency
-    // pings are skipped: they would drown the buffer and cannot touch a name, colour or mode
+    // pings are skipped: they would drown the buffer and cannot touch a name, color or mode
     private static void record(Player viewer, PlayerInfoUpdatePacket info) {
         var actions = info.actions();
         if (!actions.contains(PlayerInfoUpdatePacket.Action.ADD_PLAYER)
@@ -297,7 +297,7 @@ public final class ShardTabList {
         String sort = legacy(viewer) ? player.getTag(SORT_NAME) : null;
         Integer order = player.getTag(LIST_ORDER);
         // no display-name fallback: a null one lets the client draw the profile name itself, which already reads
-        // as the player. Pinning one here would freeze the pre-colour white name onto entries built before it lands.
+        // as the player. Pinning one here would freeze the pre-color white name onto entries built before it lands.
         GameMode mode = spectatorTo(viewer, player) ? GameMode.SPECTATOR : player.getGameMode();
         return new PlayerInfoUpdatePacket.Entry(player.getUuid(), sort != null ? sort : player.getUsername(), properties, true,
                 player.getLatency(), mode, player.getDisplayName(), null, order != null ? order : 0, true);
@@ -305,10 +305,10 @@ public final class ShardTabList {
 
     /**
      * The entry as it must read AT WRITE TIME. {@code sendPacket} only enqueues; this event fires when the
-     * connection's write thread drains the queue, so an entry built before a join coloured its player can be
-     * written after the colour - and an entry this filter cancels is re-enqueued at the TAIL, behind everything
+     * connection's write thread drains the queue, so an entry built before a join colored its player can be
+     * written after the color - and an entry this filter cancels is re-enqueued at the TAIL, behind everything
      * queued since, the NAME packet included. Patching the stale snapshot forwarded its null display and blanked
-     * a row that packet had just coloured. So a reshaped entry is rebuilt from live state, and the original
+     * a row that packet had just colored. So a reshaped entry is rebuilt from live state, and the original
      * object is kept only when nothing differs - which is also what lets the filter's own re-send terminate.
      */
     private static PlayerInfoUpdatePacket.Entry shape(Player viewer, PlayerInfoUpdatePacket.Entry base) {
