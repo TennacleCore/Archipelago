@@ -28,7 +28,14 @@ import java.util.UUID;
  */
 public final class ShardTabList {
 
-    /** Overrides the tab-list SORT name for a player (the fake-name ordering trick); the shown name is the display name. */
+    /**
+     * The name a 1.8 client sorts this player under. 1.8 has no list-order field: {@code GuiPlayerTabOverlay}
+     * orders by team name then by the PROFILE name, and the same profile name is what it draws over the player's
+     * head ({@code EntityPlayer.getName()}) and keys a below-name score by. So the sort name must still READ as
+     * the player - {@link io.github.term4.archipelago.shard.ShardTabList} callers build it as a two-char section
+     * prefix plus the real username, which sorts on the prefix and renders as the coloured name. Sent to LEGACY
+     * viewers only; a modern client would draw the section codes literally and sorts on {@link #LIST_ORDER}.
+     */
     public static final Tag<String> SORT_NAME = Tag.String("tab:sort-name");
     /** The 1.21.2+ per-entry list order (higher sorts first); ignored by pre-1.21.2 clients. */
     public static final Tag<Integer> LIST_ORDER = Tag.Integer("tab:list-order");
@@ -53,6 +60,14 @@ public final class ShardTabList {
 
     private static final java.util.concurrent.CopyOnWriteArrayList<TabRule> RULES =
             new java.util.concurrent.CopyOnWriteArrayList<>();
+    /** Who gets the 1.8 {@link #SORT_NAME} treatment; the app wires its client tracker in. Default: nobody, so an
+     *  unwired server behaves exactly as it did. An UNKNOWN protocol must read as MODERN here - guessing legacy
+     *  would draw raw section codes on a modern client, while guessing modern only mis-sorts until the resync. */
+    private static volatile java.util.function.Predicate<Player> legacyViewers = player -> false;
+
+    public static void legacyViewers(@NotNull java.util.function.Predicate<Player> predicate) {
+        legacyViewers = predicate;
+    }
     private static volatile boolean installed;
 
     private ShardTabList() {}
@@ -91,7 +106,7 @@ public final class ShardTabList {
             boolean changed = false;
             for (PlayerInfoUpdatePacket.Entry entry : info.entries()) {
                 if (!allows(e.getPlayer(), entry.uuid())) { changed = true; continue; }
-                PlayerInfoUpdatePacket.Entry shaped = shape(entry);
+                PlayerInfoUpdatePacket.Entry shaped = shape(e.getPlayer(), entry);
                 changed |= shaped != entry;
                 allowed.add(shaped);
             }
@@ -152,22 +167,22 @@ public final class ShardTabList {
         if (!installed || !player.isOnline()) return;
         List<PlayerInfoUpdatePacket.Entry> adds = new ArrayList<>();
         List<UUID> removes = new ArrayList<>();
-        PlayerInfoUpdatePacket.Entry self = entry(player);
         List<UUID> selfId = List.of(player.getUuid());
         boolean renameSelf = player.getTag(SORT_NAME) != null;
+        boolean viewerLegacy = legacy(player);
         for (Player other : MinecraftServer.getConnectionManager().getOnlinePlayers()) {
             if (other == player) continue;
-            // their list of the player
+            // their list of the player - the entry is shaped for THEIR client generation
             if (listed(other, player)) {
-                if (renameSelf) other.sendPacket(new PlayerInfoRemovePacket(selfId)); // rename lands as remove-then-add
-                other.sendPacket(new PlayerInfoUpdatePacket(ALL_ACTIONS, List.of(self)));
+                if (renameSelf && legacy(other)) other.sendPacket(new PlayerInfoRemovePacket(selfId)); // rename = remove-then-add
+                other.sendPacket(new PlayerInfoUpdatePacket(ALL_ACTIONS, List.of(entry(other, player))));
             } else {
                 other.sendPacket(new PlayerInfoRemovePacket(selfId));
             }
             // the player's list of them
             if (listed(player, other)) {
-                if (other.getTag(SORT_NAME) != null) removes.add(other.getUuid()); // remove-before-add renames them
-                adds.add(entry(other));
+                if (viewerLegacy && other.getTag(SORT_NAME) != null) removes.add(other.getUuid()); // remove-before-add renames
+                adds.add(entry(player, other));
             } else {
                 removes.add(other.getUuid());
             }
@@ -186,37 +201,42 @@ public final class ShardTabList {
     private static final EnumSet<PlayerInfoUpdatePacket.Action> ALL_ACTIONS =
             EnumSet.allOf(PlayerInfoUpdatePacket.Action.class);
 
-    /** The name {@code player} lists under in tab: the sort-key override, else the real name. A tab-slot objective's
-     *  score must use THIS to line up with the entry - a fake sort name replaces the score holder otherwise. */
+    /** The name a 1.8 client lists {@code player} under: the {@link #SORT_NAME} override, else the real name. A
+     *  name-keyed objective (tab or below-name) has to score under this to line up on those clients. */
     public static @NotNull String listName(@NotNull Player player) {
         String sort = player.getTag(SORT_NAME);
         return sort != null ? sort : player.getUsername();
     }
 
+    // the sort name is a 1.8 device: a modern client renders its section codes literally and sorts on listOrder
+    private static boolean legacy(Player viewer) {
+        return legacyViewers.test(viewer);
+    }
+
     // the shape Player.infoEntry() builds (no chat session: re-added entries lose the signing badge, like proxies)
-    private static PlayerInfoUpdatePacket.Entry entry(Player player) {
+    private static PlayerInfoUpdatePacket.Entry entry(Player viewer, Player player) {
         PlayerSkin skin = player.getSkin();
         List<PlayerInfoUpdatePacket.Property> properties = skin != null && skin.signature() != null
                 ? List.of(new PlayerInfoUpdatePacket.Property("textures", skin.textures(), skin.signature()))
                 : List.of();
-        String sort = player.getTag(SORT_NAME);
+        String sort = legacy(viewer) ? player.getTag(SORT_NAME) : null;
         Integer order = player.getTag(LIST_ORDER);
         Component display = player.getDisplayName();
-        if (sort != null && display == null) display = Component.text(player.getUsername()); // a sort key never shows raw
+        if (display == null) display = Component.text(player.getUsername()); // the row always reads as the player
         return new PlayerInfoUpdatePacket.Entry(player.getUuid(), sort != null ? sort : player.getUsername(), properties, true,
                 player.getLatency(), player.getGameMode(), display, null, order != null ? order : 0, true);
     }
 
-    // an entry Minestom built with the real name/order, re-shaped to the player's tab overrides
-    private static PlayerInfoUpdatePacket.Entry shape(PlayerInfoUpdatePacket.Entry base) {
+    // an entry Minestom built with the real name/order, re-shaped to the player's tab overrides for THIS viewer
+    private static PlayerInfoUpdatePacket.Entry shape(Player viewer, PlayerInfoUpdatePacket.Entry base) {
         Player p = MinecraftServer.getConnectionManager().getOnlinePlayerByUuid(base.uuid());
         if (p == null) return base;
-        String sort = p.getTag(SORT_NAME);
+        String sort = legacy(viewer) ? p.getTag(SORT_NAME) : null;
         Integer order = p.getTag(LIST_ORDER);
         String name = sort != null ? sort : base.username();
         int listOrder = order != null ? order : base.listOrder();
         Component display = base.displayName();
-        if (sort != null && display == null) display = Component.text(base.username()); // a sort key never shows raw
+        if (display == null) display = Component.text(base.username()); // the row always reads as the player
         // idempotent: a re-send of an already-shaped entry returns the SAME object, so the out filter terminates
         if (name.equals(base.username()) && listOrder == base.listOrder() && display == base.displayName()) return base;
         return new PlayerInfoUpdatePacket.Entry(base.uuid(), name, base.properties(),
