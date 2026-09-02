@@ -8,6 +8,7 @@ import net.minestom.server.event.player.PlayerPacketOutEvent;
 import net.minestom.server.event.player.PlayerSpawnEvent;
 import net.minestom.server.network.packet.server.play.PlayerInfoRemovePacket;
 import net.minestom.server.network.packet.server.play.PlayerInfoUpdatePacket;
+import net.minestom.server.tag.Tag;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.ArrayList;
@@ -25,6 +26,11 @@ import java.util.UUID;
  * whose uuid is not an online player (NPCs, replay ghosts) always pass.
  */
 public final class ShardTabList {
+
+    /** Overrides the tab-list SORT name for a player (the fake-name ordering trick); the shown name is the display name. */
+    public static final Tag<String> SORT_NAME = Tag.String("tab:sort-name");
+    /** The 1.21.2+ per-entry list order (higher sorts first); ignored by pre-1.21.2 clients. */
+    public static final Tag<Integer> LIST_ORDER = Tag.Integer("tab:list-order");
 
     /** What a shard's members list in tab. The viewer's own scope decides - a child on {@link #TREE} lists the
      *  whole tree while the parent's members on {@link #WORLD} still list only their own world. */
@@ -81,10 +87,14 @@ public final class ShardTabList {
             if (!(e.getPacket() instanceof PlayerInfoUpdatePacket info)
                     || !info.actions().contains(PlayerInfoUpdatePacket.Action.ADD_PLAYER)) return;
             List<PlayerInfoUpdatePacket.Entry> allowed = new ArrayList<>(info.entries().size());
+            boolean changed = false;
             for (PlayerInfoUpdatePacket.Entry entry : info.entries()) {
-                if (allows(e.getPlayer(), entry.uuid())) allowed.add(entry);
+                if (!allows(e.getPlayer(), entry.uuid())) { changed = true; continue; }
+                PlayerInfoUpdatePacket.Entry shaped = shape(entry);
+                changed |= shaped != entry;
+                allowed.add(shaped);
             }
-            if (allowed.size() == info.entries().size()) return; // untouched packets (and our own re-sends) pass
+            if (!changed) return; // untouched packets (and our own re-sends) pass
             e.setCancelled(true);
             if (!allowed.isEmpty()) e.getPlayer().sendPacket(new PlayerInfoUpdatePacket(info.actions(), allowed));
         });
@@ -157,7 +167,21 @@ public final class ShardTabList {
         List<PlayerInfoUpdatePacket.Property> properties = skin != null && skin.signature() != null
                 ? List.of(new PlayerInfoUpdatePacket.Property("textures", skin.textures(), skin.signature()))
                 : List.of();
-        return new PlayerInfoUpdatePacket.Entry(player.getUuid(), player.getUsername(), properties, true,
-                player.getLatency(), player.getGameMode(), player.getDisplayName(), null, 0, true);
+        String sort = player.getTag(SORT_NAME);
+        Integer order = player.getTag(LIST_ORDER);
+        return new PlayerInfoUpdatePacket.Entry(player.getUuid(), sort != null ? sort : player.getUsername(), properties, true,
+                player.getLatency(), player.getGameMode(), player.getDisplayName(), null, order != null ? order : 0, true);
+    }
+
+    // an entry Minestom built with the real name/order, re-shaped to the player's tab overrides
+    private static PlayerInfoUpdatePacket.Entry shape(PlayerInfoUpdatePacket.Entry base) {
+        Player p = MinecraftServer.getConnectionManager().getOnlinePlayerByUuid(base.uuid());
+        if (p == null) return base;
+        String sort = p.getTag(SORT_NAME);
+        Integer order = p.getTag(LIST_ORDER);
+        if (sort == null && order == null) return base;
+        return new PlayerInfoUpdatePacket.Entry(base.uuid(), sort != null ? sort : base.username(), base.properties(),
+                base.listed(), base.latency(), base.gameMode(), base.displayName(), base.chatSession(),
+                order != null ? order : base.listOrder(), base.displayHat());
     }
 }
