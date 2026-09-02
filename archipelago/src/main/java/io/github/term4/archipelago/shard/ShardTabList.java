@@ -134,37 +134,47 @@ public final class ShardTabList {
         return a != null && b != null && a.root() == b.root();
     }
 
-    /** Forces {@code player}'s entry to be re-read by everyone who lists them: a REMOVE then ADD, because a 1.8
-     *  client ignores a plain re-ADD of a name it already has. The one way to rename an existing tab entry - used
-     *  when the sort-key order is applied after the entry was first sent under the real name. */
-    public static void relist(@NotNull Player player) {
-        if (!installed || !player.isOnline()) return;
-        PlayerInfoUpdatePacket.Entry self = entry(player);
-        List<UUID> id = List.of(player.getUuid());
-        for (Player other : MinecraftServer.getConnectionManager().getOnlinePlayers()) {
-            if (other == player || !listed(other, player)) continue;
-            other.sendPacket(new PlayerInfoRemovePacket(id));
-            other.sendPacket(new PlayerInfoUpdatePacket(ALL_ACTIONS, List.of(self)));
-        }
+    /** Notified after {@code resync} (re)sends a player's entry. A name-keyed objective (tab health) re-asserts its
+     *  scores here: a relisted entry drops any score that keyed on the name it had before the rename. */
+    private static final java.util.concurrent.CopyOnWriteArrayList<java.util.function.Consumer<Player>> RESYNCED =
+            new java.util.concurrent.CopyOnWriteArrayList<>();
+
+    public static @NotNull Runnable onResynced(@NotNull java.util.function.Consumer<Player> hook) {
+        RESYNCED.add(hook);
+        return () -> RESYNCED.remove(hook);
     }
 
-    /** {@code player}'s world changed: full re-sync of their own list, and of their entry in everyone else's. */
+    /** {@code player}'s world changed: full re-sync of their own list, and of their entry in everyone else's. A player
+     *  under a fake sort name is REMOVEd before the ADD - a 1.8 client ignores a plain re-ADD of a name it already
+     *  lists, so a rename only lands as remove-then-add. The shard binding settles a tick after the join transfer,
+     *  and this fires on that view change, so the rename lands once everyone can finally see everyone. */
     public static void resync(@NotNull Player player) {
         if (!installed || !player.isOnline()) return;
         List<PlayerInfoUpdatePacket.Entry> adds = new ArrayList<>();
         List<UUID> removes = new ArrayList<>();
         PlayerInfoUpdatePacket.Entry self = entry(player);
+        List<UUID> selfId = List.of(player.getUuid());
+        boolean renameSelf = player.getTag(SORT_NAME) != null;
         for (Player other : MinecraftServer.getConnectionManager().getOnlinePlayers()) {
             if (other == player) continue;
             // their list of the player
-            if (listed(other, player)) other.sendPacket(new PlayerInfoUpdatePacket(ALL_ACTIONS, List.of(self)));
-            else other.sendPacket(new PlayerInfoRemovePacket(List.of(player.getUuid())));
+            if (listed(other, player)) {
+                if (renameSelf) other.sendPacket(new PlayerInfoRemovePacket(selfId)); // rename lands as remove-then-add
+                other.sendPacket(new PlayerInfoUpdatePacket(ALL_ACTIONS, List.of(self)));
+            } else {
+                other.sendPacket(new PlayerInfoRemovePacket(selfId));
+            }
             // the player's list of them
-            if (listed(player, other)) adds.add(entry(other));
-            else removes.add(other.getUuid());
+            if (listed(player, other)) {
+                if (other.getTag(SORT_NAME) != null) removes.add(other.getUuid()); // remove-before-add renames them
+                adds.add(entry(other));
+            } else {
+                removes.add(other.getUuid());
+            }
         }
+        if (!removes.isEmpty()) player.sendPacket(new PlayerInfoRemovePacket(removes)); // REMOVEs first, so a re-ADD renames
         if (!adds.isEmpty()) player.sendPacket(new PlayerInfoUpdatePacket(ALL_ACTIONS, adds));
-        if (!removes.isEmpty()) player.sendPacket(new PlayerInfoRemovePacket(removes));
+        for (java.util.function.Consumer<Player> hook : RESYNCED) hook.accept(player);
     }
 
     /** Re-syncs every member's list after {@code shard}'s scope changed. */
