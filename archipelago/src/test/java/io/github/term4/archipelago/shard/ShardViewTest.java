@@ -20,6 +20,7 @@ import net.minestom.server.event.item.PickupItemEvent;
 import net.minestom.server.event.player.PlayerPacketEvent;
 import net.minestom.server.event.player.PlayerBlockBreakEvent;
 import net.minestom.server.event.player.PlayerStartDiggingEvent;
+import net.minestom.server.instance.Instance;
 import net.minestom.server.instance.Weather;
 import net.minestom.server.instance.block.Block;
 import net.minestom.server.instance.block.BlockFace;
@@ -421,6 +422,46 @@ class ShardViewTest extends HeadlessServerTest {
             b.leave(swapper.player);
             swapper.player.remove();
             watcher.player.remove();
+        }
+    }
+
+    @Test
+    void anEntitiesOnlyObserverGetsNoBlockFeedback() {
+        Shard shard = new Shard(instance);
+        shard.join(member.player);
+        ShardView.set(spectator.player, ShardView.base().withEntities(shard));
+        shard.setBlock(new BlockVec(4, 64, 4), Block.STONE);
+        try {
+            member.sent.clear(); spectator.sent.clear();
+            assertTrue(dispatch(member.player, digPacket(ClientPlayerActionPacket.Status.STARTED_DIGGING, 4, 64, 4)));
+            assertTrue(dispatch(member.player, digPacket(ClientPlayerActionPacket.Status.FINISHED_DIGGING, 4, 64, 4)));
+            assertTrue(shard.getBlock(4, 64, 4).air());
+            assertEquals(0, spectator.sent(WorldEventPacket.class).size(), "no break fx for a block they never saw");
+            assertEquals(0, spectator.sent(BlockChangePacket.class).size(), "and no block change either");
+        } finally {
+            ShardView.set(spectator.player, null);
+            shard.leave(member.player);
+            shard.reset();
+        }
+    }
+
+    @Test
+    void anObserverOnAnotherInstanceHearsNothingPositional() {
+        Instance elsewhere = MinecraftServer.getInstanceManager().createInstanceContainer();
+        FakePlayer far = FakePlayer.connect(elsewhere, new Pos(0.5, 64, 0.5), "ShardFar");
+        Shard shard = new Shard(instance);
+        shard.join(member.player);
+        ShardView.set(far.player, ShardView.base().withEntities(shard));
+        try {
+            far.sent.clear();
+            shard.broadcast(new ChangeGameStatePacket(ChangeGameStatePacket.Reason.RAIN_LEVEL_CHANGE, 0f));
+            assertEquals(0, far.sent(ChangeGameStatePacket.class).size(), "a world's packets never cross instances");
+            assertFalse(shard.watchers().contains(far.player));
+        } finally {
+            ShardView.set(far.player, null);
+            far.player.remove();
+            shard.leave(member.player);
+            MinecraftServer.getInstanceManager().unregisterInstance(elsewhere);
         }
     }
 }

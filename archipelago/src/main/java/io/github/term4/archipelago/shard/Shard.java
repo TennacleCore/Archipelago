@@ -2,7 +2,6 @@ package io.github.term4.archipelago.shard;
 
 import io.github.term4.archipelago.event.ShardJoinEvent;
 import net.minestom.server.instance.EntityTracker;
-import io.github.term4.polyp.world.Recipients;
 import io.github.term4.archipelago.event.ShardLeaveEvent;
 import io.github.term4.archipelago.event.ShardReclockEvent;
 import io.github.term4.archipelago.event.ShardTransferEvent;
@@ -67,7 +66,8 @@ import java.util.function.Supplier;
  * A game world as a diff over a shared base map: block writes land in an overlay (the base instance is never
  * written), entities and viewers are shard-owned, N shards share one loaded map at the same coordinates.
  * Gameplay reaches a shard through the {@link MechanicsWorld#ENTITY_TAG} binding ({@link #join}/{@link #spawn}/
- * {@link #transfer} stamp it); {@link #players()} = members, {@link #watchers()} adds observers.
+ * {@link #transfer} stamp it); {@link #players()} = members, {@link #watchers()} adds observers and all-seeing
+ * viewers standing on the base instance.
  *
  * <p>Shards chain: a {@link #Shard(Shard) child} layer's diff is RELATIVE to its parent - block reads fall
  * through child -> parent -> base, an explicit-air entry masks the ancestor block, and ancestor writes stay
@@ -922,11 +922,11 @@ public final class Shard implements MechanicsWorld {
         forEachExtraWatcher(action);
     }
 
-    // all-seeing is process-wide: only someone on THIS base instance renders this world, so a positional
-    // packet must never cross to another instance
+    // only someone on THIS base instance renders this world, so a positional packet must never cross to
+    // another instance - an observer registered from elsewhere included
     private void forEachExtraWatcher(Consumer<Player> action) {
         for (Player o : observers) {
-            if (!members.contains(o)) action.accept(o);
+            if (o.getInstance() == base && !members.contains(o)) action.accept(o);
         }
         for (Player o : ShardView.allSeeing()) {
             if (o.getInstance() == base && !members.contains(o) && !observers.contains(o)) action.accept(o);
@@ -942,19 +942,23 @@ public final class Shard implements MechanicsWorld {
     }
 
     void sendToBlockViewers(SendablePacket packet) {
-        Recipients.BLOCK_VIEWERS.each(this, Vec.ZERO, null, (p, at) -> p.sendPacket(packet));
+        forEachWatcher(p -> { if (blockViewer(p)) p.sendPacket(packet); });
     }
 
     private boolean blockViewer(Player p) {
         return p.getInstance() == base && WorldPolicy.seesBlocks(p, this);
     }
 
+    // the same set sendToBlockViewers walks, with an early out
     boolean hasBlockViewers() {
         for (Player m : members) {
             if (blockViewer(m)) return true;
         }
         for (Player o : observers) {
-            if (blockViewer(o)) return true;
+            if (!members.contains(o) && blockViewer(o)) return true;
+        }
+        for (Player o : ShardView.allSeeing()) {
+            if (!members.contains(o) && !observers.contains(o) && blockViewer(o)) return true;
         }
         return false;
     }
