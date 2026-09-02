@@ -125,6 +125,27 @@ public final class ShardTabList {
         ShardView.viewChangeHook = ShardTabList::resync;
     }
 
+    /**
+     * Diagnostic: exactly what {@code viewer}'s tab is being sent, entry by entry, plus the tags behind it. The
+     * tab depends on the viewer's client generation, so a bug that shows on one screen and not another is only
+     * legible from here - read it rather than inferring from a screenshot.
+     */
+    public static @NotNull List<String> describe(@NotNull Player viewer) {
+        List<String> lines = new ArrayList<>();
+        lines.add("viewer=" + viewer.getUsername() + " legacy=" + legacy(viewer));
+        for (Player p : MinecraftServer.getConnectionManager().getOnlinePlayers()) {
+            if (p != viewer && !listed(viewer, p)) continue;
+            PlayerInfoUpdatePacket.Entry e = entry(viewer, p);
+            lines.add((p == viewer ? "SELF " : "     ") + p.getUsername()
+                    + " name=" + e.username().replace('§', '&')
+                    + " order=" + e.listOrder() + " mode=" + e.gameMode()
+                    + " display=" + (e.displayName() == null ? "null" : "set")
+                    + " | tags sort=" + String.valueOf(p.getTag(SORT_NAME)).replace('§', '&')
+                    + " order=" + p.getTag(LIST_ORDER) + " spec=" + p.getTag(SPECTATOR));
+        }
+        return lines;
+    }
+
     /** Whether {@code viewer}'s tab may contain {@code uuid} ({@code true} for non-player uuids - NPCs, ghosts). */
     private static boolean allows(Player viewer, UUID uuid) {
         Player subject = MinecraftServer.getConnectionManager().getOnlinePlayerByUuid(uuid);
