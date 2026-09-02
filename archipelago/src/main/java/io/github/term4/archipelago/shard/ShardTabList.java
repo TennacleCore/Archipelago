@@ -134,6 +134,20 @@ public final class ShardTabList {
         return a != null && b != null && a.root() == b.root();
     }
 
+    /** Forces {@code player}'s entry to be re-read by everyone who lists them: a REMOVE then ADD, because a 1.8
+     *  client ignores a plain re-ADD of a name it already has. The one way to rename an existing tab entry - used
+     *  when the sort-key order is applied after the entry was first sent under the real name. */
+    public static void relist(@NotNull Player player) {
+        if (!installed || !player.isOnline()) return;
+        PlayerInfoUpdatePacket.Entry self = entry(player);
+        List<UUID> id = List.of(player.getUuid());
+        for (Player other : MinecraftServer.getConnectionManager().getOnlinePlayers()) {
+            if (other == player || !listed(other, player)) continue;
+            other.sendPacket(new PlayerInfoRemovePacket(id));
+            other.sendPacket(new PlayerInfoUpdatePacket(ALL_ACTIONS, List.of(self)));
+        }
+    }
+
     /** {@code player}'s world changed: full re-sync of their own list, and of their entry in everyone else's. */
     public static void resync(@NotNull Player player) {
         if (!installed || !player.isOnline()) return;
