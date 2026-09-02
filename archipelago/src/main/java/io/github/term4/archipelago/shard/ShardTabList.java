@@ -2,6 +2,7 @@ package io.github.term4.archipelago.shard;
 
 import io.github.term4.polyp.world.WorldPolicy;
 import net.minestom.server.MinecraftServer;
+import net.minestom.server.entity.GameMode;
 import net.minestom.server.entity.Player;
 import net.minestom.server.entity.PlayerSkin;
 import net.minestom.server.event.player.PlayerPacketOutEvent;
@@ -39,6 +40,8 @@ public final class ShardTabList {
     public static final Tag<String> SORT_NAME = Tag.String("tab:sort-name");
     /** The 1.21.2+ per-entry list order (higher sorts first); ignored by pre-1.21.2 clients. */
     public static final Tag<Integer> LIST_ORDER = Tag.Integer("tab:list-order");
+    /** Reports this player as SPECTATOR in everyone ELSE's tab - see {@link #spectatorTo}. */
+    public static final Tag<Boolean> SPECTATOR = Tag.Boolean("tab:spectator");
 
     /** What a shard's members list in tab. The viewer's own scope decides - a child on {@link #TREE} lists the
      *  whole tree while the parent's members on {@link #WORLD} still list only their own world. */
@@ -219,6 +222,17 @@ public final class ShardTabList {
         return legacyViewers.test(viewer);
     }
 
+    /**
+     * Whether {@code subject}'s entry goes out to {@code viewer} flagged SPECTATOR. Both client generations then
+     * do the work natively: 1.8's tab comparator tests spectator-ness FIRST (ahead of team and name, so no sort
+     * name can outrank it), draws the row italic and dimmed, and skips its objective score. Never to the player
+     * THEMSELVES - {@code AbstractClientPlayer.isSpectator()} reads its own entry's game type, so a self flag
+     * would stop the client drawing them their own body.
+     */
+    private static boolean spectatorTo(Player viewer, Player subject) {
+        return viewer != subject && Boolean.TRUE.equals(subject.getTag(SPECTATOR));
+    }
+
     // the shape Player.infoEntry() builds (no chat session: re-added entries lose the signing badge, like proxies)
     private static PlayerInfoUpdatePacket.Entry entry(Player viewer, Player player) {
         PlayerSkin skin = player.getSkin();
@@ -229,8 +243,9 @@ public final class ShardTabList {
         Integer order = player.getTag(LIST_ORDER);
         Component display = player.getDisplayName();
         if (display == null) display = Component.text(player.getUsername()); // the row always reads as the player
+        GameMode mode = spectatorTo(viewer, player) ? GameMode.SPECTATOR : player.getGameMode();
         return new PlayerInfoUpdatePacket.Entry(player.getUuid(), sort != null ? sort : player.getUsername(), properties, true,
-                player.getLatency(), player.getGameMode(), display, null, order != null ? order : 0, true);
+                player.getLatency(), mode, display, null, order != null ? order : 0, true);
     }
 
     // an entry Minestom built with the real name/order, re-shaped to the player's tab overrides for THIS viewer
@@ -243,10 +258,12 @@ public final class ShardTabList {
         int listOrder = order != null ? order : base.listOrder();
         Component display = base.displayName();
         if (display == null) display = Component.text(base.username()); // the row always reads as the player
+        GameMode mode = spectatorTo(viewer, p) ? GameMode.SPECTATOR : base.gameMode();
         // idempotent: a re-send of an already-shaped entry returns the SAME object, so the out filter terminates
-        if (name.equals(base.username()) && listOrder == base.listOrder() && display == base.displayName()) return base;
+        if (name.equals(base.username()) && listOrder == base.listOrder()
+                && display == base.displayName() && mode == base.gameMode()) return base;
         return new PlayerInfoUpdatePacket.Entry(base.uuid(), name, base.properties(),
-                base.listed(), base.latency(), base.gameMode(), display, base.chatSession(),
+                base.listed(), base.latency(), mode, display, base.chatSession(),
                 listOrder, base.displayHat());
     }
 }
