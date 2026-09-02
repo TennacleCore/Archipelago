@@ -102,8 +102,8 @@ public final class ShardTabList {
         var events = MinecraftServer.getGlobalEventHandler();
         // the broadcast filter: a new join's global ADD never reaches viewers whose scope excludes it
         events.addListener(PlayerPacketOutEvent.class, e -> {
-            if (!(e.getPacket() instanceof PlayerInfoUpdatePacket info)
-                    || !info.actions().contains(PlayerInfoUpdatePacket.Action.ADD_PLAYER)) return;
+            if (!(e.getPacket() instanceof PlayerInfoUpdatePacket info)) return;
+            if (!info.actions().contains(PlayerInfoUpdatePacket.Action.ADD_PLAYER)) { record(e.getPlayer(), info); return; }
             List<PlayerInfoUpdatePacket.Entry> allowed = new ArrayList<>(info.entries().size());
             boolean changed = false;
             for (PlayerInfoUpdatePacket.Entry entry : info.entries()) {
@@ -112,7 +112,7 @@ public final class ShardTabList {
                 changed |= shaped != entry;
                 allowed.add(shaped);
             }
-            if (!changed) return; // untouched packets (and our own re-sends) pass
+            if (!changed) { record(e.getPlayer(), info); return; } // untouched packets (and our re-sends) pass
             e.setCancelled(true);
             if (!allowed.isEmpty()) e.getPlayer().sendPacket(new PlayerInfoUpdatePacket(info.actions(), allowed));
         });
@@ -123,6 +123,42 @@ public final class ShardTabList {
         // covers join/leave/spectate, and fires BEFORE the viewable rules - the spawns those send are only
         // rendered when the client already has the info entry (see the hook's doc)
         ShardView.viewChangeHook = ShardTabList::resync;
+    }
+
+    private static final int HISTORY = 40;
+    private static final java.util.Map<UUID, java.util.ArrayDeque<String>> SENT = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** The last {@value #HISTORY} tab packets that actually reached {@code viewer}, oldest first: the evidence for
+     *  an intermittent row (a colour that came and went) - the SEQUENCE is what a snapshot cannot show. */
+    public static @NotNull List<String> history(@NotNull Player viewer) {
+        java.util.ArrayDeque<String> log = SENT.get(viewer.getUuid());
+        return log == null ? List.of() : List.copyOf(log);
+    }
+
+    // recorded only for a packet that passes through to the client (a cancelled original never arrives). Latency
+    // pings are skipped: they would drown the buffer and cannot touch a name, colour or mode
+    private static void record(Player viewer, PlayerInfoUpdatePacket info) {
+        var actions = info.actions();
+        if (!actions.contains(PlayerInfoUpdatePacket.Action.ADD_PLAYER)
+                && !actions.contains(PlayerInfoUpdatePacket.Action.UPDATE_DISPLAY_NAME)
+                && !actions.contains(PlayerInfoUpdatePacket.Action.UPDATE_GAME_MODE)
+                && !actions.contains(PlayerInfoUpdatePacket.Action.UPDATE_LIST_ORDER)) return;
+        StringBuilder line = new StringBuilder();
+        line.append(System.currentTimeMillis() % 1_000_000).append(' ');
+        for (PlayerInfoUpdatePacket.Action a : actions) line.append(a.name().charAt(0)).append(a.name().charAt(a.name().length() - 1));
+        for (PlayerInfoUpdatePacket.Entry e : info.entries()) {
+            String display = e.displayName() == null ? "-"
+                    : net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer.plainText()
+                            .serialize(e.displayName()) + "@" + e.displayName().color();
+            line.append(" [").append(e.username().replace('\u00a7', '&')).append(' ')
+                    .append(e.gameMode()).append(' ').append(display).append(']');
+        }
+        SENT.compute(viewer.getUuid(), (k, log) -> {
+            if (log == null) log = new java.util.ArrayDeque<>();
+            if (log.size() >= HISTORY) log.pollFirst();
+            log.addLast(line.toString());
+            return log;
+        });
     }
 
     /**
@@ -136,7 +172,11 @@ public final class ShardTabList {
         for (Player p : MinecraftServer.getConnectionManager().getOnlinePlayers()) {
             if (p != viewer && !listed(viewer, p)) continue;
             PlayerInfoUpdatePacket.Entry e = entry(viewer, p);
-            String team = p.getTeam() == null ? "-" : p.getTeam().getTeamName();
+            // Team.addMember(String) never sets LivingEntity.team, so getTeam() lies: look the name up on the rosters
+            String team = "-";
+            for (net.minestom.server.scoreboard.Team t : MinecraftServer.getTeamManager().getTeams()) {
+                if (t.getMembers().contains(p.getUsername())) { team = t.getTeamName(); break; }
+            }
             String display = e.displayName() == null ? "null"
                     : net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer.plainText()
                             .serialize(e.displayName()) + "@" + e.displayName().color();
