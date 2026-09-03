@@ -1,5 +1,7 @@
 package io.github.term4.archipelago.testsupport;
 
+import net.minestom.server.event.player.PlayerPacketOutEvent;
+import net.minestom.server.event.EventDispatcher;
 import net.minestom.server.MinecraftServer;
 import net.minestom.server.coordinate.Pos;
 import net.minestom.server.entity.Player;
@@ -39,7 +41,19 @@ public final class FakePlayer {
     public static FakePlayer connect(@NotNull Instance instance, @NotNull Pos pos, @NotNull String name) {
         var holder = new FakePlayer[1];
         var connection = new PlayerConnection() {
-            @Override public void sendPacket(@NotNull SendablePacket packet) { holder[0].sent.add(packet); }
+            @Override public void sendPacket(@NotNull SendablePacket packet) {
+                // the wire path fires this and drops a cancelled packet: a filtered tab entry never reaches sent
+                Player me = getPlayer();
+                if (me != null) {
+                    ServerPacket server = SendablePacket.extractServerPacket(getServerState(), packet);
+                    if (server != null) {
+                        var event = new PlayerPacketOutEvent(me, server);
+                        EventDispatcher.call(event);
+                        if (event.isCancelled()) return;
+                    }
+                }
+                holder[0].sent.add(packet);
+            }
             @Override public SocketAddress getRemoteAddress() { return new InetSocketAddress("localhost", 25565); }
             @Override public void disconnect() {}
         };
