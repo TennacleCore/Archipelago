@@ -35,15 +35,16 @@ public final class ShardView {
     /** The default entity filter: everything the shard holds. */
     public static final Predicate<Entity> ALL_ENTITIES = e -> true;
 
-    private static final ShardView BASE = new ShardView(null, false, true, Map.of());
+    private static final ShardView BASE = new ShardView(null, false, ALL_ENTITIES, Map.of());
 
     private final @Nullable Shard blocks;
     private final boolean allEntities;
-    private final boolean baseEntities;
+    // which unbound (main-world) entities; null = none. A spectator's co-watchers and the dead ride here
+    private final @Nullable Predicate<Entity> baseEntities;
     // which shards' entities, and WHICH of them: a spectator can watch only the mobs, or only the players
     private final Map<Shard, Predicate<Entity>> entityShards;
 
-    private ShardView(@Nullable Shard blocks, boolean allEntities, boolean baseEntities, Map<Shard, Predicate<Entity>> entityShards) {
+    private ShardView(@Nullable Shard blocks, boolean allEntities, @Nullable Predicate<Entity> baseEntities, Map<Shard, Predicate<Entity>> entityShards) {
         this.blocks = blocks;
         this.allEntities = allEntities;
         this.baseEntities = baseEntities;
@@ -56,7 +57,7 @@ public final class ShardView {
     /** {@code shard}'s world as its members see it: overlay blocks + that shard's entities only. */
     public static @NotNull ShardView of(@NotNull Shard shard) { return shard.memberView(); }
 
-    static ShardView newMemberView(Shard shard) { return new ShardView(shard, false, false, Map.of(shard, ALL_ENTITIES)); }
+    static ShardView newMemberView(Shard shard) { return new ShardView(shard, false, null, Map.of(shard, ALL_ENTITIES)); }
 
     public @NotNull ShardView withBlocks(@Nullable Shard shard) {
         return new ShardView(shard, allEntities, baseEntities, entityShards);
@@ -75,7 +76,12 @@ public final class ShardView {
     }
 
     public @NotNull ShardView withBaseEntities(boolean visible) {
-        return new ShardView(blocks, allEntities, visible, entityShards);
+        return new ShardView(blocks, allEntities, visible ? ALL_ENTITIES : null, entityShards);
+    }
+
+    /** Sees only the unbound entities {@code filter} accepts. */
+    public @NotNull ShardView withBaseEntities(@NotNull Predicate<Entity> filter) {
+        return new ShardView(blocks, allEntities, filter, entityShards);
     }
 
     public @NotNull ShardView withAllEntities() {
@@ -94,14 +100,14 @@ public final class ShardView {
     /** Whether ANY entity of {@code shard} is in view - the coarse check; {@link #seesEntity} decides per entity. */
     public boolean seesEntitiesOf(@Nullable MechanicsWorld shard) {
         if (allEntities) return true;
-        return shard instanceof Shard d ? entityShards.containsKey(d) : baseEntities;
+        return shard instanceof Shard d ? entityShards.containsKey(d) : baseEntities != null;
     }
 
     /** Whether {@code subject} itself is in view: its shard must be watched, and its shard's filter must accept it. */
     public boolean seesEntity(@NotNull Entity subject) {
         if (allEntities) return true;
         Object bound = subject.getTag(MechanicsWorld.ENTITY_TAG);
-        if (!(bound instanceof Shard d)) return baseEntities;
+        if (!(bound instanceof Shard d)) return baseEntities != null && baseEntities.test(subject);
         Predicate<Entity> filter = entityShards.get(d);
         return filter != null && filter.test(subject);
     }
