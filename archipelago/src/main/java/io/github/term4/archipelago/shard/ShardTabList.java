@@ -282,10 +282,12 @@ public final class ShardTabList {
      * do the work natively: 1.8's tab comparator tests spectator-ness FIRST (ahead of team and name, so no sort
      * name can outrank it), draws the row italic and dimmed, and skips its objective score. Never to the player
      * THEMSELVES - {@code AbstractClientPlayer.isSpectator()} reads its own entry's game type, so a self flag
-     * would stop the client drawing them their own body.
+     * would stop the client drawing them their own body - and never to a viewer the policy lets SEE the subject
+     * (a co-spectator): a client draws no body for a tab-spectator either, so the flag would blind them to each
+     * other. Those rows sort by their team and are scored by the game instead.
      */
     private static boolean spectatorTo(Player viewer, Player subject) {
-        return viewer != subject && Boolean.TRUE.equals(subject.getTag(SPECTATOR));
+        return viewer != subject && Boolean.TRUE.equals(subject.getTag(SPECTATOR)) && !WorldPolicy.canSee(viewer, subject);
     }
 
     // the shape Player.infoEntry() builds (no chat session: re-added entries lose the signing badge, like proxies)
