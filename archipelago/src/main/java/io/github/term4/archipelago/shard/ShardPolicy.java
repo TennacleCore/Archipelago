@@ -21,6 +21,11 @@ public interface ShardPolicy extends WorldPolicy {
     }
 
     @Override
+    default void sightChanged(@NotNull Player player) {
+        ShardView.applyRules(player);
+    }
+
+    @Override
     default boolean seesBlocksOf(@NotNull Player viewer, @NotNull MechanicsWorld world) {
         Shard worldBlocks = world instanceof Shard s ? s : null;
         return ShardView.of(viewer).blocks() == worldBlocks && viewer.getInstance() == world.instance();
