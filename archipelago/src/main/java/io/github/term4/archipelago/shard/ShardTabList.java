@@ -5,6 +5,7 @@ import net.minestom.server.MinecraftServer;
 import net.minestom.server.entity.GameMode;
 import net.minestom.server.entity.Player;
 import net.minestom.server.entity.PlayerSkin;
+import net.minestom.server.event.player.PlayerDisconnectEvent;
 import net.minestom.server.event.player.PlayerPacketOutEvent;
 import net.minestom.server.event.player.PlayerSpawnEvent;
 import net.minestom.server.network.packet.server.play.PlayerInfoRemovePacket;
@@ -62,14 +63,26 @@ public final class ShardTabList {
 
     private static final java.util.concurrent.CopyOnWriteArrayList<TabRule> RULES =
             new java.util.concurrent.CopyOnWriteArrayList<>();
-    /** Who gets the 1.8 {@link #SORT_NAME} treatment; the app wires its client tracker in. Default: nobody, so an
-     *  unwired server behaves exactly as it did. An UNKNOWN protocol must read as MODERN here - guessing legacy
-     *  would draw raw section codes on a modern client, while guessing modern only mis-sorts until the resync. */
-    private static volatile java.util.function.Predicate<Player> legacyViewers = player -> false;
 
-    public static void legacyViewers(@NotNull java.util.function.Predicate<Player> predicate) {
-        legacyViewers = predicate;
+    /** The last protocol drawing the {@link #SORT_NAME} wire (1.8.9); anything older rides it too. */
+    private static final int PROTOCOL_1_8 = 47;
+
+    private static volatile java.util.function.ToIntFunction<Player> protocolSource;
+    // modern: a wrong LEGACY guess draws raw section codes on a modern client, a wrong modern one only
+    // mis-sorts until the next resync
+    private static volatile int unknownProtocol = MinecraftServer.PROTOCOL_VERSION;
+
+    /** Where a viewer's protocol number comes from; negative = not known yet (the proxy handshake lands after
+     *  login). Unset: every viewer reads as {@link #protocolWhenUnknown}. */
+    public static void viewerProtocol(@NotNull java.util.function.ToIntFunction<Player> source) {
+        protocolSource = source;
     }
+
+    /** What a viewer reads as while their own protocol is unknown; the server's own build (modern) by default. */
+    public static void protocolWhenUnknown(int protocol) {
+        unknownProtocol = protocol;
+    }
+
     private static volatile boolean installed;
 
     private ShardTabList() {}
@@ -120,6 +133,8 @@ public final class ShardTabList {
         events.addListener(PlayerSpawnEvent.class, e -> {
             if (!e.isFirstSpawn()) resync(e.getPlayer());
         });
+        // without this the diagnostic buffer keeps one entry per player the server has EVER seen
+        events.addListener(PlayerDisconnectEvent.class, e -> SENT.remove(e.getPlayer().getUuid()));
         // covers join/leave/spectate, and fires BEFORE the viewable rules - the spawns those send are only
         // rendered when the client already has the info entry (see the hook's doc)
         ShardView.viewChangeHook = ShardTabList::resync;
@@ -138,6 +153,7 @@ public final class ShardTabList {
     // recorded only for a packet that passes through to the client (a cancelled original never arrives). Latency
     // pings are skipped: they would drown the buffer and cannot touch a name, color or mode
     private static void record(Player viewer, PlayerInfoUpdatePacket info) {
+        if (!viewer.isOnline()) return; // a queued write draining after the disconnect eviction would re-add the entry
         var actions = info.actions();
         if (!actions.contains(PlayerInfoUpdatePacket.Action.ADD_PLAYER)
                 && !actions.contains(PlayerInfoUpdatePacket.Action.UPDATE_DISPLAY_NAME)
@@ -274,7 +290,9 @@ public final class ShardTabList {
 
     // the sort name is a 1.8 device: a modern client renders its section codes literally and sorts on listOrder
     private static boolean legacy(Player viewer) {
-        return legacyViewers.test(viewer);
+        java.util.function.ToIntFunction<Player> source = protocolSource;
+        int protocol = source == null ? -1 : source.applyAsInt(viewer);
+        return (protocol < 0 ? unknownProtocol : protocol) <= PROTOCOL_1_8;
     }
 
     /**

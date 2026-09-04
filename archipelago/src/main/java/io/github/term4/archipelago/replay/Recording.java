@@ -51,8 +51,8 @@ import java.util.function.Predicate;
 /**
  * One recording session: the t0 snapshot is taken immediately, dispatchers fill the channels until
  * {@link #stop()} returns the file. Entities are not part of the snapshot - every one (t0 included) rides the
- * spawn channel as a visual snapshot. The session auto-ends when its shard is
- * destroyed (fail-stop included) - the stop event fires, and {@link #stop()} still hands over the footage.
+ * spawn channel as a visual snapshot. The session auto-ends when its shard is destroyed (fail-stop included)
+ * or its {@link Budget} runs out - the stop event fires, and {@link #stop()} still hands over the footage.
  */
 public final class Recording {
 
@@ -83,6 +83,9 @@ public final class Recording {
     private volatile long tick;
     private volatile int keyframeInterval;
     private volatile boolean understructure = true;
+    private volatile Budget budget = defaultBudget;
+    private final AtomicInteger opCount = new AtomicInteger();
+    private volatile boolean truncated;
     private final AtomicBoolean active = new AtomicBoolean(true);
     private boolean loggedError;
 
@@ -111,6 +114,13 @@ public final class Recording {
     }
 
     private void sample() {
+        // a stop lands mid-tick with this hook still in flight: sampling on would re-enter stop()ped dispatchers
+        if (!active.get()) return;
+        long cap = budget.ticks();
+        if (cap > 0 && tick >= cap) {
+            truncate(cap + " ticks");
+            return;
+        }
         tick++;
         List<Shard> layers = new ArrayList<>();
         collectLayers(shard, layers);
@@ -243,6 +253,11 @@ public final class Recording {
 
     private <T> void emitAt(Recordable<T> channel, T op, long atTick) {
         if (!active.get()) return;
+        int cap = budget.ops();
+        if (cap > 0 && opCount.incrementAndGet() > cap) {
+            truncate(cap + " ops");
+            return;
+        }
         ops.computeIfAbsent(channel, c -> new ConcurrentLinkedQueue<>()).add(new Recorded<>(atTick, op));
     }
 
@@ -258,6 +273,7 @@ public final class Recording {
         int layer = layerOf(entity);
         long at = tick;
         onOwner(() -> {
+            if (!active.get()) return; // the hop is a tick wide: a stopped recording must not re-track
             int seq = nextSeq.getAndIncrement();
             tracked.put(entity, new Track(seq, at));
             emitAt(Channels.SPAWNS, new Channels.Spawn(layer, pos.x(), pos.y(), pos.z(), pos.yaw(), pos.pitch(),
@@ -291,6 +307,51 @@ public final class Recording {
     public void blockCovered(@NotNull Point pos, @NotNull Block before) {
         if (!active.get() || !understructure) return;
         covered.putIfAbsent(new Vec(pos.blockX(), pos.blockY(), pos.blockZ()), Nbt.blockString(before));
+    }
+
+    /**
+     * What a recording may spend before it stops itself and reads {@link #truncated()}: {@code ops} bounds the
+     * op log's memory, {@code ticks} bounds a recording nobody stopped by wall time. {@code <= 0} = no cap.
+     * The defaults sit far above any real game - this is the runaway brake, not a target.
+     */
+    public record Budget(int ops, long ticks) {
+        /** 8M ops (~1GB of log at worst) or 2h at the server rate. */
+        public static final Budget DEFAULT = new Budget(8_000_000, 144_000);
+    }
+
+    private static volatile Budget defaultBudget = Budget.DEFAULT;
+
+    /** The {@link Budget} every NEW recording starts on. */
+    public static void defaultBudget(@NotNull Budget budget) {
+        defaultBudget = budget;
+    }
+
+    public static @NotNull Budget defaultBudget() {
+        return defaultBudget;
+    }
+
+    /** This recording's own {@link Budget}, overriding {@link #defaultBudget()}. */
+    public @NotNull Recording budget(@NotNull Budget budget) {
+        this.budget = budget;
+        return this;
+    }
+
+    public @NotNull Budget budget() {
+        return budget;
+    }
+
+    /** Whether the {@link Budget} ended this recording early - the footage stops mid-game. */
+    public boolean truncated() {
+        return truncated;
+    }
+
+    // the runaway brake: an unattended recording on a busy shard grows until the JVM dies
+    private void truncate(String spent) {
+        if (!active.get()) return;
+        truncated = true;
+        LOGGER.warn("replay recording@{} spent its budget ({}) at tick {} - stopped, footage truncated",
+                Integer.toHexString(System.identityHashCode(this)), spent, tick);
+        endRecording();
     }
 
     /**
@@ -372,10 +433,24 @@ public final class Recording {
         return stopAsync(null);
     }
 
-    /** {@link #stop(Consumer)}, encoded off-thread. */
+    /**
+     * {@link #stop(Consumer)} with only the encode off-thread: the recording ends and {@code userData} is
+     * collected on the CALLING thread, so a teardown can drop the future without losing the stop or reading
+     * game state off a pool thread. The future completes with the file bytes - nothing is written to disk.
+     */
     public @NotNull CompletableFuture<byte[]> stopAsync(@Nullable Consumer<UserData.Writer> userData) {
         endRecording();
-        return CompletableFuture.supplyAsync(() -> encodeFile(userData));
+        UserData.Writer collected = new UserData.Writer();
+        if (userData != null) userData.accept(collected);
+        CompoundBinaryTag entries = collected.build();
+        CompletableFuture<byte[]> encoded = CompletableFuture.supplyAsync(() ->
+                encodeFile(entries.size() == 0 ? null : data -> data.put(entries)));
+        encoded.exceptionally(e -> { // a dropped future would swallow the loss of a whole game's footage
+            LOGGER.warn("replay recording@{} failed to encode",
+                    Integer.toHexString(System.identityHashCode(this)), e);
+            return null;
+        });
+        return encoded;
     }
 
     private void endRecording() {

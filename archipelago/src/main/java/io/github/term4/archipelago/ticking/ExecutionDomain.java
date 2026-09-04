@@ -67,6 +67,18 @@ public final class ExecutionDomain {
         return engine;
     }
 
+    /**
+     * Ends the whole engine, for the app's JVM shutdown hook: the watchdog stops, every clock ends after its
+     * current cycle, and this waits (bounded, ~2s total) for those cycles to land. Idempotent, throws nothing,
+     * no-op when no domain was ever created, and safe from any thread. Attached entities are NOT handed back
+     * to server ticking - {@link #retire} the domains first if that matters. A {@link #create} afterwards
+     * yields a CLOCKLESS domain: hooks never fire and {@link #execute}/{@link #relay} run inline.
+     */
+    public static void shutdown() {
+        DomainManager engine = engineManager;
+        if (engine != null) engine.shutdown();
+    }
+
     /** Engine watchdog thresholds (defaults 5s interrupt, 15s fail-stop); call before the first {@link #create}. */
     public static void watchdog(long interruptAfterMs, long quarantineAfterMs) {
         synchronized (ENGINE_LOCK) {

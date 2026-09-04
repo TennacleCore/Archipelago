@@ -494,4 +494,19 @@ class DomainManagerTest {
             domains.shutdown();
         }
     }
+
+    /** The JVM-shutdown contract: the clocks land their final cycle before it returns, and a second call is a no-op. */
+    @Test
+    void shutdownWaitsForTheClocksAndRepeats() {
+        DomainManager domains = new DomainManager();
+        Domain d = domains.create();
+        Thread clock = domains.clocks.get(d).thread();
+        await("the clock is running", () -> d.ticks() >= 1);
+
+        domains.shutdown();
+        assertFalse(clock.isAlive(), "shutdown returned before the clock finished");
+        assertFalse(d.live());
+        domains.shutdown(); // idempotent: nothing left to stop, nothing thrown
+        new DomainManager().shutdown(); // and an engine that never granted a clock
+    }
 }

@@ -2,11 +2,13 @@ package io.github.term4.archipelago.shard;
 
 import io.github.term4.archipelago.testsupport.FakePlayer;
 import io.github.term4.archipelago.testsupport.HeadlessServerTest;
+import net.minestom.server.MinecraftServer;
 import net.minestom.server.coordinate.Pos;
 import net.minestom.server.network.packet.server.play.PlayerInfoRemovePacket;
 import net.minestom.server.network.packet.server.play.PlayerInfoUpdatePacket;
 import org.junit.jupiter.api.Test;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -120,6 +122,58 @@ class ShardTabListTest extends HeadlessServerTest {
             spectator.player.remove();
         }
     }
+    /**
+     * The library decides "legacy?" itself: a viewer whose protocol nobody reported reads as the server's own
+     * build, and the app can move that fallback without a per-viewer source.
+     */
+    @Test
+    void anUnknownProtocolReadsAsTheServersOwnBuild() {
+        instance.loadChunk(0, 0).join();
+        ShardTabList.install();
+        FakePlayer viewer = FakePlayer.connect(instance, new Pos(6.5, 42, 0.5), "TabProto");
+        String sort = "§a" + viewer.player.getUsername();
+        try {
+            viewer.player.setTag(ShardTabList.SORT_NAME, sort);
+            assertEquals(viewer.player.getUsername(), listedName(viewer), "no source wired: modern");
+
+            ShardTabList.viewerProtocol(p -> -1); // the proxy handshake has not landed yet
+            assertEquals(viewer.player.getUsername(), listedName(viewer), "unknown still reads modern");
+
+            ShardTabList.protocolWhenUnknown(47);
+            assertEquals(sort, listedName(viewer), "the app moves the fallback for a legacy-only server");
+
+            ShardTabList.protocolWhenUnknown(MinecraftServer.PROTOCOL_VERSION);
+            ShardTabList.viewerProtocol(p -> 47);
+            assertEquals(sort, listedName(viewer), "a known 1.8 viewer sorts under the sort name");
+        } finally {
+            ShardTabList.viewerProtocol(p -> -1);
+            ShardTabList.protocolWhenUnknown(MinecraftServer.PROTOCOL_VERSION);
+            viewer.player.remove();
+        }
+    }
+
+    /** The /tablog buffer is per-viewer: it must not outlive the connection that fed it. */
+    @Test
+    void theTabPacketLogDiesWithTheConnection() {
+        instance.loadChunk(0, 0).join();
+        ShardTabList.install();
+        FakePlayer viewer = FakePlayer.connect(instance, new Pos(8.5, 42, 0.5), "TabLog");
+        ShardTabList.resync(viewer.player);
+        assertFalse(ShardTabList.history(viewer.player).isEmpty(), "tab packets are logged while online");
+        viewer.player.remove();
+        assertTrue(ShardTabList.history(viewer.player).isEmpty(), "and the buffer goes with the disconnect");
+    }
+
+    // the viewer's own row as it goes out to them: the name a 1.8 client would sort under
+    private static String listedName(FakePlayer viewer) {
+        viewer.sent.clear();
+        ShardTabList.resync(viewer.player);
+        return viewer.sent(PlayerInfoUpdatePacket.class).stream()
+                .flatMap(p -> p.entries().stream())
+                .filter(e -> e.uuid().equals(viewer.player.getUuid()))
+                .reduce((a, b) -> b).orElseThrow().username();
+    }
+
     /** The modern-client spawn contract: a player spawn without an already-received info entry is DROPPED. */
     private static void assertAddBeforeSpawn(FakePlayer viewer, net.minestom.server.entity.Player subject) {
         var list = java.util.List.copyOf(viewer.sent);

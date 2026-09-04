@@ -9,8 +9,10 @@ import io.github.term4.archipelago.storage.DataKey;
 import io.github.term4.archipelago.storage.ShardFile;
 import io.github.term4.archipelago.storage.UserData;
 import net.kyori.adventure.nbt.CompoundBinaryTag;
+import net.minestom.server.MinecraftServer;
 import net.minestom.server.codec.Codec;
 import net.minestom.server.codec.StructCodec;
+import net.minestom.server.entity.Player;
 import net.minestom.server.event.EventDispatcher;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -21,6 +23,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
+import java.util.function.ToIntFunction;
 
 /**
  * Replays over shards: one {@code .shard} file = the t0 snapshot (blocks + sky) plus a channel-per-recordable
@@ -56,16 +59,29 @@ public final class Replay {
         DISPATCHERS.add(factory);
     }
 
-    // default: nobody - a pure-modern server needs no wiring
-    private static volatile java.util.function.Predicate<net.minestom.server.entity.Player> LEGACY = p -> false;
+    /** The last protocol on the legacy twin wire (1.8.9); anything older rides it too. */
+    private static final int PROTOCOL_1_8 = 47;
 
-    /** Registers which viewers render the legacy (1.8-line) wire - see docs/replay-bridge.md. */
-    public static void legacyViewers(@NotNull java.util.function.Predicate<net.minestom.server.entity.Player> viewers) {
-        LEGACY = viewers;
+    private static volatile ToIntFunction<Player> protocolSource;
+    // modern: the legacy wire's absolute anchors and hold pins are wasted bytes on a modern client
+    private static volatile int unknownProtocol = MinecraftServer.PROTOCOL_VERSION;
+
+    /** Where a viewer's protocol number comes from; negative = not known yet (the proxy handshake lands after
+     *  login). Unset: every viewer reads as {@link #protocolWhenUnknown}. */
+    public static void viewerProtocol(@NotNull ToIntFunction<Player> source) {
+        protocolSource = source;
     }
 
-    public static boolean legacyViewer(@NotNull net.minestom.server.entity.Player viewer) {
-        return LEGACY.test(viewer);
+    /** What a viewer reads as while their own protocol is unknown; the server's own build (modern) by default. */
+    public static void protocolWhenUnknown(int protocol) {
+        unknownProtocol = protocol;
+    }
+
+    /** Whether {@code viewer} renders the legacy (1.8-line) twin wire - see docs/replay-bridge.md. */
+    public static boolean legacyViewer(@NotNull Player viewer) {
+        ToIntFunction<Player> source = protocolSource;
+        int protocol = source == null ? -1 : source.applyAsInt(viewer);
+        return (protocol < 0 ? unknownProtocol : protocol) <= PROTOCOL_1_8;
     }
 
     /** Starts recording {@code shard} and its whole layer tree (multiple concurrent recordings are fine). */

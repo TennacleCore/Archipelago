@@ -8,6 +8,8 @@ import org.jetbrains.annotations.NotNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -197,14 +199,45 @@ final class DomainManager {
         register(entity);
     }
 
-    /** Ends the engine: watchdog and clocks stop (domain entities are NOT re-registered; detach first). */
+    /** Total wait {@link #shutdown()} gives the clocks to land their final cycle. */
+    static final long SHUTDOWN_WAIT_MILLIS = 2_000;
+
+    /** {@link #shutdown(long)} on the {@link #SHUTDOWN_WAIT_MILLIS} budget. */
     void shutdown() {
+        shutdown(SHUTDOWN_WAIT_MILLIS);
+    }
+
+    /**
+     * Ends the engine: the watchdog stops, every clock ends after its current cycle, and this waits up to
+     * {@code waitMillis} in TOTAL for those cycles to land - a JVM shutdown hook that returned early would
+     * leave virtual threads to be killed mid-tick. Idempotent, throws nothing, and safe from any thread (a
+     * clock thread never joins itself). Domain entities are NOT re-registered; detach first.
+     */
+    void shutdown(long waitMillis) {
         running = false;
         watchdog.wake();
+        List<DomainClock> stopped = new ArrayList<>();
         synchronized (clockLock) {
             for (Domain domain : List.copyOf(clocks.keySet())) {
                 DomainClock clock = clocks.remove(domain);
-                if (clock != null) clock.stop(null);
+                if (clock != null) {
+                    clock.stop(null);
+                    stopped.add(clock);
+                }
+            }
+        }
+        long deadline = System.nanoTime() + waitMillis * 1_000_000L;
+        for (DomainClock clock : stopped) {
+            Thread thread = clock.thread();
+            if (thread == Thread.currentThread()) continue;
+            try {
+                if (!thread.join(Duration.ofNanos(Math.max(0, deadline - System.nanoTime())))) {
+                    // a tick hung past the budget: the watchdog is already down, so nobody else will say it
+                    LOGGER.warn("{} still inside its final tick - abandoning it", thread.getName());
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
             }
         }
     }

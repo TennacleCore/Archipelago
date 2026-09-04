@@ -20,6 +20,12 @@ public final class UserData {
             return this;
         }
 
+        /** Merges an already-built section (its keys win) - collect on one thread, encode on another. */
+        public @NotNull Writer put(@NotNull CompoundBinaryTag section) {
+            tags.put(section);
+            return this;
+        }
+
         public @NotNull CompoundBinaryTag build() {
             return tags.build();
         }

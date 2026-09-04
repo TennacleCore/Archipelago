@@ -1087,4 +1087,42 @@ class ReplayTest {
             MinecraftServer.getGlobalEventHandler().removeChild(probe);
         }
     }
+
+    /** The runaway brake: an op budget stops the recording, marks it truncated, and never appends again. */
+    @Test
+    void theOpBudgetStopsARunawayRecording() {
+        Shard stage = new Shard(instance);
+        Recording rec = Replay.record(stage).budget(new Recording.Budget(4, 0));
+        try {
+            for (int y = 70; y < 80; y++) stage.setBlock(new Vec(1, y, 1), Block.GOLD_BLOCK);
+            assertTrue(rec.truncated(), "the budget ended it");
+            assertFalse(rec.active(), "and it stopped recording");
+            assertEquals(4, recordedOps(rec), "the budget is the exact op ceiling");
+            stage.setBlock(new Vec(1, 90, 1), Block.GOLD_BLOCK);
+            assertEquals(4, recordedOps(rec), "a stopped recording never resumes appending");
+        } finally {
+            rec.stop();
+        }
+    }
+
+    /** A recording nobody stopped is bounded by wall time too, whatever its op density. */
+    @Test
+    void theTickBudgetStopsAForgottenRecording() {
+        Shard stage = new Shard(instance);
+        Recording rec = Replay.record(stage).budget(new Recording.Budget(0, 2));
+        try {
+            tick();
+            tick();
+            assertTrue(rec.active(), "still inside the budget");
+            tick();
+            assertTrue(rec.truncated());
+            assertEquals(2, rec.tick(), "the footage ends on the budgeted tick");
+        } finally {
+            rec.stop();
+        }
+    }
+
+    private static int recordedOps(Recording rec) {
+        return rec.counts().values().stream().mapToInt(Integer::intValue).sum();
+    }
 }
