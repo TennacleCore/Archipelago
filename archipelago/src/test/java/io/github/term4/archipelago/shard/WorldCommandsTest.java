@@ -1,5 +1,6 @@
-package io.github.term4.archipelago.world;
+package io.github.term4.archipelago.shard;
 
+import io.github.term4.archipelago.shard.WorldCommands;
 import io.github.term4.archipelago.shard.Shard;
 import io.github.term4.archipelago.testsupport.FakePlayer;
 import io.github.term4.archipelago.testsupport.HeadlessServerTest;

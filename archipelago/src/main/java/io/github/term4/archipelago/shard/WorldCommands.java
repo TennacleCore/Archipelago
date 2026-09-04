@@ -1,4 +1,4 @@
-package io.github.term4.archipelago.world;
+package io.github.term4.archipelago.shard;
 
 import io.github.term4.polyp.world.MechanicsWorld;
 import io.github.term4.archipelago.event.ShardJoinEvent;
