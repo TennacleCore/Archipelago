@@ -128,6 +128,44 @@ class ReplaySlowMotionTest extends HeadlessServerTest {
         }
     }
 
+    /** A seek lands the ghost absolutely; the leg it was on must not pull it back afterward. */
+    @Test
+    void aSeekDropsTheLegInFlight() {
+        loadArea(2200, 0);
+        CoreChannels.register();
+        Shard live = new Shard(instance);
+        FakePlayer actor = FakePlayer.connect(instance, new Pos(35200.5, 42, 0.5), "SeekActor");
+        Playback pb = null;
+        try {
+            live.join(actor.player);
+            Recording rec = Replay.record(live);
+            for (int i = 0; i < 30; i++) {
+                actor.player.teleport(new Pos(35200.5 + i, 42, 0.5));
+                tick();
+            }
+            rec.stop();
+            live.leave(actor.player);
+
+            Shard theater = new Shard(instance);
+            pb = Replay.play(theater, rec);
+            pb.rate(8);
+            Ghost ghost = null;
+            for (int i = 0; i < 100 && ghost == null; i++) {
+                tick();
+                ghost = pb.ghost("SeekActor");
+            }
+            assertNotNull(ghost, "the ghost rose");
+            for (int i = 0; i < 100 && pb.tick() < 8; i++) tick(); // a leg toward the walk's early blocks
+            pb.seek(28);
+            tick();
+            tick();
+            assertTrue(ghost.getPosition().x() >= 35200.5 + 26, "the ghost stays where the seek put it: " + ghost.getPosition().x());
+        } finally {
+            if (pb != null && pb.active()) pb.halt();
+            actor.player.remove();
+        }
+    }
+
     /** At eight times, the op that ends a walk lands even when it falls inside a theater tick's window. */
     @Test
     void aStopLandsAtEightTimes() {

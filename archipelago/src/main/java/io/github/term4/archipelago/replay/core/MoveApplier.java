@@ -42,6 +42,7 @@ final class MoveApplier implements Applier<Channels.Move> {
             ghost.grounded(m.ground());
             Pin previous = lastMove.put(m.player(), new Pin(pos, pb.tick()));
             if (pb.paused() || op.tick() != pb.tick()) { // a fold/seek lands absolutely, at its cursor
+                glides.remove(m.player()); // a leg built before the jump would land the ghost back where it was headed
                 if (pb.paused()) ghost.teleport(pos);
                 else Tracks.wireMove(ghost, pos);
                 ghost.sendPacketToViewers(new EntityHeadLookPacket(ghost.getEntityId(), m.yaw()));
