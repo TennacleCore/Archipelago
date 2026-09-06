@@ -126,6 +126,48 @@ class ReplaySlowMotionTest extends HeadlessServerTest {
         }
     }
 
+    /** Moves record on change: a jump after a long stand-still is one tick's move, not a crawl over the wait. */
+    @Test
+    void aJumpAfterStandingStillLandsAtOnce() {
+        loadArea(1200, 0);
+        CoreChannels.register();
+        Shard live = new Shard(instance);
+        FakePlayer actor = FakePlayer.connect(instance, new Pos(19200.5, 42, 0.5), "StillActor");
+        Playback pb = null;
+        try {
+            live.join(actor.player);
+            Recording rec = Replay.record(live);
+            for (int i = 0; i < 40; i++) tick(); // caged, then the reset
+            actor.player.teleport(new Pos(19220.5, 42, 0.5));
+            for (int i = 0; i < 10; i++) tick();
+            rec.stop();
+            live.leave(actor.player);
+
+            Shard theater = new Shard(instance);
+            pb = Replay.play(theater, rec);
+            Ghost ghost = null;
+            for (int i = 0; i < 100 && ghost == null; i++) {
+                tick();
+                ghost = pb.ghost("StillActor");
+            }
+            assertNotNull(ghost, "the ghost rose");
+            for (int i = 0; i < 20 && ghost.getInstance() == null; i++) tick();
+
+            int left = -1, arrived = -1;
+            for (int i = 0; i < 120 && arrived < 0; i++) {
+                tick();
+                double x = ghost.getPosition().x();
+                if (left < 0 && x > 19201.0) left = i;
+                if (x > 19219.5) arrived = i;
+            }
+            assertTrue(arrived >= 0, "the ghost reached the reset spot");
+            assertTrue(arrived - left <= 3, "the jump took " + (arrived - left) + " ticks");
+        } finally {
+            if (pb != null && pb.active()) pb.halt();
+            actor.player.remove();
+        }
+    }
+
     /** A revived PHYSICS twin parks at fractional rates: glide steps, never full-speed hops between corrections. */
     @Test
     void quarterRateParksThePhysicsTwin() {

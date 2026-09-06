@@ -17,8 +17,11 @@ final class Tracks {
     private Tracks() {}
 
     static Glide leg(@Nullable Pin previous, Pos fallback, Pos target, Playback pb) {
-        return leg(previous != null ? previous.pos() : fallback,
-                previous != null ? previous.tick() : pb.tick() - 1, target, pb.tick(), pb.rate());
+        long from = previous != null ? previous.tick() : pb.tick() - 1;
+        // moves record on change: a gap past the dilation cadence is a stand-still, and the move after it is one
+        // tick's (a cage reset paced over the whole wait crawled across the map)
+        if (Math.abs(pb.tick() - from) > BRIDGE_TICKS) from = pb.tick() - 1; // tick distance is direction-agnostic
+        return leg(previous != null ? previous.pos() : fallback, from, target, pb.tick(), pb.rate());
     }
 
     /** The leg from {@code from}@{@code fromTick} to {@code target}@{@code toTick} at {@code rate};
