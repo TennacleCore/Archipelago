@@ -169,12 +169,27 @@ public final class ShardView {
         if (blocks != null) blocks.observers.add(player);
         for (Shard s : entityShards.keySet()) s.observers.add(player);
         if (allEntities) ALL_SEEING.add(player);
+        Shard clock = clock();
+        if (clock != null) clock.adoptObserver(player);
     }
 
     private void unregister(Player player) {
+        Shard clock = clock(); // read before the removals: the release asks this view where they stood
         if (blocks != null) blocks.observers.remove(player);
         for (Shard s : entityShards.keySet()) s.observers.remove(player);
         ALL_SEEING.remove(player);
+        if (clock != null) clock.releaseObserver(player);
+    }
+
+    // the shard an observer of this view rides the clock of: the one whose blocks they stand in. An all-seeing
+    // view spans every shard and so belongs to no single clock
+    private @Nullable Shard clock() {
+        return allEntities ? null : blocks;
+    }
+
+    /** Whether an observer of {@code shard} rides ITS clock, rather than watching it from another's. */
+    static boolean ticksOn(@NotNull Player player, @NotNull Shard shard) {
+        return of(player).clock() == shard;
     }
 
     /** A feature's per-player hook on any view/binding change (the tab-list scoper re-syncs here). Fires

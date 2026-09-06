@@ -52,8 +52,8 @@ public final class ShardManager {
         }
     }
 
-    // the shards stay frozen on the dead clock; only member players hand back to server ticking, since
-    // their connections must keep living
+    // the shards stay frozen on the dead clock; only the players hand back to server ticking, members and
+    // watchers alike, since their connections must keep living
     private static void onQuarantine(DomainQuarantineEvent e) {
         List<ShardManager> live;
         synchronized (ShardManager.class) {
@@ -65,6 +65,9 @@ public final class ShardManager {
                 if (domain == null || !domain.sharesClock(e.domain())) continue;
                 for (Player p : shard.members()) {
                     if (ExecutionDomain.of(p) != null) ExecutionDomain.detach(p);
+                }
+                for (Player o : shard.observers()) {
+                    if (ShardView.ticksOn(o, shard) && ExecutionDomain.of(o) != null) ExecutionDomain.detach(o);
                 }
             }
         }

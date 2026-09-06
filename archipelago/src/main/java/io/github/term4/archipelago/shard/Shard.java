@@ -166,6 +166,7 @@ public final class Shard implements MechanicsWorld {
             }
         }
         for (Player p : members) adoptTicking(p);
+        for (Player o : observers) adoptObserver(o);
         for (Entity e : entities) adoptTicking(e);
         EventDispatcher.call(new ShardReclockEvent(this, old, target));
     }
@@ -652,6 +653,21 @@ public final class Shard implements MechanicsWorld {
         ExecutionDomain d = domain;
         if (d != null && !d.onThread()) d.execute(op);
         else op.run();
+    }
+
+    /**
+     * Ticks an observer of this shard on its clock, so a watcher runs with what they are watching rather than
+     * against the server thread. A member already rides the shard they belong to, and a viewer of this shard
+     * who stands in another rides that one, so both are left where they are.
+     */
+    void adoptObserver(@NotNull Player player) {
+        if (of(player) != null || !ShardView.ticksOn(player, this)) return;
+        adoptTicking(player);
+    }
+
+    /** Hands an observer back to server ticking; a member keeps the clock their own shard gave them. */
+    void releaseObserver(@NotNull Player player) {
+        if (of(player) == null && ExecutionDomain.of(player) != null) ExecutionDomain.detach(player);
     }
 
     // only opt-out-covered classes move to the domain; anything else would double-tick after a chunk crossing.
