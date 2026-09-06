@@ -190,6 +190,56 @@ class ReplayWireTest extends HeadlessServerTest {
         actor.player.setHeldItemSlot(to);
     }
 
+    /** An actor who walks out leaves the scene with them, and comes back when they do. */
+    @Test
+    void aDepartedActorLeavesTheScene() {
+        Shard live = new Shard(instance);
+        FakePlayer stays = FakePlayer.connect(instance, new Pos(9.5, 70, 9.5), "Stayer");
+        FakePlayer goes = FakePlayer.connect(instance, new Pos(11.5, 70, 9.5), "Leaver");
+        live.join(stays.player);
+        live.join(goes.player);
+        Recording rec = Replay.record(live);
+        byte[] file;
+        long together;
+        long alone;
+        long back;
+        try {
+            for (int i = 0; i < 3; i++) {
+                goes.player.teleport(new Pos(11.5 + i, 70, 9.5));
+                tick();
+            }
+            together = rec.tick();
+            live.leave(goes.player);
+            for (int i = 0; i < 3; i++) tick();
+            alone = rec.tick();
+            live.join(goes.player);
+            for (int i = 0; i < 4; i++) {
+                goes.player.teleport(new Pos(14.5 + i, 70, 9.5));
+                tick();
+            }
+            back = rec.tick();
+        } finally {
+            file = rec.stop();
+            stays.player.remove();
+            goes.player.remove();
+        }
+
+        Shard theater = new Shard(instance);
+        Playback pb = Replay.play(theater, file);
+        try {
+            pb.pause(true);
+            pb.seek(together);
+            assertNotNull(pb.ghost("Leaver"), "they were in it");
+            pb.seek(alone);
+            assertNull(pb.ghost("Leaver"), "and the scene lets them go when they leave");
+            assertNotNull(pb.ghost("Stayer"), "whoever stayed is still there");
+            pb.seek(back);
+            assertNotNull(pb.ghost("Leaver"), "back when they rejoined");
+        } finally {
+            pb.halt();
+        }
+    }
+
     /** The hand follows the held slot: a switch between two hotbar items reaches the ghost on its own tick. */
     @Test
     void aHeldSlotSwitchReachesTheGhost() {

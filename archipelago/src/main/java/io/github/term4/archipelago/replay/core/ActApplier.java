@@ -33,7 +33,7 @@ final class ActApplier implements Applier<Channels.Act> {
         Ghost ghost = pb.ghost(player);
         int kind = op.op().kind();
         if (ghost == null && kind != Channels.RESPAWN && kind != Channels.HIDDEN && kind != Channels.SHOWN
-                && kind != Channels.LAYER) return;
+                && kind != Channels.GONE && kind != Channels.LAYER) return;
         switch (kind) {
             case Channels.SWING_MAIN -> ghost.swingMainHand();
             case Channels.SWING_OFF -> ghost.swingOffHand();
@@ -56,6 +56,9 @@ final class ActApplier implements Applier<Channels.Act> {
                 pb.dropGhost(player);
             }
             case Channels.SHOWN -> pb.show(player); // next move op raises the ghost
+            // they walked out: the scene loses them, and nothing is held shut - their next move op, whenever
+            // they come back, raises them again
+            case Channels.GONE -> pb.dropGhost(player);
             case Channels.LAYER -> { // the recorded layer switch: visibility follows the layer, combat-continuous
                 pb.actorLayer(player, op.op().value());
                 Shard to = pb.layer(op.op().value());
@@ -93,6 +96,11 @@ final class ActApplier implements Applier<Channels.Act> {
             case Channels.HIDDEN -> pb.show(player);
             case Channels.SHOWN -> {
                 pb.hide(player);
+                pb.dropGhost(player);
+            }
+            // back before they left: whatever a later SHOWN shut stays open, and the reverse move op re-raises them
+            case Channels.GONE -> {
+                pb.show(player);
                 pb.dropGhost(player);
             }
             default -> {

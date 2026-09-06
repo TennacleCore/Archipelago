@@ -57,7 +57,10 @@ public final class Channels {
 
     public static final int SWING_MAIN = 0, SWING_OFF = 1, HURT = 2, SNEAK_ON = 3, SNEAK_OFF = 4,
             USE_ON = 5, USE_OFF = 6, ARROWS = 7, DEATH = 8, RESPAWN = 9, HIDDEN = 10, SHOWN = 11,
-            LAYER = 12; // value = the actor's layer id
+            LAYER = 12, // value = the actor's layer id
+            // the actor left the recording. Unlike HIDDEN it holds nothing shut: they emit no moves while gone,
+            // and a return raises them off its own move rather than waiting for an act the fold applies later
+            GONE = 13;
 
     // layers run first of all: they create the shards every layered op targets
     public static final Recordable<Layer> LAYERS = Recordable.of("replay:layer", 1, -40, StructCodec.struct(
@@ -137,7 +140,7 @@ public final class Channels {
                     case USE_ON, USE_OFF -> "use";
                     case ARROWS -> "arrows";
                     case DEATH, RESPAWN -> "life";
-                    case HIDDEN, SHOWN -> "visible";
+                    case HIDDEN, SHOWN, GONE -> "visible";
                     case LAYER -> "layer";
                     default -> null;
                 };

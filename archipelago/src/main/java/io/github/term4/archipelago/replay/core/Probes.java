@@ -113,7 +113,9 @@ final class Probes {
         private final Set<String> switched = ConcurrentHashMap.newKeySet();
 
         private final Map<String, Channels.Move> lastMove = new HashMap<>();
-        private final Map<String, ItemStack[]> lastEquip = new HashMap<>();
+        private final Map<String, ItemStack[]> lastEquip = new ConcurrentHashMap<>(); // the held-slot listener writes it too
+        private final Set<String> present = new HashSet<>();
+        private final Set<String> away = new HashSet<>();
         private final Map<String, Boolean> lastSneak = new HashMap<>();
         private final Map<String, Boolean> lastUse = new HashMap<>();
         private final Map<String, Integer> lastArrows = new HashMap<>();
@@ -158,14 +160,30 @@ final class Probes {
 
         @Override
         public void sample(@NotNull Recording rec) {
+            Set<String> here = new HashSet<>();
             for (Shard layer : rec.layers()) {
                 int layerId = rec.layer(layer);
-                for (Player m : layer.members()) sample(rec, m, layerId);
+                for (Player m : layer.members()) {
+                    here.add(m.getUsername());
+                    sample(rec, m, layerId);
+                }
             }
+            // nothing else reports an actor leaving the recording (a walk-out, a disconnect): unsaid, their
+            // ghost stands where they last stood for the rest of the replay
+            for (String name : present) {
+                if (here.contains(name)) continue;
+                rec.emit(Channels.ACTS, new Channels.Act(name, Channels.GONE, 0));
+                rec.refreshActor(name); // a return re-emits its whole state, not a diff against the departure
+                away.add(name);
+            }
+            present.clear();
+            present.addAll(here);
         }
 
         private void sample(Recording rec, Player m, int layerId) {
             String name = m.getUsername();
+            // back: this tick's move raises them, and the act supersedes the departure for a fold that lands here
+            if (away.remove(name)) rec.emit(Channels.ACTS, new Channels.Act(name, Channels.SHOWN, 0));
             Pos pos = m.getPosition();
             Channels.Move move = new Channels.Move(name, pos.x(), pos.y(), pos.z(),
                     pos.yaw(), pos.pitch(), m.isOnGround());
