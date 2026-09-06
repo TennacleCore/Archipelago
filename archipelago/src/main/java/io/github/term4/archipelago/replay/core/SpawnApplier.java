@@ -9,6 +9,8 @@ import io.github.term4.archipelago.replay.channel.Recorded;
 import net.minestom.server.coordinate.Pos;
 import net.minestom.server.entity.Entity;
 import net.minestom.server.entity.metadata.other.PrimedTntMeta;
+import net.minestom.server.collision.BoundingBox;
+import net.minestom.server.entity.Player;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -20,6 +22,12 @@ final class SpawnApplier implements Applier<Channels.Spawn> {
     // clients DISCARD a projectile whose wire owner they don't know yet: a shooter-owned spawn waits for
     // its ghost to be world-ready (ghost spawns are async), then gives up and spawns ownerless
     private static final long OWNER_WAIT_TICKS = 20;
+    // a client sims its own projectiles and stops ignoring the shooter after five of ITS ticks (1.8
+    // EntityArrow/EntityThrowable; a modern client until the thing has left the owner's box), then kills what is
+    // still inside them. A launch sits in the shooter for one TIMELINE tick, which a fractional rate stretches
+    // over many real ones - so the twin is re-sent while it is in there, which restarts that count client-side
+    private static final int LAUNCH_GUARD_TICKS = 4;
+    private static final double CLEARANCE = 0.3; // the grow the client's own intercept test uses
 
     private record Pending(Channels.Spawn spawn, long since, long notBefore) {}
 
@@ -91,6 +99,41 @@ final class SpawnApplier implements Applier<Channels.Spawn> {
             }
         }
         paceFuses(pb);
+        guardLaunches(pb);
+    }
+
+    private final Map<Integer, String> launched = new HashMap<>();
+    private final Map<Integer, Integer> launchAge = new HashMap<>();
+
+    // the twin re-sent to its viewers is a fresh projectile to them, its shooter grace counted from zero again
+    private void guardLaunches(Playback pb) {
+        launched.entrySet().removeIf(entry -> {
+            Entity e = pb.entity(entry.getKey());
+            if (e == null || e.isRemoved()) {
+                launchAge.remove(entry.getKey());
+                return true;
+            }
+            Ghost owner = pb.ghost(entry.getValue());
+            if (owner == null || !insideShooter(owner, e.getPosition())) {
+                launchAge.remove(entry.getKey());
+                return false; // out of them: it lives on its own until it lands back in there
+            }
+            if (launchAge.merge(entry.getKey(), 1, Integer::sum) % LAUNCH_GUARD_TICKS != 0) return false;
+            for (Player viewer : List.copyOf(e.getViewers())) {
+                e.removeViewer(viewer);
+                e.addViewer(viewer);
+            }
+            return false;
+        });
+    }
+
+    private static boolean insideShooter(Ghost owner, Pos at) {
+        if (owner.getInstance() == null) return false;
+        Pos body = owner.getPosition();
+        BoundingBox box = owner.getBoundingBox();
+        return Math.abs(at.x() - body.x()) <= box.width() / 2 + CLEARANCE
+                && at.y() >= body.y() - CLEARANCE && at.y() <= body.y() + box.height() + CLEARANCE
+                && Math.abs(at.z() - body.z()) <= box.depth() / 2 + CLEARANCE;
     }
 
     // the client counts a fuse in REAL ticks and DISCARDS the entity at zero (reads as an explosion no
@@ -103,6 +146,7 @@ final class SpawnApplier implements Applier<Channels.Spawn> {
             new LookBack<>(Channels.REMOVES, Channels.Remove::seq);
 
     private void noteFuse(Playback pb, Channels.Spawn spawn) {
+        if (!spawn.shooter().isEmpty()) launched.put(spawn.seq(), spawn.shooter());
         Entity e = pb.entity(spawn.seq());
         if (e == null || !(e.getEntityMeta() instanceof PrimedTntMeta)) return;
         List<Recorded<Channels.Remove>> gone = removes.all(pb, spawn.seq());

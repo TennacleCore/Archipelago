@@ -4,6 +4,7 @@ import io.github.term4.archipelago.replay.core.CoreChannels;
 import io.github.term4.archipelago.shard.Shard;
 import io.github.term4.archipelago.testsupport.FakePlayer;
 import io.github.term4.archipelago.testsupport.HeadlessServerTest;
+import io.github.term4.archipelago.replay.core.Channels;
 import net.minestom.server.coordinate.Pos;
 import net.minestom.server.network.ConnectionState;
 import net.minestom.server.network.packet.server.SendablePacket;
@@ -12,12 +13,16 @@ import net.minestom.server.network.packet.server.play.EntityPositionPacket;
 import net.minestom.server.network.packet.server.play.EntityPositionSyncPacket;
 import net.minestom.server.network.packet.server.play.EntityTeleportPacket;
 import net.minestom.server.network.packet.server.play.EntityVelocityPacket;
+import net.kyori.adventure.nbt.CompoundBinaryTag;
+import net.minestom.server.entity.EntityType;
+import net.minestom.server.network.packet.server.play.SpawnEntityPacket;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertNull;
 
 /** Fractional rates render as MOTION, not sparser teleports: the ghost glides every theater tick. */
 class ReplaySlowMotionTest extends HeadlessServerTest {
@@ -163,6 +168,56 @@ class ReplaySlowMotionTest extends HeadlessServerTest {
         } finally {
             if (pb != null && pb.active()) pb.halt();
             actor.player.remove();
+        }
+    }
+
+    /** A launch a fractional rate holds inside its shooter is re-sent: a client kills its own projectile there. */
+    @Test
+    void aHeldLaunchIsResentInsideItsShooter() {
+        loadArea(2300, 0);
+        CoreChannels.register();
+        Shard live = new Shard(instance);
+        FakePlayer actor = FakePlayer.connect(instance, new Pos(36800.5, 42, 0.5), "ShotActor");
+        FakePlayer watcher = null;
+        Playback pb = null;
+        try {
+            live.join(actor.player);
+            Recording rec = Replay.record(live);
+            CompoundBinaryTag visual = Visuals.snapshot(new net.minestom.server.entity.Entity(EntityType.ARROW));
+            for (int i = 0; i < 14; i++) {
+                actor.player.teleport(new Pos(36800.5, 42, 0.5 + i * 0.01)); // a still shooter still samples
+                tick();
+                if (i == 3) { // the sampler's first sighting: the spawn and a move, same tick, same spot
+                    rec.emit(Channels.SPAWNS, new Channels.Spawn(0, 36800.5, 43.0, 0.5, 0, 0, 7, visual, "ShotActor"));
+                    rec.emit(Channels.ENTITY_MOVES, new Channels.EntityMove(7, 36800.5, 43.0, 0.5, 0, 0));
+                } else if (i > 3) { // a short draw: it crawls out of the body over several ticks
+                    rec.emit(Channels.ENTITY_MOVES, new Channels.EntityMove(7, 36800.5 + (i - 3) * 0.15, 43.0, 0.5, 0, 0));
+                }
+            }
+            rec.stop();
+            live.leave(actor.player);
+
+            Shard theater = new Shard(instance);
+            watcher = FakePlayer.connect(instance, new Pos(36810.5, 42, 0.5), "ShotWatcher");
+            theater.join(watcher.player);
+            pb = Replay.play(theater, rec);
+            pb.rate(0.25);
+            net.minestom.server.entity.Entity twin = null;
+            for (int i = 0; i < 200 && twin == null; i++) {
+                tick();
+                twin = pb.entity(7);
+            }
+            assertNotNull(twin, "the launch rises at the bow, as it does at any rate");
+            for (int i = 0; i < 30 && twin.getInstance() == null; i++) tick();
+            int id = twin.getEntityId();
+            watcher.sent.clear();
+            for (int i = 0; i < 16; i++) tick(); // still inside the shooter at a quarter rate
+            long spawns = watcher.sent(SpawnEntityPacket.class).stream().filter(p -> p.entityId() == id).count();
+            assertTrue(spawns >= 2, "re-sent while it sits in the shooter, so no client eats it: " + spawns);
+        } finally {
+            if (pb != null && pb.active()) pb.halt();
+            actor.player.remove();
+            if (watcher != null) watcher.player.remove();
         }
     }
 
