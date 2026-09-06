@@ -10,6 +10,8 @@ import net.minestom.server.network.packet.server.SendablePacket;
 import net.minestom.server.network.packet.server.play.EntityEquipmentPacket;
 import net.minestom.server.network.packet.server.play.PlayerInfoRemovePacket;
 import net.minestom.server.network.packet.server.play.PlayerInfoUpdatePacket;
+import net.minestom.server.network.packet.server.play.EntityEffectPacket;
+import net.minestom.server.potion.TimedPotion;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -50,6 +52,12 @@ public final class Ghost extends DomainLivingEntity {
     public void updateNewViewer(@NotNull Player player) {
         player.sendPacket(info);
         super.updateNewViewer(player);
+        // an effect packet reaches only the viewers standing there when the effect lands, and a client times a
+        // swing off the swinger's own haste/fatigue: a viewer who arrives after (a ghost re-raised by a seek,
+        // a watcher who just landed) would see the rate's pacing swing bare
+        for (TimedPotion timed : getActiveEffects()) {
+            player.sendPacket(new EntityEffectPacket(getEntityId(), timed.potion()));
+        }
     }
 
     @Override

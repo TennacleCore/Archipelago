@@ -16,6 +16,7 @@ import net.minestom.server.network.packet.server.play.EntityVelocityPacket;
 import net.kyori.adventure.nbt.CompoundBinaryTag;
 import net.minestom.server.entity.EntityType;
 import net.minestom.server.network.packet.server.play.SpawnEntityPacket;
+import net.minestom.server.network.packet.server.play.EntityEffectPacket;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -289,6 +290,61 @@ class ReplaySlowMotionTest extends HeadlessServerTest {
         } finally {
             if (pb != null && pb.active()) pb.halt();
             actor.player.remove();
+        }
+    }
+
+    /** A seek re-raises the ghosts: the rate's swing pacing has to reach their new viewers too. */
+    @Test
+    void aSeekKeepsTheSwingPacing() {
+        loadArea(2400, 0);
+        CoreChannels.register();
+        Shard live = new Shard(instance);
+        FakePlayer actor = FakePlayer.connect(instance, new Pos(38400.5, 42, 0.5), "PaceActor");
+        FakePlayer watcher = null;
+        Playback pb = null;
+        try {
+            live.join(actor.player);
+            Recording rec = Replay.record(live);
+            for (int i = 0; i < 12; i++) {
+                actor.player.teleport(new Pos(38400.5 + i, 42, 0.5));
+                tick();
+            }
+            rec.stop();
+            live.leave(actor.player);
+
+            Shard theater = new Shard(instance);
+            watcher = FakePlayer.connect(instance, new Pos(38410.5, 42, 0.5), "PaceWatcher");
+            theater.join(watcher.player);
+            pb = Replay.play(theater, rec);
+            pb.rate(0.5);
+            Ghost ghost = null;
+            for (int i = 0; i < 100 && ghost == null; i++) {
+                tick();
+                ghost = pb.ghost("PaceActor");
+            }
+            assertNotNull(ghost, "the ghost rose");
+            for (int i = 0; i < 30 && ghost.getInstance() == null; i++) tick();
+            for (int i = 0; i < 100 && pb.tick() < 8; i++) tick(); // play on, so the seek really goes back
+            watcher.sent.clear();
+
+            pb.seek(2); // backward: the ghosts go and rise again
+            Ghost again = null;
+            for (int i = 0; i < 100 && (again == null || again.getInstance() == null); i++) {
+                tick();
+                again = pb.ghost("PaceActor");
+            }
+            assertNotNull(again, "and rose again");
+            for (int i = 0; i < 10; i++) tick(); // the tracker hands it its viewers a tick or two later
+            assertEquals(2, amplifier(again, net.minestom.server.potion.PotionEffect.MINING_FATIGUE),
+                    "half speed still paces it");
+            int id = again.getEntityId();
+            assertTrue(watcher.sent(EntityEffectPacket.class).stream().anyMatch(e -> e.entityId() == id
+                            && e.potion().effect() == net.minestom.server.potion.PotionEffect.MINING_FATIGUE),
+                    "and the watcher is told, so the swings keep the rate's time");
+        } finally {
+            if (pb != null && pb.active()) pb.halt();
+            actor.player.remove();
+            if (watcher != null) watcher.player.remove();
         }
     }
 
