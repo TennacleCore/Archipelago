@@ -103,14 +103,12 @@ public final class Playback {
                 skipped.add(id + " v" + version);
                 continue;
             }
-            if (channel.get("bin") != null && type.pack() == null) {
+            if ((channel.get("bin") != null || channel.get("parts") != null) && type.pack() == null) {
                 skipped.add(id + " v" + version + " (packed; no track codec)"); // never play a silently-empty channel
                 continue;
             }
             try {
-                channels.add(channel.get("bin") != null
-                        ? unpack(type, channel.getByteArray("bin"))
-                        : decode(type, channel.getList("ops", BinaryTagTypes.COMPOUND)));
+                channels.add(channel(type, ops(type, channel)));
             } catch (RuntimeException e) {
                 skipped.add(id + " v" + version + " (undecodable: " + e.getMessage() + ")");
             }
@@ -156,18 +154,22 @@ public final class Playback {
         shard.onOwner(op);
     }
 
-    private static <T> Channel<T> unpack(Recordable<T> type, byte[] blob) {
-        return new Channel<>(type, Objects.requireNonNull(type.pack()).decode(blob));
-    }
-
-    private static <T> Channel<T> decode(Recordable<T> type, ListBinaryTag ops) {
-        List<Recorded<T>> out = new ArrayList<>(ops.size());
-        for (BinaryTag tag : ops) {
-            CompoundBinaryTag entry = (CompoundBinaryTag) tag;
-            out.add(new Recorded<>(entry.getLong("t"),
-                    type.codec().decode(Transcoder.NBT, entry.get("op")).orElseThrow()));
+    /** A channel's ops as the file stores them: one packed blob, spooled packed parts in order, or per-op NBT. */
+    static <T> List<Recorded<?>> ops(Recordable<T> type, CompoundBinaryTag channel) {
+        List<Recorded<?>> out = new ArrayList<>();
+        if (channel.get("parts") instanceof ListBinaryTag parts) {
+            for (BinaryTag part : parts) out.addAll(Objects.requireNonNull(type.pack()).decode(((net.kyori.adventure.nbt.ByteArrayBinaryTag) part).value()));
+            return out;
         }
-        return new Channel<>(type, out);
+        if (channel.get("bin") != null) {
+            out.addAll(Objects.requireNonNull(type.pack()).decode(channel.getByteArray("bin")));
+            return out;
+        }
+        for (BinaryTag tag : channel.getList("ops", BinaryTagTypes.COMPOUND)) {
+            CompoundBinaryTag entry = (CompoundBinaryTag) tag;
+            out.add(new Recorded<>(entry.getLong("t"), type.codec().decode(Transcoder.NBT, entry.get("op")).orElseThrow()));
+        }
+        return out;
     }
 
     private void step(long time) {
