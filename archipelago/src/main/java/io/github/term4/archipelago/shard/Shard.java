@@ -442,7 +442,9 @@ public final class Shard implements MechanicsWorld {
      */
     public void pinBlock(@NotNull Point pos, @NotNull Block block) {
         Block previous = preWrite(pos);
+        boolean shown = base.isChunkLoaded(pos) && block.equals(previous != null ? previous : getBlock(pos));
         overlay.write(pos, block);
+        if (shown) return; // the pin lands, the wire stays quiet: a replay refold re-pins whole diffs
         changed(pos, block);
         fireBlockChange(pos, previous, block);
     }

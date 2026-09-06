@@ -26,6 +26,7 @@ import net.minestom.server.event.EventDispatcher;
 import net.minestom.server.event.EventNode;
 import net.minestom.server.potion.Potion;
 import net.minestom.server.potion.PotionEffect;
+import net.minestom.server.entity.Player;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
@@ -251,9 +252,11 @@ public final class Playback {
     /**
      * Jumps to {@code target}: folds the ops in the window through each channel's {@link StateFolder} and
      * applies only the survivors (each entity's latest state), so ghosts land in place without replaying every
-     * intermediate op. A BACKWARD seek rewinds to t0 first (theater reset + re-seed, ghosts/twins/layers
-     * cleared) and refolds forward - ops don't unwind, they re-derive. Call from off-clock threads (commands);
-     * it relays onto the theater's owner thread and waits.
+     * intermediate op. A BACKWARD seek clears the ghosts, twins and risen layers, has each channel revert what
+     * the fold will not write back ({@link Applier#revert}: blocks written after the target, each to its state
+     * there), and refolds forward from the base - ops don't unwind, they re-derive, and a re-pinned block already
+     * showing sends nothing. Call from off-clock threads (commands); it relays onto the theater's owner thread
+     * and waits.
      */
     public void seek(long target) {
         shard.relay(() -> {
@@ -267,7 +270,7 @@ public final class Playback {
         if (target < 0) throw new IllegalArgumentException("negative tick");
         if (target == tick) return;
         if (target < tick) {
-            rewind();
+            rewind(target);
             long base = keyframeBefore(target);
             if (base > 0) {
                 for (Channel<?> channel : channels) {
@@ -291,9 +294,10 @@ public final class Playback {
         return base;
     }
 
-    // back to t0: the theater is the replay's to reset (don't co-host entities in it); husks of previously
-    // risen layers stay linked like after end() - the theater's own destroy cascades them away
-    private void rewind() {
+    // back before the target: ghosts, twins and whatever else stands in the theater go (the theater is the
+    // replay's, don't co-host entities in it), risen layers reset, each channel reverts what the fold cannot;
+    // husks of previously risen layers stay linked like after end() - the theater's own destroy cascades them away
+    private void rewind(long target) {
         ghosts.values().forEach(Playback::dismiss);
         ghosts.clear();
         entities.values().forEach(Playback::dismiss);
@@ -307,8 +311,8 @@ public final class Playback {
         }
         layerShards.clear();
         layerShards.put(0, shard);
-        shard.reset();
-        shard.setBlocks(t0);
+        for (Entity e : shard.entities()) if (!(e instanceof Player)) dismiss(e);
+        for (Channel<?> channel : channels) safely(() -> channel.applier.revert(this, target));
         for (Channel<?> channel : channels) channel.rewind();
         tick = 0;
     }

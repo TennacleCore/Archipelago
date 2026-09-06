@@ -1,5 +1,8 @@
 package io.github.term4.archipelago.replay.core;
 
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import io.github.term4.archipelago.shard.Shard;
 import io.github.term4.archipelago.storage.Nbt;
 import io.github.term4.archipelago.replay.Playback;
@@ -46,6 +49,40 @@ final class BlockApplier implements Applier<Channels.BlockOp> {
     private static void write(Shard in, Recorded<Channels.BlockOp> op, Vec pos, Block block) {
         if (op.tick() == 0 && op.op().layer() == 0) in.setBlock(pos, block);
         else in.pinBlock(pos, block);
+    }
+
+    // back over the ops past the target, each position once, then on down to its latest op at or before it -
+    // that op is its state there, and without one the t0 snapshot (root) or the parent view is
+    @Override
+    public void revert(@NotNull Playback pb, long target) {
+        List<Recorded<Channels.BlockOp>> ops = pb.ops(Channels.BLOCKS);
+        int i = pb.cursor(Channels.BLOCKS) - 1;
+        Map<At, Recorded<Channels.BlockOp>> touched = new LinkedHashMap<>();
+        for (; i >= 0 && ops.get(i).tick() > target; i--) {
+            Channels.BlockOp b = ops.get(i).op();
+            touched.putIfAbsent(new At(b.layer(), b.x(), b.y(), b.z()), null);
+        }
+        int unresolved = touched.size();
+        for (; i >= 0 && unresolved > 0; i--) {
+            Channels.BlockOp b = ops.get(i).op();
+            At at = new At(b.layer(), b.x(), b.y(), b.z());
+            if (touched.containsKey(at) && touched.get(at) == null) {
+                touched.put(at, ops.get(i));
+                unresolved--;
+            }
+        }
+        touched.forEach((at, latest) -> {
+            Shard in = pb.layer(at.layer());
+            if (in == null) return;
+            Vec pos = new Vec(at.x(), at.y(), at.z());
+            if (latest != null) {
+                write(in, latest, pos, Nbt.block(latest.op().block()));
+                return;
+            }
+            Block t0 = at.layer() == 0 ? pb.t0Block(pos) : null;
+            if (t0 != null) in.pinBlock(pos, t0);
+            else in.clearBlock(pos);
+        });
     }
 
     @Override
