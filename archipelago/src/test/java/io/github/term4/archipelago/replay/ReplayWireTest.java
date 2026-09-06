@@ -127,8 +127,58 @@ class ReplayWireTest extends HeadlessServerTest {
     }
 
     private static Material hand(Playback pb) {
-        Ghost ghost = pb.ghost("Switcher"); // a rewind raises a NEW ghost: never hold the old one
+        return hand(pb, "Switcher");
+    }
+
+    private static Material hand(Playback pb, String actor) {
+        Ghost ghost = pb.ghost(actor); // a rewind raises a NEW ghost: never hold the old one
         return ghost == null ? Material.AIR : ghost.getItemInMainHand().material();
+    }
+
+    /** A hand a player takes out and puts back inside one tick still reaches the replay: the break's own item. */
+    @Test
+    void aSameTickSwitchStillRecords() {
+        Shard game = new Shard(instance);
+        FakePlayer actor = FakePlayer.connect(instance, new Pos(7.5, 70, 7.5), "Flicker");
+        game.join(actor.player);
+        actor.player.getInventory().setItemStack(0, ItemStack.of(Material.STONE, 64));
+        actor.player.getInventory().setItemStack(1, ItemStack.of(Material.DIAMOND_PICKAXE));
+        actor.player.setHeldItemSlot((byte) 0);
+        Recording rec = Replay.record(game);
+        byte[] file;
+        long flick;
+        try {
+            tick();
+            for (int i = 0; i < 2; i++) tick();
+            // as the held-slot listener runs it: the event, then the slot - out to the pickaxe and back, one tick
+            held(actor, (byte) 0, (byte) 1);
+            held(actor, (byte) 1, (byte) 0);
+            tick();
+            flick = rec.tick();
+            for (int i = 0; i < 3; i++) tick();
+        } finally {
+            file = rec.stop();
+            actor.player.remove();
+        }
+
+        Shard theater = new Shard(instance);
+        Playback pb = Replay.play(theater, file);
+        try {
+            pb.pause(true);
+            pb.seek(flick);
+            assertEquals(Material.DIAMOND_PICKAXE, hand(pb, "Flicker"), "the hand that did the breaking shows");
+            pb.seek(flick + 1);
+            assertEquals(Material.STONE, hand(pb, "Flicker"), "and the blocks are back the tick after");
+        } finally {
+            pb.halt();
+        }
+    }
+
+    // the client path: the event fires with the slot still on the old one, then the slot moves
+    private static void held(FakePlayer actor, byte from, byte to) {
+        net.minestom.server.event.EventDispatcher.call(
+                new net.minestom.server.event.player.PlayerChangeHeldSlotEvent(actor.player, from, to));
+        actor.player.setHeldItemSlot(to);
     }
 
     /** The hand follows the held slot: a switch between two hotbar items reaches the ghost on its own tick. */
@@ -152,6 +202,8 @@ class ReplayWireTest extends HeadlessServerTest {
             tick();
             pick = rec.tick();
             for (int i = 0; i < 2; i++) tick();
+            actor.player.setHeldItemSlot((byte) 0); // and the blocks are back
+            for (int i = 0; i < 3; i++) tick();
         } finally {
             file = rec.stop();
             actor.player.remove();
@@ -166,8 +218,12 @@ class ReplayWireTest extends HeadlessServerTest {
             assertEquals(Material.STONE, hand(pb), "blocks while they place");
             pb.seek(pick);
             assertEquals(Material.DIAMOND_PICKAXE, hand(pb), "the pickaxe once they switch");
-            pb.seek(stone); // backward: the ghosts go and the fold raises them again
-            assertEquals(Material.STONE, hand(pb), "and back, seeking the other way");
+            pb.seek(pb.length()); // the blocks are back out by the end
+            assertEquals(Material.STONE, hand(pb));
+            pb.seek(pick); // backward into the pickaxe's window: the fold, not the tick-0 kit
+            assertEquals(Material.DIAMOND_PICKAXE, hand(pb), "a seek back into the switch still shows it");
+            pb.seek(stone);
+            assertEquals(Material.STONE, hand(pb), "and back before it");
         } finally {
             pb.halt();
         }

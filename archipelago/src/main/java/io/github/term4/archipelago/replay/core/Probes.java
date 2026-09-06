@@ -30,6 +30,8 @@ import net.minestom.server.item.ItemStack;
 import net.minestom.server.network.packet.server.ServerPacket;
 import net.minestom.server.network.packet.server.play.EntitySoundEffectPacket;
 import net.minestom.server.network.packet.server.play.SoundEffectPacket;
+import net.minestom.server.event.player.PlayerChangeHeldSlotEvent;
+import net.minestom.server.entity.LivingEntity;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.ArrayList;
@@ -99,9 +101,16 @@ final class Probes {
         }
     }
 
-    /** Per-tick member sampling across the tree: position track, skin at first sight, layer + equipment/pose diffs. */
-    static final class ActorSampler implements Dispatcher {
+    /**
+     * Per-tick member sampling across the tree: position track, skin at first sight, layer + equipment/pose diffs.
+     * The hand also rides the switch itself: a hotbar slot a player leaves inside the same tick (press two, break
+     * the block you just placed, press one) settles back before the sample runs, so the hand that did the breaking
+     * was in no op at all. The switch emits as it happens and the settled hand waits a tick, which is the flash
+     * the players watching live saw.
+     */
+    static final class ActorSampler extends EventDispatcher {
         private static final EquipmentSlot[] SLOTS = EquipmentSlot.values();
+        private final Set<String> switched = ConcurrentHashMap.newKeySet();
 
         private final Map<String, Channels.Move> lastMove = new HashMap<>();
         private final Map<String, ItemStack[]> lastEquip = new HashMap<>();
@@ -116,11 +125,34 @@ final class Probes {
             return !now.equals(last.put(name, now));
         }
 
+        private static ItemStack[] equipment(LivingEntity of) {
+            ItemStack[] items = new ItemStack[SLOTS.length];
+            for (int i = 0; i < SLOTS.length; i++) items[i] = of.getEquipment(SLOTS[i]);
+            return items;
+        }
+
+        @Override
+        protected void listen(@NotNull EventNode<Event> node, @NotNull Recording rec) {
+            node.addListener(PlayerChangeHeldSlotEvent.class, e -> {
+                Player p = e.getPlayer();
+                if (e.isCancelled() || !rec.covers(p)) return;
+                String name = p.getUsername();
+                if (switched.contains(name)) return; // one hand per tick: a switch and back settles on the next
+                ItemStack[] items = equipment(p);
+                items[EquipmentSlot.MAIN_HAND.ordinal()] = e.getItemInNewSlot(); // the slot moves after the event
+                if (Arrays.equals(items, lastEquip.get(name))) return;
+                lastEquip.put(name, items);
+                rec.emit(Channels.EQUIPS, new Channels.Equip(name, Nbt.equipment(items)));
+                switched.add(name);
+            });
+        }
+
         /** Keyframe: the keyframed streams (moves, equips) re-emit; skins/acts fold from tick 0 and stay gated. */
         @Override
         public void reset(@NotNull Recording rec) {
             lastMove.clear();
             lastEquip.clear();
+            switched.clear();
         }
 
         @Override
@@ -158,10 +190,15 @@ final class Probes {
             if (changed(lastLayer, name, layerId)) {
                 rec.emit(Channels.ACTS, new Channels.Act(name, Channels.LAYER, layerId));
             }
-            ItemStack[] items = new ItemStack[SLOTS.length];
-            for (int i = 0; i < SLOTS.length; i++) items[i] = m.getEquipment(SLOTS[i]);
-            if (!Arrays.equals(items, lastEquip.put(name, items))) {
-                rec.emit(Channels.EQUIPS, new Channels.Equip(name, Nbt.equipment(items)));
+            ItemStack[] items = equipment(m);
+            if (!Arrays.equals(items, lastEquip.get(name))) {
+                // a hand that already emitted mid-tick keeps this tick; the settled one is next tick's op
+                if (!switched.remove(name)) {
+                    lastEquip.put(name, items);
+                    rec.emit(Channels.EQUIPS, new Channels.Equip(name, Nbt.equipment(items)));
+                }
+            } else {
+                switched.remove(name);
             }
             boolean sneak = m.isSneaking();
             if (changed(lastSneak, name, sneak)) {
