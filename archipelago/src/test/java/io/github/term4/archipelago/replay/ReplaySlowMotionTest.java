@@ -14,6 +14,8 @@ import net.minestom.server.network.packet.server.play.EntityTeleportPacket;
 import net.minestom.server.network.packet.server.play.EntityVelocityPacket;
 import org.junit.jupiter.api.Test;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -124,6 +126,53 @@ class ReplaySlowMotionTest extends HeadlessServerTest {
             if (pb != null && pb.active()) pb.halt();
             actor.player.remove();
         }
+    }
+
+    /** A ghost's swings keep the rate's time: fatigue at half speed, haste at double, nothing at one. */
+    @Test
+    void ghostSwingsPaceToTheRate() {
+        loadArea(1400, 0);
+        CoreChannels.register();
+        Shard live = new Shard(instance);
+        FakePlayer actor = FakePlayer.connect(instance, new Pos(22400.5, 42, 0.5), "SwingActor");
+        Playback pb = null;
+        try {
+            live.join(actor.player);
+            Recording rec = Replay.record(live);
+            for (int i = 0; i < 6; i++) {
+                actor.player.teleport(new Pos(22400.5 + i, 42, 0.5));
+                tick();
+            }
+            rec.stop();
+            live.leave(actor.player);
+
+            Shard theater = new Shard(instance);
+            pb = Replay.play(theater, rec);
+            Ghost ghost = null;
+            for (int i = 0; i < 100 && ghost == null; i++) {
+                tick();
+                ghost = pb.ghost("SwingActor");
+            }
+            assertNotNull(ghost, "the ghost rose");
+            assertFalse(ghost.hasEffect(net.minestom.server.potion.PotionEffect.MINING_FATIGUE), "full rate: bare");
+            pb.rate(0.5);
+            assertEquals(2, amplifier(ghost, net.minestom.server.potion.PotionEffect.MINING_FATIGUE), "half speed: a 12-tick swing");
+            pb.rate(2);
+            assertFalse(ghost.hasEffect(net.minestom.server.potion.PotionEffect.MINING_FATIGUE));
+            assertEquals(2, amplifier(ghost, net.minestom.server.potion.PotionEffect.HASTE), "double speed: a 3-tick swing");
+            pb.rate(16);
+            assertEquals(3, amplifier(ghost, net.minestom.server.potion.PotionEffect.HASTE), "never past a swing that draws");
+            pb.rate(1);
+            assertFalse(ghost.hasEffect(net.minestom.server.potion.PotionEffect.HASTE), "back to bare");
+        } finally {
+            if (pb != null && pb.active()) pb.halt();
+            actor.player.remove();
+        }
+    }
+
+    private static int amplifier(Ghost ghost, net.minestom.server.potion.PotionEffect effect) {
+        return ghost.getActiveEffects().stream().filter(t -> t.potion().effect() == effect)
+                .mapToInt(t -> t.potion().amplifier()).findFirst().orElse(-1);
     }
 
     /** Moves record on change: a jump after a long stand-still is one tick's move, not a crawl over the wait. */

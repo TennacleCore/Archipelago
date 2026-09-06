@@ -24,6 +24,8 @@ import net.minestom.server.instance.block.Block;
 import net.minestom.server.event.Event;
 import net.minestom.server.event.EventDispatcher;
 import net.minestom.server.event.EventNode;
+import net.minestom.server.potion.Potion;
+import net.minestom.server.potion.PotionEffect;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
@@ -209,6 +211,7 @@ public final class Playback {
         if (rate < 0) reversed = true;
         if (rate != 0) paused = false;
         this.rate = Math.min(Math.abs(rate), MAX_RATE);
+        for (Ghost ghost : ghosts.values()) pace(ghost);
     }
 
     /** The current speed ({@link #reversed()} is the direction). */
@@ -373,6 +376,22 @@ public final class Playback {
     /** Registers {@code player}'s ghost (appliers raise ghosts lazily on the actor's first move). */
     public void ghost(@NotNull String player, @NotNull Ghost ghost) {
         ghosts.put(player, ghost);
+        pace(ghost);
+    }
+
+    // a client times a swing off the swinger's own haste or fatigue (6 ticks bare, 6-(1+a) haste, 6+2(1+a)
+    // fatigue), so a ghost's arm keeps the rate's time; haste stops where a swing would no longer draw
+    private void pace(Ghost ghost) {
+        if (ghost.hasEffect(PotionEffect.HASTE)) ghost.removeEffect(PotionEffect.HASTE);
+        if (ghost.hasEffect(PotionEffect.MINING_FATIGUE)) ghost.removeEffect(PotionEffect.MINING_FATIGUE);
+        double at = Math.max(1.0e-3, rate);
+        if (at < 1) {
+            int amplifier = (int) Math.round((6 / at - 6) / 2) - 1;
+            if (amplifier >= 0) ghost.addEffect(new Potion(PotionEffect.MINING_FATIGUE, Math.min(255, amplifier), Potion.INFINITE_DURATION, 0));
+        } else if (at > 1) {
+            int amplifier = (int) Math.round(6 - 6 / at) - 1;
+            if (amplifier >= 0) ghost.addEffect(new Potion(PotionEffect.HASTE, Math.min(3, amplifier), Potion.INFINITE_DURATION, 0));
+        }
     }
 
     /** Drops and removes {@code player}'s ghost (death pose, hide). */
