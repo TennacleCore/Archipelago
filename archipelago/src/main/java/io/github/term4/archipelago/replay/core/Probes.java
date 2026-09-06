@@ -300,8 +300,8 @@ final class Probes {
     /** Positional FX (particles, sounds, world events) straight off the outgoing wire. Only what a member
      *  actually received records (unwitnessed FX are lost); a grouped broadcast reaches every recipient as
      *  equal records - content-dedup per tick keeps one. A sound at its recipient's own position is a cue: the
-     *  game's, and kept, when every member got it that tick; one player's (a kill ding, a death knell) otherwise,
-     *  and not the theater's to play. */
+     *  game's, and kept, when two members got it that tick (every member, when there are fewer - a player may
+     *  have muted it); one player's (a kill ding, a death knell) otherwise, and not the theater's to play. */
     static final class FxProbe extends PacketDispatcher {
         private final Set<ServerPacket> seen = Collections.synchronizedSet(new HashSet<>());
         private final Map<SoundEffectPacket, Set<UUID>> cues = new ConcurrentHashMap<>();
@@ -309,8 +309,9 @@ final class Probes {
         @Override
         protected void packet(@NotNull Player player, @NotNull ServerPacket packet, @NotNull Recording rec) {
             if (packet instanceof SoundEffectPacket sound && Channels.cueAt(sound, player.getPosition())) {
+                // every playSound rolls its own seed: the same cue to two players is two packets
                 SoundEffectPacket key = new SoundEffectPacket(sound.soundEvent(), sound.source(), Vec.ZERO,
-                        sound.volume(), sound.pitch(), sound.seed());
+                        sound.volume(), sound.pitch(), 0L);
                 cues.computeIfAbsent(key, k -> ConcurrentHashMap.newKeySet()).add(player.getUuid());
                 return;
             }
@@ -331,7 +332,7 @@ final class Probes {
         public void sample(@NotNull Recording rec) {
             int members = rec.shard().players().size();
             cues.forEach((sound, heard) -> {
-                if (members > 0 && heard.size() >= members) rec.emit(Channels.FX, Channels.cue(sound));
+                if (members > 0 && heard.size() >= Math.min(2, members)) rec.emit(Channels.FX, Channels.cue(sound));
             });
             cues.clear();
             seen.clear();
