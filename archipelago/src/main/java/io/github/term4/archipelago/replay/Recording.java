@@ -421,6 +421,12 @@ public final class Recording {
         if (s != null) s.delete();
     }
 
+    /** Ends the recording and drops its spool, encoding nothing: footage nobody wants (a game that never played). */
+    public void abandon() throws IOException {
+        endRecording();
+        discard();
+    }
+
     // the owner thread: the queues have no other writer. Every close lands, ops or not: its tick is where a
     // salvage cuts, and the masks and marks since the last close ride with it
     private void closeSegment() {
