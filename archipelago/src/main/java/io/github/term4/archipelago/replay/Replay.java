@@ -24,6 +24,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.function.ToIntFunction;
+import java.io.IOException;
+import java.nio.file.Path;
 
 /**
  * Replays over shards: one {@code .shard} file = the t0 snapshot (blocks + sky) plus a channel-per-recordable
@@ -101,6 +103,15 @@ public final class Replay {
         Recording recording = new Recording(shard, layers);
         EventDispatcher.call(new RecordingStartEvent(recording));
         return recording;
+    }
+
+    /**
+     * The file a spooled recording whose process died mid-game leaves behind: the spool's header (t0 and the
+     * app's data) and its closed segments, cut at the last one. Null when the spool has no header or no closed
+     * segment. Reads the file alone - the recording is gone.
+     */
+    public static byte @Nullable [] salvage(@NotNull Path spool) throws IOException {
+        return Recording.salvage(spool);
     }
 
     /**

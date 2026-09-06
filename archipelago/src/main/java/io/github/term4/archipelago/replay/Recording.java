@@ -50,6 +50,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
+import java.util.HashSet;
 
 /**
  * One recording session: the t0 snapshot is taken immediately, dispatchers fill the channels until
@@ -89,6 +90,10 @@ public final class Recording {
     private volatile int keyframeInterval;
     private volatile @Nullable Spool spool;
     private volatile int spoolEvery;
+    private volatile @Nullable Consumer<UserData.Writer> spoolHeader;
+    private boolean headed; // owner thread, with closeSegment
+    private final Set<Point> masksSpooled = new HashSet<>();
+    private int marksSpooled;
     private final Map<Recordable<?>, Integer> spooled = new ConcurrentHashMap<>();
     private volatile boolean understructure = true;
     private volatile Budget budget = defaultBudget;
@@ -387,9 +392,20 @@ public final class Recording {
      * with {@link #discard()} once that file is kept. Set before the first tick.
      */
     public @NotNull Recording spool(@NotNull Path file, int everyTicks) throws IOException {
+        return spool(file, everyTicks, null);
+    }
+
+    /**
+     * {@link #spool(Path, int)} with the app's data in the spool's header - what {@link #stop(Consumer)} would
+     * put in - so a process that dies mid-recording leaves a spool {@link Replay#salvage} makes a file of.
+     * {@code header} runs on the recording's clock at the first segment close, when the game has settled.
+     */
+    public @NotNull Recording spool(@NotNull Path file, int everyTicks, @Nullable Consumer<UserData.Writer> header)
+            throws IOException {
         if (tick > 0) throw new IllegalStateException("the spool must be set before the first tick");
         this.spool = new Spool(file);
         this.spoolEvery = Math.max(1, everyTicks);
+        this.spoolHeader = header;
         return this;
     }
 
@@ -405,12 +421,16 @@ public final class Recording {
         if (s != null) s.delete();
     }
 
-    // the owner thread: the queues have no other writer
+    // the owner thread: the queues have no other writer. Every close lands, ops or not: its tick is where a
+    // salvage cuts, and the masks and marks since the last close ride with it
     private void closeSegment() {
         Spool s = spool;
         if (s == null) return;
+        if (!headed) {
+            headed = true;
+            s.append(header());
+        }
         CompoundBinaryTag.Builder channels = CompoundBinaryTag.builder();
-        boolean any = false;
         for (Map.Entry<Recordable<?>, Queue<Recorded<?>>> entry : ops.entrySet()) {
             Queue<Recorded<?>> queue = entry.getValue();
             if (queue.isEmpty()) continue;
@@ -419,9 +439,65 @@ public final class Recording {
             drained.sort(java.util.Comparator.comparingLong(Recorded::tick)); // a hop can land one tick late
             spooled.merge(entry.getKey(), drained.size(), Integer::sum);
             channels.put(entry.getKey().id(), channelTag(entry.getKey(), drained));
-            any = true;
         }
-        if (any) s.append(CompoundBinaryTag.builder().put("channels", channels.build()).build());
+        CompoundBinaryTag.Builder segment = CompoundBinaryTag.builder().putLong("ticks", tick).put("channels", channels.build());
+        List<Recorded<?>> masks = masks(pos -> masksSpooled.add(pos));
+        if (!masks.isEmpty()) segment.put("masks", channelTag(Channels.BLOCKS, masks));
+        List<Replay.Bookmark> marks = List.copyOf(bookmarks.subList(marksSpooled, bookmarks.size()));
+        marksSpooled += marks.size();
+        if (!marks.isEmpty()) segment.put("marks", Replay.BOOKMARKS.codec().encode(Transcoder.NBT, marks).orElseThrow());
+        s.append(segment.build());
+    }
+
+    // an app header that throws costs its data, not the segment
+    private CompoundBinaryTag header() {
+        CompoundBinaryTag.Builder head = CompoundBinaryTag.builder().putInt("v", 1).putByteArray("t0", t0.encode());
+        Consumer<UserData.Writer> app = spoolHeader;
+        if (app != null) {
+            try {
+                UserData.Writer data = new UserData.Writer();
+                app.accept(data);
+                head.put("data", data.build());
+            } catch (RuntimeException e) {
+                LOGGER.warn("replay recording@{}: the spool header's data failed",
+                        Integer.toHexString(System.identityHashCode(this)), e);
+            }
+        }
+        return head.build();
+    }
+
+    /**
+     * The file a recording that never reached {@link #stop} leaves in its spool: the header's t0 and data, the
+     * closed segments' ops, masks and marks, cut at the last closed tick. Null without a header (a spool from
+     * before headers) or without a closed segment.
+     */
+    static byte @Nullable [] salvage(@NotNull Path file) throws IOException {
+        List<CompoundBinaryTag> records = new ArrayList<>();
+        Spool.read(file, records::add);
+        if (records.isEmpty() || records.getFirst().get("t0") == null) return null;
+        CompoundBinaryTag header = records.getFirst();
+        List<CompoundBinaryTag> segments = records.subList(1, records.size());
+        if (segments.isEmpty()) return null;
+        ShardFile.Content t0 = ShardFile.decode(header.getByteArray("t0"));
+        Map<String, List<CompoundBinaryTag>> parts = new LinkedHashMap<>();
+        for (CompoundBinaryTag segment : segments) { // the masks lead the channel, whichever close found them
+            if (segment.get("masks") instanceof CompoundBinaryTag masks) {
+                parts.computeIfAbsent(Channels.BLOCKS.id(), id -> new ArrayList<>()).add(masks);
+            }
+        }
+        List<Replay.Bookmark> marks = new ArrayList<>();
+        for (CompoundBinaryTag segment : segments) {
+            gather(parts, segment);
+            BinaryTag marked = segment.get("marks");
+            if (marked != null) marks.addAll(Replay.BOOKMARKS.codec().decode(Transcoder.NBT, marked).orElseThrow());
+        }
+        long ticks = segments.getLast().getLong("ticks");
+        CompoundBinaryTag data = header.getCompound("data");
+        return t0.encode(out -> {
+            if (data.size() > 0) out.put(data);
+            if (!marks.isEmpty()) out.put(Replay.BOOKMARKS, marks);
+            out.put(Replay.OPS, container(ticks, parts));
+        });
     }
 
     /** Marks the current tick in the bookmark index (a goal, a bed break) - any thread, mid-game. */
@@ -520,12 +596,7 @@ public final class Recording {
         Spool s = spool;
         if (s != null) {
             try {
-                s.forEach(segment -> {
-                    CompoundBinaryTag channels = segment.getCompound("channels");
-                    for (String id : channels.keySet()) {
-                        parts.computeIfAbsent(id, k -> new ArrayList<>()).add(channels.getCompound(id));
-                    }
-                });
+                s.forEach(segment -> gather(parts, segment));
             } catch (IOException e) {
                 throw new IllegalStateException("the spool could not be read back", e);
             }
@@ -534,10 +605,7 @@ public final class Recording {
             if (list.isEmpty()) return;
             parts.computeIfAbsent(type.id(), id -> new ArrayList<>()).add(channelTag(type, List.copyOf(list)));
         });
-        CompoundBinaryTag.Builder channels = CompoundBinaryTag.builder();
-        parts.forEach((id, pieces) -> channels.put(id, join(pieces)));
-        CompoundBinaryTag container = CompoundBinaryTag.builder()
-                .putInt("v", 1).putLong("ticks", tick).put("channels", channels.build()).build();
+        CompoundBinaryTag container = container(tick, parts);
         return t0.encode(data -> {
             if (userData != null) userData.accept(data);
             if (!bookmarks.isEmpty()) data.put(Replay.BOOKMARKS, List.copyOf(bookmarks));
@@ -545,11 +613,30 @@ public final class Recording {
         });
     }
 
+    // a spool record's channel pieces onto the parts (the header has none)
+    private static void gather(Map<String, List<CompoundBinaryTag>> parts, CompoundBinaryTag record) {
+        CompoundBinaryTag channels = record.getCompound("channels");
+        for (String id : channels.keySet()) {
+            parts.computeIfAbsent(id, k -> new ArrayList<>()).add(channels.getCompound(id));
+        }
+    }
+
+    private static CompoundBinaryTag container(long ticks, Map<String, List<CompoundBinaryTag>> parts) {
+        CompoundBinaryTag.Builder channels = CompoundBinaryTag.builder();
+        parts.forEach((id, pieces) -> channels.put(id, join(pieces)));
+        return CompoundBinaryTag.builder().putInt("v", 1).putLong("ticks", ticks).put("channels", channels.build()).build();
+    }
+
     // the understructure masks lead BLOCKS as tick-0 ops (position-sorted: deterministic bytes)
     private List<Recorded<?>> masks() {
+        return masks(pos -> true);
+    }
+
+    private List<Recorded<?>> masks(Predicate<Point> take) {
         List<Recorded<?>> out = new ArrayList<>();
         covered.entrySet().stream()
                 .sorted(Map.Entry.comparingByKey(Nbt.POSITION_ORDER))
+                .filter(en -> take.test(en.getKey()))
                 .forEach(en -> out.add(new Recorded<>(0, new Channels.BlockOp(0, en.getKey().blockX(),
                         en.getKey().blockY(), en.getKey().blockZ(), en.getValue()))));
         return out;

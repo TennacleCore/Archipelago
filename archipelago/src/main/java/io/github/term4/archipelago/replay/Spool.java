@@ -25,7 +25,9 @@ import java.util.function.Consumer;
 /**
  * A recording's closed segments, appended to one file as they close - a length-prefixed gzipped NBT compound
  * each - so a long game never holds its whole log on the heap, and each segment is a unit a later store can take
- * on its own. One writer thread lands them in call order; reads stream them back the same way.
+ * on its own. The first record is the header (the t0 snapshot and the app's data), so a spool whose process died
+ * still makes a file ({@link Replay#salvage}). One writer thread lands them in call order; reads stream them
+ * back the same way.
  */
 final class Spool {
 
@@ -78,9 +80,14 @@ final class Spool {
         if (failure != null) throw failure;
     }
 
-    /** {@link #settle}, then the segments in order. */
+    /** {@link #settle}, then the records in order, the header first. */
     void forEach(@NotNull Consumer<CompoundBinaryTag> each) throws IOException {
         settle();
+        read(file, each);
+    }
+
+    /** The records of {@code file} in order; a torn tail (the process died mid-append) ends the read. */
+    static void read(@NotNull Path file, @NotNull Consumer<CompoundBinaryTag> each) throws IOException {
         if (!Files.exists(file)) return;
         try (DataInputStream in = new DataInputStream(new BufferedInputStream(Files.newInputStream(file)))) {
             while (true) {
@@ -91,6 +98,7 @@ final class Spool {
                     return;
                 }
                 byte[] blob = in.readNBytes(length);
+                if (blob.length < length) return;
                 each.accept(BinaryTagIO.unlimitedReader().read(new ByteArrayInputStream(blob), BinaryTagIO.Compression.GZIP));
             }
         }
