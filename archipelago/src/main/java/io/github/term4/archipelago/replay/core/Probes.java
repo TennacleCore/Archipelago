@@ -1,5 +1,7 @@
 package io.github.term4.archipelago.replay.core;
 
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import io.github.term4.archipelago.shard.Shard;
 import io.github.term4.archipelago.storage.Nbt;
 import io.github.term4.archipelago.replay.Recording;
@@ -297,20 +299,19 @@ final class Probes {
     }
     /** Positional FX (particles, sounds, world events) straight off the outgoing wire. Only what a member
      *  actually received records (unwitnessed FX are lost); a grouped broadcast reaches every recipient as
-     *  equal records - content-dedup per tick keeps one. */
+     *  equal records - content-dedup per tick keeps one. A sound at its recipient's own position is a cue: the
+     *  game's, and kept, when every member got it that tick; one player's (a kill ding, a death knell) otherwise,
+     *  and not the theater's to play. */
     static final class FxProbe extends PacketDispatcher {
         private final Set<ServerPacket> seen = Collections.synchronizedSet(new HashSet<>());
+        private final Map<SoundEffectPacket, Set<UUID>> cues = new ConcurrentHashMap<>();
 
         @Override
         protected void packet(@NotNull Player player, @NotNull ServerPacket packet, @NotNull Recording rec) {
-            // a sound at the recipient's own position is a cue to that player, not a place in the world: kept
-            // once per tick whoever got it, and played at every watcher
             if (packet instanceof SoundEffectPacket sound && Channels.cueAt(sound, player.getPosition())) {
-                Channels.Fx cue = Channels.cue(sound);
-                if (seen.add(new SoundEffectPacket(sound.soundEvent(), sound.source(), Vec.ZERO, sound.volume(),
-                        sound.pitch(), sound.seed()))) {
-                    rec.emit(Channels.FX, cue);
-                }
+                SoundEffectPacket key = new SoundEffectPacket(sound.soundEvent(), sound.source(), Vec.ZERO,
+                        sound.volume(), sound.pitch(), sound.seed());
+                cues.computeIfAbsent(key, k -> ConcurrentHashMap.newKeySet()).add(player.getUuid());
                 return;
             }
             // entity-bound sounds go positional (the recorded id means nothing to a theater): the source's
@@ -328,6 +329,11 @@ final class Probes {
 
         @Override
         public void sample(@NotNull Recording rec) {
+            int members = rec.shard().players().size();
+            cues.forEach((sound, heard) -> {
+                if (members > 0 && heard.size() >= members) rec.emit(Channels.FX, Channels.cue(sound));
+            });
+            cues.clear();
             seen.clear();
         }
     }
