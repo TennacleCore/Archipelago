@@ -126,6 +126,53 @@ class ReplayWireTest extends HeadlessServerTest {
         }
     }
 
+    private static Material hand(Playback pb) {
+        Ghost ghost = pb.ghost("Switcher"); // a rewind raises a NEW ghost: never hold the old one
+        return ghost == null ? Material.AIR : ghost.getItemInMainHand().material();
+    }
+
+    /** The hand follows the held slot: a switch between two hotbar items reaches the ghost on its own tick. */
+    @Test
+    void aHeldSlotSwitchReachesTheGhost() {
+        Shard game = new Shard(instance);
+        FakePlayer actor = FakePlayer.connect(instance, new Pos(5.5, 70, 5.5), "Switcher");
+        game.join(actor.player);
+        actor.player.getInventory().setItemStack(0, ItemStack.of(Material.STONE, 64));
+        actor.player.getInventory().setItemStack(1, ItemStack.of(Material.DIAMOND_PICKAXE));
+        actor.player.setHeldItemSlot((byte) 0);
+        Recording rec = Replay.record(game);
+        byte[] file;
+        long stone;
+        long pick;
+        try {
+            tick(); // holding blocks
+            stone = rec.tick();
+            for (int i = 0; i < 2; i++) tick();
+            actor.player.setHeldItemSlot((byte) 1); // the pickaxe comes out
+            tick();
+            pick = rec.tick();
+            for (int i = 0; i < 2; i++) tick();
+        } finally {
+            file = rec.stop();
+            actor.player.remove();
+        }
+
+        Shard theater = new Shard(instance);
+        Playback pb = Replay.play(theater, file);
+        try {
+            pb.pause(true);
+            pb.seek(stone);
+            assertNotNull(pb.ghost("Switcher"), "the ghost rose");
+            assertEquals(Material.STONE, hand(pb), "blocks while they place");
+            pb.seek(pick);
+            assertEquals(Material.DIAMOND_PICKAXE, hand(pb), "the pickaxe once they switch");
+            pb.seek(stone); // backward: the ghosts go and the fold raises them again
+            assertEquals(Material.STONE, hand(pb), "and back, seeking the other way");
+        } finally {
+            pb.halt();
+        }
+    }
+
     @Test
     void stateSamplerDeltaGatesRealPlayerState() {
         StateChannels.register();
