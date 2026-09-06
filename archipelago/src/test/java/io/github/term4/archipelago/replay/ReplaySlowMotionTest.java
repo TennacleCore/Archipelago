@@ -128,6 +128,40 @@ class ReplaySlowMotionTest extends HeadlessServerTest {
         }
     }
 
+    /** Told to hold, a playback pauses on its last frame and stays for a seek; halt alone ends it. */
+    @Test
+    void aHeldPlaybackPausesAtItsEnd() {
+        loadArea(1600, 0);
+        CoreChannels.register();
+        Shard live = new Shard(instance);
+        FakePlayer actor = FakePlayer.connect(instance, new Pos(25600.5, 42, 0.5), "HeldActor");
+        Playback pb = null;
+        try {
+            live.join(actor.player);
+            Recording rec = Replay.record(live);
+            for (int i = 0; i < 10; i++) tick();
+            rec.stop();
+            live.leave(actor.player);
+
+            Shard theater = new Shard(instance);
+            pb = Replay.play(theater, rec);
+            pb.holdAtEnd(true);
+            for (int i = 0; i < 60 && !pb.paused(); i++) tick();
+            assertTrue(pb.paused(), "held on the last frame");
+            assertTrue(pb.active(), "and still there");
+            assertTrue(pb.tick() >= pb.length());
+            pb.seek(2);
+            pb.pause(false);
+            for (int i = 0; i < 60 && !pb.paused(); i++) tick();
+            assertTrue(pb.paused() && pb.active(), "a seek plays on to the same hold");
+            pb.halt();
+            assertFalse(pb.active(), "halt ends it");
+        } finally {
+            if (pb != null && pb.active()) pb.halt();
+            actor.player.remove();
+        }
+    }
+
     /** A ghost's swings keep the rate's time: fatigue at half speed, haste at double, nothing at one. */
     @Test
     void ghostSwingsPaceToTheRate() {

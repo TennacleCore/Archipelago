@@ -79,6 +79,7 @@ public final class Playback {
     private volatile long tick;
     private volatile boolean reversed;
     private volatile boolean paused;
+    private volatile boolean holdAtEnd;
     /** Fast-forward ceiling: ~51s of timeline per theater tick; anything faster is a {@link #seek}. */
     public static final int MAX_RATE = 1024;
 
@@ -181,8 +182,14 @@ public final class Playback {
         for (Channel<?> channel : channels) safely(() -> channel.applier.tick(this)); // pins hold the scene
         if (!paused && !reversed
                 && tick >= length && channels.stream().allMatch(c -> c.drained() && c.applier.settled())) {
-            end();
+            if (holdAtEnd) paused = true;
+            else end();
         }
+    }
+
+    /** At the end, pause on the last frame instead of ending: a seek or a reverse plays on, {@link #halt} ends it. */
+    public void holdAtEnd(boolean hold) {
+        this.holdAtEnd = hold;
     }
 
     private void advance() {
