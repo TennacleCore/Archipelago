@@ -1,5 +1,8 @@
 package io.github.term4.archipelago.replay;
 
+import net.minestom.server.network.packet.server.play.SoundEffectPacket;
+import net.minestom.server.sound.SoundEvent;
+import net.kyori.adventure.sound.Sound;
 import io.github.term4.archipelago.shard.Shard;
 import io.github.term4.archipelago.replay.core.Channels;
 import io.github.term4.archipelago.replay.core.CoreChannels;
@@ -243,6 +246,45 @@ class ReplayWireTest extends HeadlessServerTest {
         } finally {
             pb.halt();
             viewer.player.remove();
+        }
+    }
+
+    /** A sound a member got at their own position is a cue: kept once, played at every watcher's own spot. */
+    @Test
+    void aPlayersCuePlaysAtEveryWatcher() {
+        SoundEffectPacket cue = new SoundEffectPacket(SoundEvent.BLOCK_NOTE_BLOCK_PLING, Sound.Source.MASTER,
+                new Vec(3.5, 75, 3.5), 1f, 2f, 7L);
+        assertTrue(Channels.cueAt(cue, new Pos(3.5, 75, 3.5)), "at the recipient: a cue");
+        assertFalse(Channels.cueAt(cue, new Pos(9.5, 75, 3.5)), "elsewhere: a place");
+        Shard stage = new Shard(instance);
+        Recording rec = Replay.record(stage);
+        byte[] file;
+        try {
+            tick();
+            rec.emit(Channels.FX, Channels.cue(cue));
+            tick();
+            tick();
+        } finally {
+            file = rec.stop();
+        }
+
+        Shard theater = new Shard(instance);
+        FakePlayer near = FakePlayer.connect(instance, new Pos(4.5, 75, 4.5), "CueNear");
+        FakePlayer far = FakePlayer.connect(instance, new Pos(60.5, 75, 60.5), "CueFar");
+        theater.join(near.player);
+        theater.join(far.player);
+        Playback pb = Replay.play(theater, file);
+        try {
+            for (int i = 0; i < 10; i++) tick();
+            for (FakePlayer viewer : List.of(near, far)) {
+                Pos at = viewer.player.getPosition();
+                assertTrue(viewer.sent(SoundEffectPacket.class).stream().anyMatch(pk -> pk.pitch() == 2f
+                        && pk.origin().distanceSquared(at) < 1.0e-6), viewer.player.getUsername() + " hears it where they stand");
+            }
+        } finally {
+            pb.halt();
+            near.player.remove();
+            far.player.remove();
         }
     }
 

@@ -6,6 +6,8 @@ import io.github.term4.archipelago.replay.track.MoveTrack;
 import io.github.term4.archipelago.replay.track.SpawnTrack;
 import net.kyori.adventure.nbt.CompoundBinaryTag;
 import net.minestom.server.MinecraftServer;
+import net.minestom.server.coordinate.Point;
+import net.minestom.server.coordinate.Vec;
 import net.minestom.server.network.NetworkBuffer;
 import net.minestom.server.network.packet.server.ServerPacket;
 import net.minestom.server.network.packet.server.play.ExplosionPacket;
@@ -50,6 +52,8 @@ public final class Channels {
     public record Boundary(int interval) {}
 
     public static final int FX_PARTICLE = 0, FX_SOUND = 1, FX_EVENT = 2, FX_EXPLOSION = 3;
+    /** A sound a member got at their own position: a cue for everyone, not a place - plays at each watcher. */
+    public static final int FX_CUE = 4;
 
     public static final int SWING_MAIN = 0, SWING_OFF = 1, HURT = 2, SNEAK_ON = 3, SNEAK_OFF = 4,
             USE_ON = 5, USE_OFF = 6, ARROWS = 7, DEATH = 8, RESPAWN = 9, HIDDEN = 10, SHOWN = 11,
@@ -165,6 +169,19 @@ public final class Channels {
     public static boolean isFx(@NotNull ServerPacket packet) {
         return packet instanceof ParticlePacket || packet instanceof SoundEffectPacket
                 || packet instanceof WorldEventPacket || packet instanceof ExplosionPacket;
+    }
+
+    /** Whether {@code sound} was played at its recipient's own position - Player#playSound(Sound)'s wire. */
+    public static boolean cueAt(@NotNull SoundEffectPacket sound, @NotNull Point recipient) {
+        return sound.origin().distanceSquared(recipient) < 1.0e-6;
+    }
+
+    /** {@link #fx} for a cue: the origin means nothing, so it goes out zeroed and two members' copies dedup. */
+    public static @NotNull Fx cue(@NotNull SoundEffectPacket sound) {
+        SoundEffectPacket keyed = new SoundEffectPacket(sound.soundEvent(), sound.source(), Vec.ZERO,
+                sound.volume(), sound.pitch(), sound.seed());
+        return new Fx(FX_CUE, NetworkBuffer.makeArray(buffer -> SoundEffectPacket.SERIALIZER.write(buffer, keyed),
+                MinecraftServer.process()));
     }
 
     /** Encodes a positional-FX packet into its channel op, or null (not a recordable FX kind). */

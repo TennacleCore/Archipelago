@@ -44,7 +44,13 @@ final class FxApplier implements Applier<Channels.Fx> {
     private static void play(Playback pb, Channels.Fx fx) {
         ServerPacket packet = decode(fx);
         Shard in = pb.layer(0); // FX are positional and the tree overlays ONE space: root broadcast
-        if (packet != null && in != null) in.broadcast(packet);
+        if (packet == null || in == null) return;
+        if (fx.kind() == Channels.FX_CUE && packet instanceof SoundEffectPacket cue) {
+            in.forEachWatcher(w -> w.sendPacket(new SoundEffectPacket(cue.soundEvent(), cue.source(),
+                    w.getPosition(), cue.volume(), cue.pitch(), cue.seed())));
+            return;
+        }
+        in.broadcast(packet);
     }
 
     static @Nullable ServerPacket decode(Channels.Fx fx) {
@@ -52,7 +58,7 @@ final class FxApplier implements Applier<Channels.Fx> {
             NetworkBuffer buffer = NetworkBuffer.wrap(fx.data(), 0, fx.data().length, MinecraftServer.process());
             return switch (fx.kind()) {
                 case Channels.FX_PARTICLE -> ParticlePacket.SERIALIZER.read(buffer);
-                case Channels.FX_SOUND -> SoundEffectPacket.SERIALIZER.read(buffer);
+                case Channels.FX_SOUND, Channels.FX_CUE -> SoundEffectPacket.SERIALIZER.read(buffer);
                 case Channels.FX_EVENT -> WorldEventPacket.SERIALIZER.read(buffer);
                 // the modern explosion's flash+boom ride THIS packet; its knockback field must not
                 // shove replay viewers

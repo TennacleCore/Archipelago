@@ -7,6 +7,7 @@ import io.github.term4.archipelago.replay.channel.Dispatcher;
 import io.github.term4.archipelago.replay.channel.EventDispatcher;
 import io.github.term4.archipelago.replay.channel.PacketDispatcher;
 import net.minestom.server.coordinate.Point;
+import net.minestom.server.coordinate.Vec;
 import net.minestom.server.coordinate.Pos;
 import net.minestom.server.entity.Entity;
 import net.minestom.server.entity.EquipmentSlot;
@@ -164,7 +165,9 @@ final class Probes {
             if (changed(lastSneak, name, sneak)) {
                 rec.emit(Channels.ACTS, new Channels.Act(name, sneak ? Channels.SNEAK_ON : Channels.SNEAK_OFF, 0));
             }
-            boolean use = m.isUsingItem();
+            // the flag viewers saw, not the server's use bookkeeping: the two part ways after a shot, and a ghost
+            // kept drawing through a sprint on the latter
+            boolean use = m.getEntityMeta() instanceof LivingEntityMeta lm ? lm.isHandActive() : m.isUsingItem();
             if (changed(lastUse, name, use)) {
                 rec.emit(Channels.ACTS, new Channels.Act(name, use ? Channels.USE_ON : Channels.USE_OFF, 0));
             }
@@ -300,6 +303,16 @@ final class Probes {
 
         @Override
         protected void packet(@NotNull Player player, @NotNull ServerPacket packet, @NotNull Recording rec) {
+            // a sound at the recipient's own position is a cue to that player, not a place in the world: kept
+            // once per tick whoever got it, and played at every watcher
+            if (packet instanceof SoundEffectPacket sound && Channels.cueAt(sound, player.getPosition())) {
+                Channels.Fx cue = Channels.cue(sound);
+                if (seen.add(new SoundEffectPacket(sound.soundEvent(), sound.source(), Vec.ZERO, sound.volume(),
+                        sound.pitch(), sound.seed()))) {
+                    rec.emit(Channels.FX, cue);
+                }
+                return;
+            }
             // entity-bound sounds go positional (the recorded id means nothing to a theater): the source's
             // position at emit time; per-player instances stay content-equal so the dedup still holds
             if (packet instanceof EntitySoundEffectPacket bound && player.getInstance() != null) {
