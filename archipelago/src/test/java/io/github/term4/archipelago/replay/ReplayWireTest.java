@@ -26,6 +26,10 @@ import net.minestom.server.network.packet.server.play.EntityVelocityPacket;
 import net.minestom.server.network.packet.server.play.ParticlePacket;
 import net.minestom.server.network.packet.server.play.WorldEventPacket;
 import net.minestom.server.particle.Particle;
+import net.minestom.server.component.DataComponents;
+import net.minestom.server.item.component.EnchantmentList;
+import net.minestom.server.item.enchant.Enchantment;
+import net.minestom.server.utils.Unit;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
@@ -126,6 +130,11 @@ class ReplayWireTest extends HeadlessServerTest {
         }
     }
 
+    // the bridge kit's: an enchantment is a registry-keyed component, the one shape a bare transcoder refuses
+    private static final ItemStack PICKAXE = ItemStack.of(Material.DIAMOND_PICKAXE)
+            .with(DataComponents.ENCHANTMENTS, new EnchantmentList(Map.of(Enchantment.EFFICIENCY, 2)))
+            .with(DataComponents.UNBREAKABLE, Unit.INSTANCE);
+
     private static Material hand(Playback pb) {
         return hand(pb, "Switcher");
     }
@@ -188,7 +197,7 @@ class ReplayWireTest extends HeadlessServerTest {
         FakePlayer actor = FakePlayer.connect(instance, new Pos(5.5, 70, 5.5), "Switcher");
         game.join(actor.player);
         actor.player.getInventory().setItemStack(0, ItemStack.of(Material.STONE, 64));
-        actor.player.getInventory().setItemStack(1, ItemStack.of(Material.DIAMOND_PICKAXE));
+        actor.player.getInventory().setItemStack(1, PICKAXE);
         actor.player.setHeldItemSlot((byte) 0);
         Recording rec = Replay.record(game);
         byte[] file;

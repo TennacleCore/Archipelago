@@ -100,7 +100,7 @@ public final class Recording {
     private final AtomicInteger opCount = new AtomicInteger();
     private volatile boolean truncated;
     private final AtomicBoolean active = new AtomicBoolean(true);
-    private boolean loggedError;
+    private final Set<Class<?>> failed = new HashSet<>(); // one report per dispatcher: a second one's fault is news too
 
     Recording(@NotNull Shard shard, @NotNull Predicate<Shard> layerFilter) {
         this.shard = shard;
@@ -146,21 +146,15 @@ public final class Recording {
                 try {
                     dispatcher.reset(this);
                 } catch (Exception e) {
-                    if (!loggedError) {
-                        loggedError = true;
-                        LOGGER.warn("recording dispatcher failed (logged once)", e);
-                    }
+                    failed(dispatcher, e);
                 }
             }
         }
         for (Dispatcher dispatcher : dispatchers) {
             try {
                 dispatcher.sample(this);
-            } catch (Exception e) {
-                if (!loggedError) { // one bad dispatcher must never stall the rest of the recording
-                    loggedError = true;
-                    LOGGER.warn("recording dispatcher failed (logged once)", e);
-                }
+            } catch (Exception e) { // one bad dispatcher must never stall the rest of the recording
+                failed(dispatcher, e);
             }
         }
         sampledLayers = null;
@@ -203,6 +197,12 @@ public final class Recording {
         List<Shard> out = new ArrayList<>();
         collectLayers(shard, out);
         return out;
+    }
+
+    private void failed(Dispatcher dispatcher, Exception e) {
+        if (failed.add(dispatcher.getClass())) {
+            LOGGER.warn("recording dispatcher {} failed (logged once per dispatcher)", dispatcher.getClass().getSimpleName(), e);
+        }
     }
 
     private void collectLayers(Shard s, List<Shard> out) {

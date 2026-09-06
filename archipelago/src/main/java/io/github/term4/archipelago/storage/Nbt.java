@@ -14,6 +14,8 @@ import net.minestom.server.instance.Weather;
 import net.minestom.server.instance.block.Block;
 import net.minestom.server.item.ItemStack;
 import net.minestom.server.utils.block.BlockUtils;
+import net.minestom.server.MinecraftServer;
+import net.minestom.server.registry.RegistryTranscoder;
 import org.jetbrains.annotations.NotNull;
 
 import java.io.ByteArrayOutputStream;
@@ -30,12 +32,18 @@ public final class Nbt {
 
     private Nbt() {}
 
+    // the bare NBT transcoder has no registries: any item carrying an enchantment (or another registry-keyed
+    // component) fails to encode at all
     public static @NotNull BinaryTag item(@NotNull ItemStack item) {
-        return ItemStack.CODEC.encode(Transcoder.NBT, item).orElseThrow();
+        return ItemStack.CODEC.encode(items(), item).orElseThrow();
     }
 
     public static @NotNull ItemStack item(@NotNull BinaryTag tag) {
-        return ItemStack.CODEC.decode(Transcoder.NBT, tag).orElseThrow();
+        return ItemStack.CODEC.decode(items(), tag).orElseThrow();
+    }
+
+    private static Transcoder<BinaryTag> items() {
+        return new RegistryTranscoder<>(Transcoder.NBT, MinecraftServer.getRegistries());
     }
 
     /** Equipment keyed by {@link EquipmentSlot#name()}, air slots omitted; {@link #applyEquipment} inverts. */

@@ -141,8 +141,9 @@ final class Probes {
                 ItemStack[] items = equipment(p);
                 items[EquipmentSlot.MAIN_HAND.ordinal()] = e.getItemInNewSlot(); // the slot moves after the event
                 if (Arrays.equals(items, lastEquip.get(name))) return;
+                Channels.Equip equip = new Channels.Equip(name, Nbt.equipment(items)); // encoded before the cache moves
                 lastEquip.put(name, items);
-                rec.emit(Channels.EQUIPS, new Channels.Equip(name, Nbt.equipment(items)));
+                rec.emit(Channels.EQUIPS, equip);
                 switched.add(name);
             });
         }
@@ -194,8 +195,9 @@ final class Probes {
             if (!Arrays.equals(items, lastEquip.get(name))) {
                 // a hand that already emitted mid-tick keeps this tick; the settled one is next tick's op
                 if (!switched.remove(name)) {
+                    Channels.Equip equip = new Channels.Equip(name, Nbt.equipment(items));
                     lastEquip.put(name, items);
-                    rec.emit(Channels.EQUIPS, new Channels.Equip(name, Nbt.equipment(items)));
+                    rec.emit(Channels.EQUIPS, equip);
                 }
             } else {
                 switched.remove(name);
