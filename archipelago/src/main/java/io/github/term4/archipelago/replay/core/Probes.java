@@ -342,8 +342,15 @@ final class Probes {
      *  game's, and kept, when two members got it that tick (every member, when there are fewer - a player may
      *  have muted it); one player's (a kill ding, a death knell) otherwise, and not the theater's to play. */
     static final class FxProbe extends PacketDispatcher {
-        private final Set<ServerPacket> seen = Collections.synchronizedSet(new HashSet<>());
-        private final Map<SoundEffectPacket, Set<UUID>> cues = new ConcurrentHashMap<>();
+        // a packet reaches this probe as its connection flushes it (the packet-out event fires at write time, off
+        // the socket worker), so the copies of one broadcast can land on either side of a tick end: the tally and
+        // the dedup hold a few ticks, or a countdown beat whose two copies split the tick was never a cue
+        private static final long WINDOW = 3;
+
+        private record Heard(Set<UUID> by, long since) {}
+
+        private final Map<ServerPacket, Long> seen = new ConcurrentHashMap<>();
+        private final Map<SoundEffectPacket, Heard> cues = new ConcurrentHashMap<>();
 
         @Override
         protected void packet(@NotNull Player player, @NotNull ServerPacket packet, @NotNull Recording rec) {
@@ -351,7 +358,7 @@ final class Probes {
                 // every playSound rolls its own seed: the same cue to two players is two packets
                 SoundEffectPacket key = new SoundEffectPacket(sound.soundEvent(), sound.source(), Vec.ZERO,
                         sound.volume(), sound.pitch(), 0L);
-                cues.computeIfAbsent(key, k -> ConcurrentHashMap.newKeySet()).add(player.getUuid());
+                cues.computeIfAbsent(key, k -> new Heard(ConcurrentHashMap.newKeySet(), rec.tick())).by().add(player.getUuid());
                 return;
             }
             // entity-bound sounds go positional (the recorded id means nothing to a theater): the source's
@@ -362,19 +369,23 @@ final class Probes {
                 packet = new SoundEffectPacket(bound.soundEvent(), bound.source(), source.getPosition(),
                         bound.volume(), bound.pitch(), bound.seed());
             }
-            if (!Channels.isFx(packet) || !seen.add(packet)) return; // dedup before the encode
+            if (!Channels.isFx(packet) || seen.putIfAbsent(packet, rec.tick()) != null) return; // dedup before the encode
             Channels.Fx op = Channels.fx(packet);
             if (op != null) rec.emit(Channels.FX, op);
         }
 
         @Override
         public void sample(@NotNull Recording rec) {
+            long now = rec.tick();
             int members = rec.shard().players().size();
-            cues.forEach((sound, heard) -> {
-                if (members > 0 && heard.size() >= Math.min(2, members)) rec.emit(Channels.FX, Channels.cue(sound));
+            cues.entrySet().removeIf(entry -> {
+                if (members > 0 && entry.getValue().by().size() >= Math.min(2, members)) {
+                    rec.emit(Channels.FX, Channels.cue(entry.getKey()));
+                    return true;
+                }
+                return now - entry.getValue().since() >= WINDOW;
             });
-            cues.clear();
-            seen.clear();
+            seen.values().removeIf(since -> now - since >= WINDOW);
         }
     }
 }
