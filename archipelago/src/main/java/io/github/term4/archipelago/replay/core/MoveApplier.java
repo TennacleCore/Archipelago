@@ -67,8 +67,16 @@ final class MoveApplier implements Applier<Channels.Move> {
             var entry = it.next();
             Ghost ghost = pb.ghost(entry.getKey());
             Glide g = entry.getValue();
-            if (ghost == null || Math.abs(pb.tick() - g.builtAt()) > g.span()) {
-                it.remove(); // gone, or the leg outlived the gap it was paced for
+            if (ghost == null) {
+                it.remove();
+                continue;
+            }
+            if (Math.abs(pb.tick() - g.builtAt()) > g.span()) {
+                // the leg outlived the gap it was paced for: a fast rate crosses whole legs inside one theater
+                // tick, and the last op before a stand-still still has to land, or the ghost stops short
+                Tracks.wireMove(ghost, g.target());
+                ghost.sendPacketToViewers(new EntityHeadLookPacket(ghost.getEntityId(), g.target().yaw()));
+                it.remove();
                 continue;
             }
             Tracks.glide(ghost, g, true);

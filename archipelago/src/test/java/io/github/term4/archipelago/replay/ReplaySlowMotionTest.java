@@ -128,6 +128,43 @@ class ReplaySlowMotionTest extends HeadlessServerTest {
         }
     }
 
+    /** At eight times, the op that ends a walk lands even when it falls inside a theater tick's window. */
+    @Test
+    void aStopLandsAtEightTimes() {
+        loadArea(2000, 0);
+        CoreChannels.register();
+        Shard live = new Shard(instance);
+        FakePlayer actor = FakePlayer.connect(instance, new Pos(32000.5, 42, 0.5), "StopActor");
+        Playback pb = null;
+        try {
+            live.join(actor.player);
+            Recording rec = Replay.record(live);
+            for (int i = 0; i < 21; i++) {
+                actor.player.teleport(new Pos(32000.5 + i, 42, 0.5));
+                tick();
+            }
+            for (int i = 0; i < 40; i++) tick(); // then stands
+            rec.stop();
+            live.leave(actor.player);
+
+            Shard theater = new Shard(instance);
+            pb = Replay.play(theater, rec);
+            pb.rate(8);
+            Ghost ghost = null;
+            for (int i = 0; i < 100 && ghost == null; i++) {
+                tick();
+                ghost = pb.ghost("StopActor");
+            }
+            assertNotNull(ghost, "the ghost rose");
+            for (int i = 0; i < 100 && pb.tick() < 45; i++) tick();
+            tick();
+            assertEquals(32020.5, ghost.getPosition().x(), 1.0e-6, "the ghost stands where the actor stopped");
+        } finally {
+            if (pb != null && pb.active()) pb.halt();
+            actor.player.remove();
+        }
+    }
+
     /** Told to hold, a playback pauses on its last frame and stays for a seek; halt alone ends it. */
     @Test
     void aHeldPlaybackPausesAtItsEnd() {
