@@ -18,6 +18,9 @@ import java.util.List;
 /** A recorded actor's stand-in: a skinned player NPC driven by the actor track (a domain theater's clock ticks it). */
 public final class Ghost extends DomainLivingEntity {
 
+    /** Ticks between absolute position syncs at full rate; a playback shortens it as it speeds up. */
+    public static final int SYNC_TICKS = 200;
+
     private final String name;
     private final PlayerInfoUpdatePacket info;
 
@@ -26,7 +29,7 @@ public final class Ghost extends DomainLivingEntity {
         this.name = name;
         // the track's relative stream is authoritative; the scheduled ABSOLUTE sync lands instantly against
         // the client's 3-tick player interpolation - a periodic catch-up snap (the slow-mo breathing cycle)
-        setSynchronizationTicks(200);
+        setSynchronizationTicks(SYNC_TICKS);
         List<PlayerInfoUpdatePacket.Property> props = textures != null && signature != null
                 ? List.of(new PlayerInfoUpdatePacket.Property("textures", textures, signature))
                 : List.of();

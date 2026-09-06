@@ -162,8 +162,11 @@ class ReplaySlowMotionTest extends HeadlessServerTest {
             assertEquals(2, amplifier(ghost, net.minestom.server.potion.PotionEffect.HASTE), "double speed: a 3-tick swing");
             pb.rate(16);
             assertEquals(3, amplifier(ghost, net.minestom.server.potion.PotionEffect.HASTE), "never past a swing that draws");
+            pb.rate(8);
+            assertEquals(25, ghost.getSynchronizationTicks(), "eight times the moves a second: the snap comes eight times as often");
             pb.rate(1);
             assertFalse(ghost.hasEffect(net.minestom.server.potion.PotionEffect.HASTE), "back to bare");
+            assertEquals(Ghost.SYNC_TICKS, ghost.getSynchronizationTicks());
         } finally {
             if (pb != null && pb.active()) pb.halt();
             actor.player.remove();

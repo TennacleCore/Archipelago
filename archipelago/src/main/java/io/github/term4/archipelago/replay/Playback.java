@@ -380,8 +380,11 @@ public final class Playback {
     }
 
     // a client times a swing off the swinger's own haste or fatigue (6 ticks bare, 6-(1+a) haste, 6+2(1+a)
-    // fatigue), so a ghost's arm keeps the rate's time; haste stops where a swing would no longer draw
+    // fatigue), so a ghost's arm keeps the rate's time; haste stops where a swing would no longer draw.
+    // The relative-move drift a sync snaps away grows with the moves per real second, so a fast playback
+    // snaps small and often instead of big and rarely
     private void pace(Ghost ghost) {
+        ghost.setSynchronizationTicks(rate > 1 ? (int) Math.max(20, Math.round(Ghost.SYNC_TICKS / rate)) : Ghost.SYNC_TICKS);
         if (ghost.hasEffect(PotionEffect.HASTE)) ghost.removeEffect(PotionEffect.HASTE);
         if (ghost.hasEffect(PotionEffect.MINING_FATIGUE)) ghost.removeEffect(PotionEffect.MINING_FATIGUE);
         double at = Math.max(1.0e-3, rate);
