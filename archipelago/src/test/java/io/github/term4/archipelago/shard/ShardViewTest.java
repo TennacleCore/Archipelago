@@ -426,7 +426,7 @@ class ShardViewTest extends HeadlessServerTest {
     }
 
     @Test
-    void anEntitiesOnlyObserverGetsNoBlockFeedback() {
+    void entitiesOnlyNoBlockFeedback() {
         Shard shard = new Shard(instance);
         shard.join(member.player);
         ShardView.set(spectator.player, ShardView.base().withEntities(shard));
@@ -446,7 +446,7 @@ class ShardViewTest extends HeadlessServerTest {
     }
 
     @Test
-    void anObserverOnAnotherInstanceHearsNothingPositional() {
+    void otherInstanceHearsNothing() {
         Instance elsewhere = MinecraftServer.getInstanceManager().createInstanceContainer();
         FakePlayer far = FakePlayer.connect(elsewhere, new Pos(0.5, 64, 0.5), "ShardFar");
         Shard shard = new Shard(instance);

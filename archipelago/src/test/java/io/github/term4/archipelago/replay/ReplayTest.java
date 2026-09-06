@@ -1090,7 +1090,7 @@ class ReplayTest {
 
     /** The runaway brake: an op budget stops the recording, marks it truncated, and never appends again. */
     @Test
-    void theOpBudgetStopsARunawayRecording() {
+    void opBudgetStops() {
         Shard stage = new Shard(instance);
         Recording rec = Replay.record(stage).budget(new Recording.Budget(4, 0));
         try {
@@ -1107,7 +1107,7 @@ class ReplayTest {
 
     /** A recording nobody stopped is bounded by wall time too, whatever its op density. */
     @Test
-    void theTickBudgetStopsAForgottenRecording() {
+    void tickBudgetStops() {
         Shard stage = new Shard(instance);
         Recording rec = Replay.record(stage).budget(new Recording.Budget(0, 2));
         try {

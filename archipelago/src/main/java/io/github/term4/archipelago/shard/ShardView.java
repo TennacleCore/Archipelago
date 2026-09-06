@@ -44,7 +44,8 @@ public final class ShardView {
     // which shards' entities, and WHICH of them: a spectator can watch only the mobs, or only the players
     private final Map<Shard, Predicate<Entity>> entityShards;
 
-    private ShardView(@Nullable Shard blocks, boolean allEntities, @Nullable Predicate<Entity> baseEntities, Map<Shard, Predicate<Entity>> entityShards) {
+    private ShardView(@Nullable Shard blocks, boolean allEntities, @Nullable Predicate<Entity> baseEntities,
+                      Map<Shard, Predicate<Entity>> entityShards) {
         this.blocks = blocks;
         this.allEntities = allEntities;
         this.baseEntities = baseEntities;

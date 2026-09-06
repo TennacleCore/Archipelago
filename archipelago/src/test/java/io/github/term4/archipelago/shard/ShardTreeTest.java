@@ -464,7 +464,7 @@ class ShardTreeTest extends HeadlessServerTest {
     }
 
     @Test
-    void anEntityViewCanFilterByType() {
+    void entityViewFiltersByType() {
         instance.loadChunk(1880 >> 4, 1880 >> 4).join();
         Shard shard = new Shard(instance);
         FakePlayer member = FakePlayer.connect(instance, new Pos(1880.5, 66, 1880.5), "FilterMember");

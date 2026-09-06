@@ -497,7 +497,7 @@ class DomainManagerTest {
 
     /** The JVM-shutdown contract: the clocks land their final cycle before it returns, and a second call is a no-op. */
     @Test
-    void shutdownWaitsForTheClocksAndRepeats() {
+    void shutdownWaitsAndRepeats() {
         DomainManager domains = new DomainManager();
         Domain d = domains.create();
         Thread clock = domains.clocks.get(d).thread();

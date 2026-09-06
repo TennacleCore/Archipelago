@@ -127,7 +127,7 @@ class ShardTabListTest extends HeadlessServerTest {
      * build, and the app can move that fallback without a per-viewer source.
      */
     @Test
-    void anUnknownProtocolReadsAsTheServersOwnBuild() {
+    void unknownProtocolReadsModern() {
         instance.loadChunk(0, 0).join();
         ShardTabList.install();
         FakePlayer viewer = FakePlayer.connect(instance, new Pos(6.5, 42, 0.5), "TabProto");
@@ -154,7 +154,7 @@ class ShardTabListTest extends HeadlessServerTest {
 
     /** The /tablog buffer is per-viewer: it must not outlive the connection that fed it. */
     @Test
-    void theTabPacketLogDiesWithTheConnection() {
+    void tabLogDiesWithConnection() {
         instance.loadChunk(0, 0).join();
         ShardTabList.install();
         FakePlayer viewer = FakePlayer.connect(instance, new Pos(8.5, 42, 0.5), "TabLog");
