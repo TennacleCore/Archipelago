@@ -162,6 +162,15 @@ final class BlockRouting {
         return node;
     }
 
+    // overlay writes attach no handler and a loaded block entity carries a Dummy: the registered rule wins over
+    // both, a real attached handler over the rule (stock: false = consumed)
+    static @Nullable BlockHandler handlerOf(Block block) {
+        BlockHandler attached = block.handler();
+        if (attached != null && !(attached instanceof BlockHandler.Dummy)) return attached;
+        BlockHandler registered = MinecraftServer.getBlockManager().getHandler(block.name());
+        return registered != null ? registered : attached;
+    }
+
     private static boolean handlerAt(@Nullable Shard shard, ClientPlayerBlockPlacementPacket p) {
         if (shard == null || !shard.instance().isChunkLoaded(p.blockPosition())) return false;
         Block b = shard.getBlock(p.blockPosition().asBlockVec());
@@ -190,9 +199,7 @@ final class BlockRouting {
         EventDispatcher.call(interact);
         boolean blockUse = interact.isBlockingItemUse();
         if (!interact.isCancelled()) {
-            // overlay writes never attach handlers; resolve the registered one by key (stock: false = consumed)
-            BlockHandler handler = interacted.handler() != null ? interacted.handler()
-                    : MinecraftServer.getBlockManager().getHandler(interacted.name());
+            BlockHandler handler = handlerOf(interacted);
             if (handler != null) {
                 blockUse |= !handler.onInteract(new BlockHandler.Interaction(
                         interacted, base, p.blockFace(), clicked, cursor, player, p.hand()));

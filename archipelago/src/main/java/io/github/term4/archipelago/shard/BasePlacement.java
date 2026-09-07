@@ -73,7 +73,7 @@ final class BasePlacement {
         EventDispatcher.call(playerBlockInteractEvent);
         boolean blockUse = playerBlockInteractEvent.isBlockingItemUse();
         if (!playerBlockInteractEvent.isCancelled()) {
-            final var handler = interactedBlock.handler();
+            final var handler = BlockRouting.handlerOf(interactedBlock);
             if (handler != null) {
                 blockUse |= !handler.onInteract(new BlockHandler.Interaction(interactedBlock, instance, blockFace, blockPosition, cursorPosition, player, hand));
             }
