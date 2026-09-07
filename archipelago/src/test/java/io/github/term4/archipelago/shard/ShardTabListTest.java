@@ -111,6 +111,14 @@ class ShardTabListTest extends HeadlessServerTest {
             unregister.run();
             assertFalse(ShardTabList.listed(member.player, spectator.player), "unregistering restores the scope");
 
+            // a rule for one audience refreshes that audience alone - a game's own rule must not touch the server
+            member.sent.clear();
+            spectator.sent.clear();
+            Runnable scoped = ShardTabList.rule((viewer, subject) -> null, () -> ShardTabList.resync(spectator.player));
+            scoped.run();
+            assertTrue(member.sent(PlayerInfoUpdatePacket.class).isEmpty(),
+                    "a scoped rule leaves every list it never answered for alone");
+
             // force-hide beats even INSTANCE scope
             Runnable hide = ShardTabList.rule((viewer, subject) -> subject == member.player ? false : null);
             game.tabScope(ShardTabList.TabScope.INSTANCE);

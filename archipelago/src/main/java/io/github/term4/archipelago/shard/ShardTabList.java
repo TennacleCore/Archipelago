@@ -93,11 +93,20 @@ public final class ShardTabList {
      * {@code rule((viewer, subject) -> ShardView.of(subject).blocks() == Shard.of(viewer) ? true : null)}.
      */
     public static @NotNull Runnable rule(@NotNull TabRule rule) {
+        return rule(rule, ShardTabList::resyncAll);
+    }
+
+    /**
+     * {@link #rule(TabRule)} for a rule that only ever answers for one audience: {@code resync} refreshes that
+     * audience alone, on both ends. A rule per game re-sending every list on the server twice a match is
+     * quadratic in the players online.
+     */
+    public static @NotNull Runnable rule(@NotNull TabRule rule, @NotNull Runnable resync) {
         RULES.add(rule);
-        resyncAll();
+        resync.run();
         return () -> {
             RULES.remove(rule);
-            resyncAll();
+            resync.run();
         };
     }
 
