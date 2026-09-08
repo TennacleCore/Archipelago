@@ -246,11 +246,13 @@ final class BlockRouting {
         if (!base.getWorldBorder().inBounds(target)) canPlace = false;
 
         Block block = held.get(DataComponents.BLOCK_STATE, ItemBlockState.EMPTY).apply(material.block());
-        if (!canPlace || intersectsEntity(shard, player, target, block)) {
+        if (!canPlace) {
             rejectPlace(shard, player, clicked, target, p.blockFace());
             return;
         }
-        // orientation/shape rules over the SHARD view; the base pipeline runs them inside placeBlock - here pre-event
+        // orientation/shape rules over the SHARD view; the base pipeline runs them inside placeBlock - here pre-event.
+        // Before the body check, not after: a slab merging into a double fills the whole cell, and the bottom half
+        // the item names misses a body standing in the top one
         var rule = manager.getBlockPlacementRule(block);
         if (rule != null) {
             Block ruled = rule.blockPlace(new BlockPlacementRule.PlacementState(
@@ -258,6 +260,10 @@ final class BlockRouting {
                     cursor, player.getPosition(), held, player.isSneaking()));
             if (ruled == null) { rejectPlace(shard, player, clicked, target, p.blockFace()); return; } // rule rejected the spot
             block = ruled;
+        }
+        if (intersectsEntity(shard, player, target, block)) {
+            rejectPlace(shard, player, clicked, target, p.blockFace());
+            return;
         }
         PlayerBlockPlaceEvent event = new PlayerBlockPlaceEvent(player, base, block, p.blockFace(), target, cursor, p.hand());
         event.consumeBlock(player.getGameMode() != GameMode.CREATIVE);

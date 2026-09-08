@@ -147,7 +147,8 @@ final class BasePlacement {
         final ItemBlockState blockState = usedItem.get(DataComponents.BLOCK_STATE, ItemBlockState.EMPTY);
         final Block placedBlock = blockState.apply(useMaterial.block());
 
-        Entity collisionEntity = canPlaceBlockAt(instance, placementPosition, placedBlock, player);
+        Entity collisionEntity = canPlaceBlockAt(instance, placementPosition,
+                shaped(instance, placedBlock, blockFace, placementPosition, cursorPosition, player, usedItem), player);
         if (collisionEntity != null) {
             // If a player is trying to place a block on themselves, the client sends a block change but does not set
             // the block on its own client, so it only needs an acknowledgement.
@@ -182,6 +183,17 @@ final class BasePlacement {
             final int slot = hand == PlayerHand.OFF ? PlayerInventoryUtils.OFFHAND_SLOT : player.getHeldSlot();
             player.getInventory().sendSlotRefresh(slot, player.getItemInHand(hand));
         }
+    }
+
+    // the shape the placement rule settles on, which placeBlock only applies later: a slab merging into a double
+    // fills the whole cell, and the bottom half the item names misses a body standing in the top one
+    private static Block shaped(Instance instance, Block placed, BlockFace face, Point at, Point cursor,
+                                Player player, ItemStack used) {
+        var rule = BLOCK_MANAGER.getBlockPlacementRule(placed);
+        if (rule == null) return placed;
+        Block ruled = rule.blockPlace(new BlockPlacementRule.PlacementState(instance, placed, face, at.asBlockVec(),
+                cursor, player.getPosition(), used, player.isSneaking()));
+        return ruled != null ? ruled : placed;
     }
 
     // upstream BlockCollision.canPlaceBlockAt with two local changes: the policy scope, and the per-body
