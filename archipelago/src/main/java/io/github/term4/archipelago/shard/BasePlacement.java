@@ -186,13 +186,14 @@ final class BasePlacement {
     }
 
     // the shape the placement rule settles on, which placeBlock only applies later: a slab merging into a double
-    // fills the whole cell, and the bottom half the item names misses a body standing in the top one
+    // fills the whole cell, and the bottom half the item names misses a body standing in the top one. Staged: this
+    // run is the body check's alone, and placeBlock runs the rule again for real
     private static Block shaped(Instance instance, Block placed, BlockFace face, Point at, Point cursor,
                                 Player player, ItemStack used) {
         var rule = BLOCK_MANAGER.getBlockPlacementRule(placed);
         if (rule == null) return placed;
-        Block ruled = rule.blockPlace(new BlockPlacementRule.PlacementState(instance, placed, face, at.asBlockVec(),
-                cursor, player.getPosition(), used, player.isSneaking()));
+        Block ruled = rule.blockPlace(new BlockPlacementRule.PlacementState(new StagedBlocks(instance), placed, face,
+                at.asBlockVec(), cursor, player.getPosition(), used, player.isSneaking()));
         return ruled != null ? ruled : placed;
     }
 

@@ -252,11 +252,12 @@ final class BlockRouting {
         }
         // orientation/shape rules over the SHARD view; the base pipeline runs them inside placeBlock - here pre-event.
         // Before the body check, not after: a slab merging into a double fills the whole cell, and the bottom half
-        // the item names misses a body standing in the top one
+        // the item names misses a body standing in the top one. Staged, so the rule's own writes wait for the verdict
         var rule = manager.getBlockPlacementRule(block);
+        StagedBlocks staged = new StagedBlocks(new ShardBlockView(shard));
         if (rule != null) {
             Block ruled = rule.blockPlace(new BlockPlacementRule.PlacementState(
-                    new ShardBlockView(shard), block, p.blockFace(), target,
+                    staged, block, p.blockFace(), target,
                     cursor, player.getPosition(), held, player.isSneaking()));
             if (ruled == null) { rejectPlace(shard, player, clicked, target, p.blockFace()); return; } // rule rejected the spot
             block = ruled;
@@ -272,6 +273,7 @@ final class BlockRouting {
             rejectPlace(shard, player, clicked, target, p.blockFace());
             return;
         }
+        staged.commit(new ShardBlockView(shard));
         shard.setBlock(target, event.getBlock());
         ShardUpdates.applyPhysics(shard, target);
         if (event.doesConsumeBlock()) player.setItemInHand(p.hand(), held.consume(1));
