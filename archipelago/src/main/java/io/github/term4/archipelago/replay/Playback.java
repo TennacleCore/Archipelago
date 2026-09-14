@@ -37,7 +37,9 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import net.kyori.adventure.text.Component;
 import java.util.Map;
+import java.util.function.Function;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -69,6 +71,7 @@ public final class Playback {
 
     // mutated on the owner thread only; concurrent for cross-thread status reads (commands, tests)
     private final Map<String, Ghost> ghosts = new ConcurrentHashMap<>();
+    private Function<String, @Nullable Component> ghostNames = player -> null;
     private final Map<String, PlayerSkin> skins = new ConcurrentHashMap<>();
     private final Map<Integer, Entity> entities = new ConcurrentHashMap<>();
     private final Set<Integer> removedEarly = ConcurrentHashMap.newKeySet();
@@ -377,6 +380,19 @@ public final class Playback {
     public @NotNull Shard layerFor(@NotNull String player) {
         Shard in = layerShards.get(actorLayers.getOrDefault(player, 0));
         return in != null ? in : shard;
+    }
+
+    /**
+     * How a recorded actor's tab row reads, {@code null} for a row it should not have - the default. Set before
+     * playback runs: appliers raise ghosts lazily, and an entry is built once.
+     */
+    public void ghostNames(@NotNull Function<String, @Nullable Component> names) {
+        this.ghostNames = names;
+    }
+
+    /** {@link #ghostNames}'s answer for {@code player}. */
+    public @Nullable Component ghostName(@NotNull String player) {
+        return ghostNames.apply(player);
     }
 
     /** The recorded actor's ghost, or {@code null} (not spawned yet, or unknown). */

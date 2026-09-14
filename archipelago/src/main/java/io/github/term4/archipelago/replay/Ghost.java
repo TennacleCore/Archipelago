@@ -8,6 +8,7 @@ import net.minestom.server.entity.damage.Damage;
 import net.minestom.server.entity.metadata.avatar.PlayerMeta;
 import net.minestom.server.network.packet.server.SendablePacket;
 import net.minestom.server.network.packet.server.play.EntityEquipmentPacket;
+import net.kyori.adventure.text.Component;
 import net.minestom.server.network.packet.server.play.PlayerInfoRemovePacket;
 import net.minestom.server.network.packet.server.play.PlayerInfoUpdatePacket;
 import net.minestom.server.network.packet.server.play.EntityEffectPacket;
@@ -27,6 +28,16 @@ public final class Ghost extends DomainLivingEntity {
     private final PlayerInfoUpdatePacket info;
 
     public Ghost(@NotNull String name, @Nullable String textures, @Nullable String signature) {
+        this(name, textures, signature, null);
+    }
+
+    /**
+     * {@code listName} both lists the ghost and names its row. A scoreboard team cannot do it: a team keys on the
+     * entry name, and a watcher who played in this game shares one with their own ghost - the display name rides
+     * the entry instead, so the two rows are told apart.
+     */
+    public Ghost(@NotNull String name, @Nullable String textures, @Nullable String signature,
+                 @Nullable Component listName) {
         super(EntityType.PLAYER);
         this.name = name;
         // the track's relative stream is authoritative; the scheduled ABSOLUTE sync lands instantly against
@@ -36,8 +47,8 @@ public final class Ghost extends DomainLivingEntity {
                 ? List.of(new PlayerInfoUpdatePacket.Property("textures", textures, signature))
                 : List.of();
         info = new PlayerInfoUpdatePacket(PlayerInfoUpdatePacket.Action.ADD_PLAYER,
-                new PlayerInfoUpdatePacket.Entry(getUuid(), name, props, false, 0,
-                        GameMode.SURVIVAL, null, null, 0, true));
+                new PlayerInfoUpdatePacket.Entry(getUuid(), name, props, listName != null, 0,
+                        GameMode.SURVIVAL, listName, null, 0, true));
         ((PlayerMeta) getEntityMeta()).setDisplayedSkinParts((byte) 0x7F);
         setNoGravity(true);
     }

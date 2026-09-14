@@ -30,7 +30,7 @@ final class MoveApplier implements Applier<Channels.Move> {
             if (pb.hidden(m.player())) return; // no ghost while the real one wasn't renderable
             PlayerSkin skin = pb.skin(m.player());
             ghost = new Ghost(m.player(), skin != null ? skin.textures() : null,
-                    skin != null ? skin.signature() : null);
+                    skin != null ? skin.signature() : null, pb.ghostName(m.player()));
             // a re-raised ghost (respawn/unhide) rises bare, and the recording's re-emitted equips
             // land a few samples later: dress it from the equip state already at the cursor
             Recorded<Channels.Equip> fit = fits.latest(pb, m.player(), pb.tick());
