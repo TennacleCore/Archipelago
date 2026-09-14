@@ -32,9 +32,20 @@ class GhostListNameTest extends HeadlessServerTest {
         assertNull(bare.displayName());
     }
 
+    /** The first tick can raise a ghost before {@code Replay.play} returns, so the name lands after it. */
+    @Test
+    void aNameLandsOnAGhostAlreadyUp() {
+        Component red = Component.text("Recorded", NamedTextColor.RED);
+        Ghost ghost = new Ghost("Recorded", null, null); // raised bare, as the first tick raises them
+        ghost.listName(red);
+        PlayerInfoUpdatePacket.Entry entry = entryOf(ghost, "LateWatcher");
+        assertTrue(entry.listed(), "renaming lists it");
+        assertEquals(red, entry.displayName());
+    }
+
     // the profile a viewer is sent when the ghost comes into view
     private static PlayerInfoUpdatePacket.Entry entryOf(Ghost ghost, String watcher) {
-        ghost.setInstance(instance, new Pos(600.5, 64, 600.5)).join();
+        if (ghost.getInstance() == null) ghost.setInstance(instance, new Pos(600.5, 64, 600.5)).join();
         FakePlayer viewer = FakePlayer.connect(instance, new Pos(602.5, 64, 600.5), watcher);
         try {
             assertTrue(ghost.getViewers().contains(viewer.player), "the harness really is watching the ghost");

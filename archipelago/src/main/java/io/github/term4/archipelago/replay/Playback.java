@@ -383,11 +383,12 @@ public final class Playback {
     }
 
     /**
-     * How a recorded actor's tab row reads, {@code null} for a row it should not have - the default. Set before
-     * playback runs: appliers raise ghosts lazily, and an entry is built once.
+     * How a recorded actor's tab row reads, {@code null} for a row it should not have - the default. Renames the
+     * ghosts already raised, which the first tick may have raised before {@code Replay.play} returned.
      */
     public void ghostNames(@NotNull Function<String, @Nullable Component> names) {
         this.ghostNames = names;
+        ghosts.forEach((player, ghost) -> ghost.listName(names.apply(player))); // the ones already up
     }
 
     /** {@link #ghostNames}'s answer for {@code player}. */

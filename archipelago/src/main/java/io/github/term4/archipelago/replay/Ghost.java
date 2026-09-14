@@ -25,7 +25,8 @@ public final class Ghost extends DomainLivingEntity {
     public static final int SYNC_TICKS = 200;
 
     private final String name;
-    private final PlayerInfoUpdatePacket info;
+    private final List<PlayerInfoUpdatePacket.Property> props;
+    private PlayerInfoUpdatePacket info;
 
     public Ghost(@NotNull String name, @Nullable String textures, @Nullable String signature) {
         this(name, textures, signature, null);
@@ -43,14 +44,23 @@ public final class Ghost extends DomainLivingEntity {
         // the track's relative stream is authoritative; the scheduled ABSOLUTE sync lands instantly against
         // the client's 3-tick player interpolation - a periodic catch-up snap (the slow-mo breathing cycle)
         setSynchronizationTicks(SYNC_TICKS);
-        List<PlayerInfoUpdatePacket.Property> props = textures != null && signature != null
+        props = textures != null && signature != null
                 ? List.of(new PlayerInfoUpdatePacket.Property("textures", textures, signature))
                 : List.of();
+        listName(listName);
+        ((PlayerMeta) getEntityMeta()).setDisplayedSkinParts((byte) 0x7F);
+        setNoGravity(true);
+    }
+
+    /**
+     * Renames the row, or drops it with {@code null}. A playback raises ghosts on the first move op, which can
+     * land before {@code Replay.play} returns - so the name arrives after the ghost as often as with it. Viewers
+     * take the profile on arrival, and none has arrived yet.
+     */
+    public void listName(@Nullable Component listName) {
         info = new PlayerInfoUpdatePacket(PlayerInfoUpdatePacket.Action.ADD_PLAYER,
                 new PlayerInfoUpdatePacket.Entry(getUuid(), name, props, listName != null, 0,
                         GameMode.SURVIVAL, listName, null, 0, true));
-        ((PlayerMeta) getEntityMeta()).setDisplayedSkinParts((byte) 0x7F);
-        setNoGravity(true);
     }
 
     /** The recorded actor's username. */
