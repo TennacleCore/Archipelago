@@ -4,7 +4,9 @@ import io.github.term4.archipelago.testsupport.FakePlayer;
 import io.github.term4.archipelago.testsupport.HeadlessServerTest;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
+import net.minestom.server.MinecraftServer;
 import net.minestom.server.coordinate.Pos;
+import net.minestom.server.network.NetworkBuffer;
 import net.minestom.server.network.packet.server.play.PlayerInfoUpdatePacket;
 import org.junit.jupiter.api.Test;
 
@@ -41,6 +43,41 @@ class GhostListNameTest extends HeadlessServerTest {
         PlayerInfoUpdatePacket.Entry entry = entryOf(ghost, "LateWatcher");
         assertTrue(entry.listed(), "renaming lists it");
         assertEquals(red, entry.displayName());
+    }
+
+    /**
+     * The record is not the wire: a {@code PlayerInfoUpdatePacket} writes only the fields whose action is in its
+     * set, so an entry carrying a display name under {@code ADD_PLAYER} alone reaches nobody.
+     */
+    @Test
+    void theNameSurvivesTheWire() {
+        Component blue = Component.text("Recorded", NamedTextColor.BLUE);
+        Ghost ghost = new Ghost("Recorded", null, null, blue);
+        try {
+            PlayerInfoUpdatePacket sent = (PlayerInfoUpdatePacket) capture(ghost, "WireWatcher");
+            NetworkBuffer buffer = NetworkBuffer.resizableBuffer(256, MinecraftServer.getRegistries());
+            buffer.write(PlayerInfoUpdatePacket.SERIALIZER, sent);
+            PlayerInfoUpdatePacket back = buffer.read(PlayerInfoUpdatePacket.SERIALIZER);
+            PlayerInfoUpdatePacket.Entry entry = back.entries().getFirst();
+            assertEquals("Recorded", entry.username(), "the profile came back whole");
+            assertTrue(entry.listed(), "and listed");
+            assertEquals(blue, entry.displayName(), "and named: the actions carried the fields, not the record");
+        } finally {
+            ghost.remove();
+        }
+    }
+
+    private static Object capture(Ghost ghost, String watcher) {
+        ghost.setInstance(instance, new Pos(604.5, 64, 604.5)).join();
+        FakePlayer viewer = FakePlayer.connect(instance, new Pos(606.5, 64, 604.5), watcher);
+        try {
+            return viewer.sent.stream()
+                    .filter(PlayerInfoUpdatePacket.class::isInstance).map(PlayerInfoUpdatePacket.class::cast)
+                    .filter(p -> p.entries().stream().anyMatch(e -> e.uuid().equals(ghost.getUuid())))
+                    .reduce((first, last) -> last).orElseThrow();
+        } finally {
+            viewer.player.remove();
+        }
     }
 
     // the profile a viewer is sent when the ghost comes into view

@@ -16,6 +16,7 @@ import net.minestom.server.potion.TimedPotion;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.EnumSet;
 import java.util.List;
 
 /** A recorded actor's stand-in: a skinned player NPC driven by the actor track (a domain theater's clock ticks it). */
@@ -58,7 +59,11 @@ public final class Ghost extends DomainLivingEntity {
      * take the profile on arrival, and none has arrived yet.
      */
     public void listName(@Nullable Component listName) {
-        info = new PlayerInfoUpdatePacket(PlayerInfoUpdatePacket.Action.ADD_PLAYER,
+        // the actions ARE the wire format: a field whose action is missing is never written, whatever the entry holds
+        info = new PlayerInfoUpdatePacket(
+                EnumSet.of(PlayerInfoUpdatePacket.Action.ADD_PLAYER,
+                        PlayerInfoUpdatePacket.Action.UPDATE_LISTED,
+                        PlayerInfoUpdatePacket.Action.UPDATE_DISPLAY_NAME),
                 new PlayerInfoUpdatePacket.Entry(getUuid(), name, props, listName != null, 0,
                         GameMode.SURVIVAL, listName, null, 0, true));
     }
