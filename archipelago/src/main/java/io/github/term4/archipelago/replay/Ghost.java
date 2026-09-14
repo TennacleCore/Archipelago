@@ -9,6 +9,7 @@ import net.minestom.server.entity.metadata.avatar.PlayerMeta;
 import net.minestom.server.network.packet.server.SendablePacket;
 import net.minestom.server.network.packet.server.play.EntityEquipmentPacket;
 import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import net.minestom.server.network.packet.server.play.PlayerInfoRemovePacket;
 import net.minestom.server.network.packet.server.play.PlayerInfoUpdatePacket;
 import net.minestom.server.network.packet.server.play.EntityEffectPacket;
@@ -22,12 +23,16 @@ import java.util.List;
 /** A recorded actor's stand-in: a skinned player NPC driven by the actor track (a domain theater's clock ticks it). */
 public final class Ghost extends DomainLivingEntity {
 
+    /** A 1.8 profile name past this disconnects the client. */
+    private static final int LEGACY_NAME_CAP = 16;
+
     /** Ticks between absolute position syncs at full rate; a playback shortens it as it speeds up. */
     public static final int SYNC_TICKS = 200;
 
     private final String name;
     private final List<PlayerInfoUpdatePacket.Property> props;
     private PlayerInfoUpdatePacket info;
+    private PlayerInfoUpdatePacket legacyInfo;
 
     public Ghost(@NotNull String name, @Nullable String textures, @Nullable String signature) {
         this(name, textures, signature, null);
@@ -59,13 +64,32 @@ public final class Ghost extends DomainLivingEntity {
      * take the profile on arrival, and none has arrived yet.
      */
     public void listName(@Nullable Component listName) {
-        // the actions ARE the wire format: a field whose action is missing is never written, whatever the entry holds
-        info = new PlayerInfoUpdatePacket(
+        info = profile(name, listName);
+        String plated = plateName(name, listName);
+        legacyInfo = plated.equals(name) ? info : profile(plated, listName);
+    }
+
+    // the actions ARE the wire format: a field whose action is missing is never written, whatever the entry holds
+    private PlayerInfoUpdatePacket profile(String username, @Nullable Component listName) {
+        return new PlayerInfoUpdatePacket(
                 EnumSet.of(PlayerInfoUpdatePacket.Action.ADD_PLAYER,
                         PlayerInfoUpdatePacket.Action.UPDATE_LISTED,
                         PlayerInfoUpdatePacket.Action.UPDATE_DISPLAY_NAME),
-                new PlayerInfoUpdatePacket.Entry(getUuid(), name, props, listName != null, 0,
+                new PlayerInfoUpdatePacket.Entry(getUuid(), username, props, listName != null, 0,
                         GameMode.SURVIVAL, listName, null, 0, true));
+    }
+
+    /**
+     * The name a 1.8 client draws over the head. It has no display-name lever there - the plate is the profile
+     * name formatted by the team that name is on, and a team keys on the name, which a watcher of their own match
+     * shares with their ghost. So the color rides the name itself. Sixteen characters is the cap and a longer one
+     * DISCONNECTS the client, so a name with no room for the code keeps its plate plain rather than clipped.
+     */
+    private static String plateName(String name, @Nullable Component listName) {
+        if (listName == null || listName.color() == null) return name;
+        String coded = LegacyComponentSerializer.legacySection()
+                .serialize(Component.text(name).color(listName.color()));
+        return coded.length() <= LEGACY_NAME_CAP ? coded : name;
     }
 
     /** The recorded actor's username. */
@@ -76,7 +100,7 @@ public final class Ghost extends DomainLivingEntity {
     // the tab-list profile must reach each viewer before the spawn packet (then leaves the list)
     @Override
     public void updateNewViewer(@NotNull Player player) {
-        player.sendPacket(info);
+        player.sendPacket(Replay.legacyViewer(player) ? legacyInfo : info);
         super.updateNewViewer(player);
         // an effect packet reaches only the viewers standing there when the effect lands, and a client times a
         // swing off the swinger's own haste/fatigue: a viewer who arrives after (a ghost re-raised by a seek,

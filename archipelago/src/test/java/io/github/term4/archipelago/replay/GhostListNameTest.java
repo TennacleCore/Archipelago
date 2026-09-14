@@ -67,6 +67,55 @@ class GhostListNameTest extends HeadlessServerTest {
         }
     }
 
+    /**
+     * A 1.8 plate is the profile name formatted by that name's team, so the color rides the name; a modern client
+     * would render the section code literally and takes the plain one.
+     */
+    @Test
+    void aLegacyPlateWearsTheColorInTheName() {
+        Replay.viewerProtocol(p -> p.hasTag(LEGACY) ? 47 : -1); // -1 = unknown, which reads modern
+        Ghost ghost = new Ghost("Recorded", null, null, Component.text("Recorded", NamedTextColor.BLUE));
+        try {
+            assertEquals("§9Recorded", profileSentTo(ghost, "PlateLegacy", true), "the plate carries the code");
+            assertEquals("Recorded", profileSentTo(ghost, "PlateModern", false), "a modern client reads codes literally");
+        } finally {
+            ghost.remove();
+        }
+    }
+
+    /** Sixteen is the cap and a longer name disconnects the client: the name survives, the color does not. */
+    @Test
+    void aNameWithNoRoomKeepsItsPlatePlain() {
+        Replay.viewerProtocol(p -> p.hasTag(LEGACY) ? 47 : -1);
+        String long15 = "PlayerNameOf15!";
+        Ghost ghost = new Ghost(long15, null, null, Component.text(long15, NamedTextColor.RED));
+        try {
+            assertEquals(long15, profileSentTo(ghost, "PlateLong", true), "whole, uncolored, rather than clipped");
+        } finally {
+            ghost.remove();
+        }
+    }
+
+    private static String profileSentTo(Ghost ghost, String watcher, boolean legacy) {
+        if (ghost.getInstance() == null) ghost.setInstance(instance, new Pos(608.5, 64, 608.5)).join();
+        FakePlayer viewer = FakePlayer.connect(instance, new Pos(610.5, 64, 608.5), watcher);
+        try {
+            if (legacy) viewer.player.setTag(LEGACY, true);
+            viewer.sent.clear();
+            ghost.updateNewViewer(viewer.player); // the profile a viewer takes on arrival
+            return viewer.sent.stream()
+                    .filter(PlayerInfoUpdatePacket.class::isInstance).map(PlayerInfoUpdatePacket.class::cast)
+                    .flatMap(p -> p.entries().stream())
+                    .filter(e -> e.uuid().equals(ghost.getUuid()))
+                    .reduce((first, last) -> last).orElseThrow().username();
+        } finally {
+            viewer.player.remove();
+        }
+    }
+
+    private static final net.minestom.server.tag.Tag<Boolean> LEGACY =
+            net.minestom.server.tag.Tag.Transient("test:legacy");
+
     private static Object capture(Ghost ghost, String watcher) {
         ghost.setInstance(instance, new Pos(604.5, 64, 604.5)).join();
         FakePlayer viewer = FakePlayer.connect(instance, new Pos(606.5, 64, 604.5), watcher);
