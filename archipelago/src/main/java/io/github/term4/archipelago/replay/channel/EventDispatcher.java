@@ -21,8 +21,12 @@ public abstract class EventDispatcher implements Dispatcher {
         MinecraftServer.getGlobalEventHandler().addChild(node);
     }
 
+    /** The subclass's own release, if it registered anything outside {@code node}. */
+    protected void stopped() {}
+
     @Override
     public final void stop(@NotNull Recording recording) {
         if (node != null) MinecraftServer.getGlobalEventHandler().removeChild(node);
+        stopped();
     }
 }
