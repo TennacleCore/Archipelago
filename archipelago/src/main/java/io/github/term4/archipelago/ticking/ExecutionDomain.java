@@ -15,7 +15,7 @@ import java.util.function.Supplier;
  * retires it with the shard.
  *
  * <p>A domain is a FAILURE DOMAIN: its work never reroutes to another thread. A tick hung past the watchdog's
- * quarantine threshold FAILS the domain (crash report on disk, {@code DomainQuarantineEvent}, shards destroyed) -
+ * quarantine threshold FAILS the domain (crash report on disk, {@code DomainQuarantineEvent}, shards parked in stasis for the app to decide) -
  * rebuild fresh, never reuse it.
  */
 public final class ExecutionDomain {

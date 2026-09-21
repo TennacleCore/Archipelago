@@ -52,7 +52,8 @@ final class Domain {
     private final Queue<Runnable> tasks = new ConcurrentLinkedQueue<>();
     private final List<LongConsumer> tickHooks = new CopyOnWriteArrayList<>();
     private volatile long ticks;
-    private boolean loggedError;
+    private static final long ERROR_QUIET_NANOS = 60_000_000_000L;
+    private long lastErrorAt = Long.MIN_VALUE;
     private boolean loggedBacklog;
 
     Domain(DomainManager manager, boolean stasis) {
@@ -224,9 +225,11 @@ final class Domain {
         try {
             op.run();
         } catch (Throwable e) {
-            if (!loggedError) {
-                loggedError = true;
-                LOGGER.warn("domain tick failed at {} (logged once)", time, e);
+            // rate-limited, not once-only: a domain that survives one bad tick must still report the next
+            long now = System.nanoTime();
+            if (now - lastErrorAt > ERROR_QUIET_NANOS) {
+                lastErrorAt = now;
+                LOGGER.warn("domain tick failed at {} (further failures quiet for a minute)", time, e);
             }
         }
     }

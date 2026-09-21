@@ -43,7 +43,8 @@ final class DomainClock {
     private volatile long deadlineMisses;
 
     private volatile @Nullable Runnable afterStop;
-    private boolean loggedError;
+    private static final long ERROR_QUIET_NANOS = 60_000_000_000L;
+    private long lastErrorAt = Long.MIN_VALUE;
 
     private volatile long baseNanos;
     private volatile long baseTicks;
@@ -172,10 +173,11 @@ final class DomainClock {
         }
     }
 
+    // rate-limited, not once-only: a clock that survives one bad cycle must still report the next
     private void logOnce(Throwable e) {
-        if (!loggedError) {
-            loggedError = true;
-            LOGGER.warn("{} cycle failed (logged once)", thread.getName(), e);
-        }
+        long now = System.nanoTime();
+        if (now - lastErrorAt <= ERROR_QUIET_NANOS) return;
+        lastErrorAt = now;
+        LOGGER.warn("{} cycle failed (further failures quiet for a minute)", thread.getName(), e);
     }
 }

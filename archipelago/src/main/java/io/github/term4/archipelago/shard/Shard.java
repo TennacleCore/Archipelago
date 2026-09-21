@@ -188,6 +188,12 @@ public final class Shard implements MechanicsWorld {
         if (parent != null) parent.children.remove(this);
     }
 
+    /** Drops removed entities and offline members. The lifecycle listeners do this on the events;
+     *  {@link #entities()} also runs it, so a caller that installed neither is not left with corpses. */
+    public void sweep() {
+        entities();
+    }
+
     public @NotNull List<Shard> children() {
         return Collections.unmodifiableList(children);
     }
