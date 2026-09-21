@@ -1098,8 +1098,8 @@ public final class Shard implements MechanicsWorld {
     }
 
     /**
-     * 1.8 neighbor physics for a change at {@code pos}: placement rules run over THIS shard's view, and every
-     * block they change cascades. Routed places/digs fire it themselves; call after direct {@link #setBlock}
+     * Neighbor placement rules for a change at {@code pos}, over THIS shard's view; every block they change
+     * cascades. Routed places/digs fire it themselves; call after direct {@link #setBlock}
      * edits that should behave like gameplay (an explosion crater, a scripted break).
      */
     public void applyPhysics(@NotNull Point pos) {

@@ -9,15 +9,15 @@ import net.minestom.server.instance.block.rule.BlockPlacementRule;
 import org.slf4j.LoggerFactory;
 
 /**
- * 1.8 {@code applyPhysics} over a shard: a change notifies its six neighbors, and every neighbor a rule
+ * The shape pass over a shard: a change runs its six neighbors' placement rules, and every neighbor a rule
  * actually changes becomes a fresh epicenter - no distance budget (the base pipeline's capped chain is not
- * vanilla; 1.8 chains are bounded only by changes drying up).
+ * vanilla; chains are bounded only by changes drying up).
  */
 final class ShardUpdates {
 
-    /** 1.8 notify order ({@code World.applyPhysics}): west, east, down, up, north, south. */
+    /** Vanilla's {@code Block.UPDATE_SHAPE_ORDER}, the order Minestom's own pass runs {@code blockUpdate} in. */
     private static final BlockFace[] ORDER = {
-            BlockFace.WEST, BlockFace.EAST, BlockFace.BOTTOM, BlockFace.TOP, BlockFace.NORTH, BlockFace.SOUTH
+            BlockFace.WEST, BlockFace.EAST, BlockFace.NORTH, BlockFace.SOUTH, BlockFace.BOTTOM, BlockFace.TOP
     };
     /** Vanilla's runaway backstop ({@code max-chained-neighbor-updates}): a rule cycle trips it instead of the stack. */
     private static final int CHANGE_CAP = 1_000_000;

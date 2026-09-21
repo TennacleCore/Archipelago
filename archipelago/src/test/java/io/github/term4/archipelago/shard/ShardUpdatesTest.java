@@ -22,8 +22,8 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * The shard update engine is 1.8's applyPhysics: neighbor rules run over the shard view and every change
- * cascades fresh - a column taller than the base pipeline's capped chain still collapses whole.
+ * Neighbor rules run over the shard view and every change cascades fresh: a column taller than the base
+ * pipeline's capped chain still collapses whole.
  */
 class ShardUpdatesTest extends HeadlessServerTest {
 
