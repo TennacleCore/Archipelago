@@ -295,7 +295,7 @@ public final class ShardView {
     private static void sendViewAt(Player player, @Nullable Shard view, Point pos) {
         if (!player.getInstance().isChunkLoaded(pos)) return;
         Block block = view != null ? view.getBlock(pos) : player.getInstance().getBlock(pos);
-        player.sendPacket(new BlockChangePacket(pos, block));
+        BaseBlockFilter.ownSend(() -> player.sendPacket(new BlockChangePacket(pos, block)));
     }
 
     // a join or spectate diverges over the whole build: one packet per 16-cube, not per position
@@ -305,6 +305,6 @@ public final class ShardView {
             if (!player.getInstance().isChunkLoaded(pos)) continue;
             blocks.put(pos, view != null ? view.getBlock(pos) : player.getInstance().getBlock(pos));
         }
-        for (MultiBlockChangePacket packet : Shard.sectionPackets(blocks)) player.sendPacket(packet);
+        BaseBlockFilter.ownSend(() -> { for (MultiBlockChangePacket packet : Shard.sectionPackets(blocks)) player.sendPacket(packet); });
     }
 }

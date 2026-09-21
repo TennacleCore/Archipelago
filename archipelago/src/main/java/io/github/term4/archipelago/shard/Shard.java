@@ -134,6 +134,7 @@ public final class Shard implements MechanicsWorld {
     }
 
     private Shard(Instance base, @Nullable Shard parent, @Nullable ExecutionDomain domain) {
+        BaseBlockFilter.install(); // a base write must never paint over a viewer's mask
         this.base = base;
         this.parent = parent;
         this.domain = domain;
@@ -335,7 +336,8 @@ public final class Shard implements MechanicsWorld {
             forEachDiff((pos, block) -> {
                 if (!base.isChunkLoaded(pos)) return; // never reached a client; nothing to revert
                 Block revert = parent != null ? parent.getBlock(pos) : base.getBlock(pos);
-                fanBlock(pos, new BlockChangePacket(pos, revert)); // descendants saw this layer too, where unmasked
+                        // descendants saw this layer too, where unmasked
+                BaseBlockFilter.ownSend(() -> fanBlock(pos, new BlockChangePacket(pos, revert)));
                 fireBlockChange(pos, blockHooks.isEmpty() ? null : block, revert); // the entry IS the pre-reset view
             });
             overlay.clear();
@@ -411,6 +413,15 @@ public final class Shard implements MechanicsWorld {
         return parent != null ? parent.getBlock(x, y, z, condition) : base.getBlock(x, y, z, condition);
     }
 
+    /** This chain's own entry at the position, or {@code null} when the chain reads straight through to the base. */
+    @Nullable Block overlaidAt(int x, int y, int z) {
+        for (Shard s = this; s != null; s = s.parent) {
+            Block block = s.overlay.at(x, y, z);
+            if (block != null) return block;
+        }
+        return null;
+    }
+
     /** This chain's overlays in front of {@code bottom}, child-first. */
     private Block.Getter overlaid(Block.Getter bottom) {
         return overlay.over(parent != null ? parent.overlaid(bottom) : bottom);
@@ -456,7 +467,7 @@ public final class Shard implements MechanicsWorld {
     }
 
     private void changed(Point pos, Block block) {
-        fanBlock(pos, new BlockChangePacket(pos, block));
+        BaseBlockFilter.ownSend(() -> fanBlock(pos, new BlockChangePacket(pos, block)));
         // no lighting anywhere below: skip the per-block section set and the descent
         if (light == null && children.isEmpty()) return;
         lightChanged(Set.of(ShardLighting.sectionKey(pos.blockX() >> 4, pos.blockY() >> 4, pos.blockZ() >> 4)));
@@ -515,7 +526,7 @@ public final class Shard implements MechanicsWorld {
     }
 
     private void sendSections(Map<Point, Block> blocks) {
-        for (MultiBlockChangePacket packet : sectionPackets(blocks)) sendToBlockViewers(packet);
+        BaseBlockFilter.ownSend(() -> { for (MultiBlockChangePacket packet : sectionPackets(blocks)) sendToBlockViewers(packet); });
     }
 
     @Override public boolean isChunkLoaded(@NotNull Point pos) { return base.isChunkLoaded(pos); }
@@ -998,7 +1009,7 @@ public final class Shard implements MechanicsWorld {
         Map<Point, Block> effective = new HashMap<>();
         if (parent == null) overlay.forEachInChunk(chunkX, chunkZ, effective::put);
         else collectChunk(chunkX, chunkZ, effective);
-        for (MultiBlockChangePacket packet : sectionPackets(effective)) player.sendPacket(packet);
+        BaseBlockFilter.ownSend(() -> { for (MultiBlockChangePacket packet : sectionPackets(effective)) player.sendPacket(packet); });
         ShardLighting l = light;
         if (l != null) l.sendTo(player, chunkX, chunkZ);
     }

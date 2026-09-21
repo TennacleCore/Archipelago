@@ -362,7 +362,7 @@ final class BlockRouting {
         Instance world = player.getInstance();
         if (world == null || !world.isChunkLoaded(pos)) return;
         Block block = viewed != null ? viewed.getBlock(pos) : world.getBlock(pos);
-        player.sendPacket(new BlockChangePacket(pos, block));
+        BaseBlockFilter.ownSend(() -> player.sendPacket(new BlockChangePacket(pos, block)));
     }
 
     /** Whether a block at {@code pos} would overlap a shard entity/member (upstream canPlaceBlockAt over the shard). */
@@ -394,13 +394,15 @@ final class BlockRouting {
         Point adjacent = clicked.relative(face);
         if (!adjacent.equals(clicked) && !adjacent.equals(target) && actor.getInstance() != null
                 && actor.getInstance().isChunkLoaded(adjacent)) {
-            actor.sendPacket(new BlockChangePacket(adjacent, shard.getBlock(adjacent)));
+            BaseBlockFilter.ownSend(() -> actor.sendPacket(new BlockChangePacket(adjacent, shard.getBlock(adjacent))));
         }
     }
 
     /** Re-asserts the shard view of the interaction site to the actor (whose client predicted a change). */
     private static void resync(Shard shard, Player actor, Point clicked, Point target) {
-        actor.sendPacket(new BlockChangePacket(clicked, shard.getBlock(clicked)));
-        if (!target.equals(clicked)) actor.sendPacket(new BlockChangePacket(target, shard.getBlock(target)));
+        BaseBlockFilter.ownSend(() -> actor.sendPacket(new BlockChangePacket(clicked, shard.getBlock(clicked))));
+        if (!target.equals(clicked)) {
+            BaseBlockFilter.ownSend(() -> actor.sendPacket(new BlockChangePacket(target, shard.getBlock(target))));
+        }
     }
 }

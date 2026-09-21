@@ -211,7 +211,7 @@ final class BasePlacement {
     private static void rollback(Player player, PlayerHand hand, Point placementPosition, Block block, int sequence) {
         final int slot = hand == PlayerHand.OFF ? PlayerInventoryUtils.OFFHAND_SLOT : player.getHeldSlot();
         player.getInventory().sendSlotRefresh(slot, player.getItemInHand(hand));
-        player.sendPacket(new BlockChangePacket(placementPosition, block));
+        BaseBlockFilter.ownSend(() -> player.sendPacket(new BlockChangePacket(placementPosition, block)));
         player.sendPacket(new AcknowledgeBlockChangePacket(sequence));
     }
 }

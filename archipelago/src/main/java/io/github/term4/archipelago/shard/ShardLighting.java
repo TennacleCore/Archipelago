@@ -103,7 +103,7 @@ public interface ShardLighting {
         shard.sendToBlockViewers(chunk.getFullDataPacket());
         Map<Point, Block> diff = new HashMap<>();
         shard.collectChunk(chunkX, chunkZ, diff);
-        diff.forEach((pos, block) -> shard.sendToBlockViewers(new BlockChangePacket(pos, block)));
+        BaseBlockFilter.ownSend(() -> diff.forEach((pos, block) -> shard.sendToBlockViewers(new BlockChangePacket(pos, block))));
     }
 
     /**
