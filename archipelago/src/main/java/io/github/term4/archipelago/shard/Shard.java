@@ -138,6 +138,7 @@ public final class Shard implements MechanicsWorld {
         this.base = base;
         this.parent = parent;
         this.domain = domain;
+        if (domain != null) onDomainBound.accept(this);
     }
 
     /** This shard's tick domain, or {@code null} (server-ticked). */
@@ -154,6 +155,9 @@ public final class Shard implements MechanicsWorld {
      * retired or FAILED: the shard sits in stasis until re-clocked here or destroyed - never re-clock onto a
      * failed domain, bind a fresh one. Serialize calls per shard (like {@link #transfer}).
      */
+    /** Runs on every domain (re)binding: the world pass follows the clock, registered or not. */
+    static volatile java.util.function.Consumer<Shard> onDomainBound = shard -> {};
+
     public void domain(@Nullable ExecutionDomain domain) {
         ExecutionDomain target = domain != null ? domain : ExecutionDomain.stasis();
         ExecutionDomain old;
@@ -167,6 +171,7 @@ public final class Shard implements MechanicsWorld {
             }
         }
         for (Player p : members) adoptTicking(p);
+        onDomainBound.accept(this); // the world pass follows the clock, registered with a manager or not
         for (Player o : observers) adoptObserver(o);
         for (Entity e : entities) adoptTicking(e);
         EventDispatcher.call(new ShardReclockEvent(this, old, target));

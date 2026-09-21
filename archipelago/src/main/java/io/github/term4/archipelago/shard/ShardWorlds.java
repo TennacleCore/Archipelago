@@ -65,6 +65,9 @@ public final class ShardWorlds {
         // per-tick world systems (TickSystem hooks) follow a domain-bound shard onto its clock
         // (PRE_DISPATCH ordering holds: Domain.tick runs hooks before entities)
         EventNode<Event> node = EventNode.all("archipelago:worlds");
+        // a bare shard (a theater layer, an unregistered fork) fires no create event, and its entities would
+        // be ticked by the clock with no registered tickable visiting them
+        Shard.onDomainBound = ShardWorlds::hookDomainTick;
         node.addListener(ShardCreateEvent.class, e -> hookDomainTick(e.shard()));
         node.addListener(ShardDestroyEvent.class, e -> {
             Runnable stop = e.shard().getTag(TICK_HOOK);

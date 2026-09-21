@@ -594,7 +594,11 @@ public final class Playback {
 
         Channel(Recordable<T> type, List<Recorded<T>> ops) {
             this.type = type;
-            this.ops = ops;
+            // drain() stops at the first op past the cursor and LookBack binary-searches: a producer that
+            // stamps forward (a same-tick spawn and remove) or hops threads can land one out of order
+            List<Recorded<T>> sorted = new java.util.ArrayList<>(ops);
+            sorted.sort(java.util.Comparator.comparingLong(Recorded::tick));
+            this.ops = sorted;
             this.applier = type.applier().get();
         }
 
