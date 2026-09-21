@@ -299,7 +299,7 @@ public final class Playback {
 
     // back before the target: ghosts, twins and whatever else stands in the theater go (the theater is the
     // replay's, don't co-host entities in it), risen layers reset, each channel reverts what the fold cannot;
-    // husks of previously risen layers stay linked like after end() - the theater's own destroy cascades them away
+    // risen layers are reset AND unlinked: a scrubbed replay would otherwise leave one husk per seek
     private void rewind(long target) {
         ghosts.values().forEach(Playback::dismiss);
         ghosts.clear();
@@ -310,7 +310,9 @@ public final class Playback {
         actorLayers.clear();
         skins.clear();
         for (Shard layer : layerShards.values()) {
-            if (layer != shard) layer.reset();
+            if (layer == shard) continue;
+            layer.reset();
+            layer.detach(); // a seek raises fresh layers; the husks would pile up in the theater's children
         }
         layerShards.clear();
         layerShards.put(0, shard);
@@ -365,10 +367,13 @@ public final class Playback {
         layerShards.put(id, theater);
     }
 
-    /** Drops layer {@code id}: its blocks reset; the empty husk stays linked until the theater itself is destroyed. */
+    /** Drops layer {@code id}: its blocks reset and the shard unlinks from the theater. */
     public void dropLayer(int id) {
         Shard gone = layerShards.remove(id);
-        if (gone != null && gone != shard) gone.reset();
+        if (gone != null && gone != shard) {
+            gone.reset();
+            gone.detach();
+        }
     }
 
     /** Reassigns {@code player}'s recorded layer ({@link #layerFor} places the ghost). */
@@ -560,7 +565,9 @@ public final class Playback {
             ghosts.values().forEach(Entity::remove);
             entities.values().forEach(Entity::remove);
             for (Shard layer : layerShards.values()) {
-                if (layer != shard) layer.reset(); // husks stay linked; the theater's own destroy cascades them away
+                if (layer == shard) continue;
+                layer.reset();
+                layer.detach();
             }
         } finally {
             EventDispatcher.call(new PlaybackStopEvent(this)); // the stop event fires even off a broken teardown

@@ -1,5 +1,6 @@
 package io.github.term4.archipelago.shard;
 
+import io.github.term4.archipelago.testsupport.BlockWire;
 import io.github.term4.archipelago.event.ShardDestroyEvent;
 import io.github.term4.archipelago.testsupport.DetectorEntity;
 import io.github.term4.archipelago.testsupport.FakePlayer;
@@ -100,12 +101,12 @@ class ShardTreeTest extends HeadlessServerTest {
 
             Point open = new Vec(1742, 70, 1740);
             root.setBlock(open, Block.GOLD_BLOCK);
-            assertEquals(1, blockChangesAt(c, open).size(), "an unmasked parent write reaches the child's viewer");
-            assertEquals(1, blockChangesAt(g, open).size(), "and the grandchild's");
+            assertEquals(1, blockChangesAt(c, open), "an unmasked parent write reaches the child's viewer");
+            assertEquals(1, blockChangesAt(g, open), "and the grandchild's");
 
             root.setBlock(masked, Block.DIAMOND_BLOCK);
-            assertTrue(blockChangesAt(c, masked).isEmpty(), "the child's own diff masks the parent write");
-            assertTrue(blockChangesAt(g, masked).isEmpty(), "a mask prunes the whole subtree below it");
+            assertEquals(0, blockChangesAt(c, masked), "the child's own diff masks the parent write");
+            assertEquals(0, blockChangesAt(g, masked), "a mask prunes the whole subtree below it");
         } finally {
             c.player.remove();
             g.player.remove();
@@ -152,9 +153,8 @@ class ShardTreeTest extends HeadlessServerTest {
             c.sent.clear();
 
             child.reset();
-            List<BlockChangePacket> reverts = blockChangesAt(c, pos);
-            assertEquals(1, reverts.size());
-            assertEquals(Block.GOLD_BLOCK.stateId(), reverts.get(0).blockStateId(),
+            assertEquals(1, blockChangesAt(c, pos), "one revert reached the client");
+            assertEquals(Block.GOLD_BLOCK.stateId(), BlockWire.statesSentTo(c).get(pos),
                     "a child reset reverts to the PARENT view, not the base map");
             assertEquals(Block.GOLD_BLOCK, child.getBlock(pos), "the chain read agrees");
         } finally {
@@ -203,8 +203,7 @@ class ShardTreeTest extends HeadlessServerTest {
         try {
             p.sent.clear();
             child.sendChunkOverlay(p.player, 1820 >> 4, 1820 >> 4);
-            Map<Point, Integer> sent = p.sent(BlockChangePacket.class).stream()
-                    .collect(Collectors.toMap(BlockChangePacket::blockPosition, BlockChangePacket::blockStateId));
+            Map<Point, Integer> sent = BlockWire.statesSentTo(p);
             assertEquals(3, sent.size(), "each chain position once");
             assertEquals(Block.DIAMOND_BLOCK.stateId(), sent.get(maskedByChild), "the child layer wins");
             assertEquals(Block.IRON_BLOCK.stateId(), sent.get(rootOnly));
@@ -449,8 +448,8 @@ class ShardTreeTest extends HeadlessServerTest {
         assertEquals(Map.of(in, Block.DIAMOND_BLOCK), layer.diff(), "diff() stays relative");
     }
 
-    private static List<BlockChangePacket> blockChangesAt(FakePlayer player, Point pos) {
-        return player.sent(BlockChangePacket.class).stream().filter(p -> p.blockPosition().sameBlock(pos)).toList();
+    private static long blockChangesAt(FakePlayer player, Point pos) {
+        return BlockWire.countAt(player, pos);
     }
 
     private static Set<Integer> spawnedIds(FakePlayer player) {
@@ -459,8 +458,7 @@ class ShardTreeTest extends HeadlessServerTest {
     }
 
     private static Set<Point> blockChangePositions(FakePlayer player) {
-        return player.sent(BlockChangePacket.class).stream().map(BlockChangePacket::blockPosition)
-                .collect(Collectors.toSet());
+        return BlockWire.statesSentTo(player).keySet();
     }
 
     @Test

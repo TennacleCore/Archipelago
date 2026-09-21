@@ -1,5 +1,6 @@
 package io.github.term4.archipelago.shard;
 
+import io.github.term4.archipelago.testsupport.BlockWire;
 import io.github.term4.archipelago.testsupport.FakePlayer;
 import net.minestom.server.ServerFlag;
 import io.github.term4.archipelago.testsupport.HeadlessServerTest;
@@ -96,6 +97,9 @@ class ShardLightTest extends HeadlessServerTest {
                 } else if (p instanceof net.minestom.server.network.packet.server.play.BlockChangePacket b
                         && b.blockPosition().sameBlock(overlay)) {
                     seen = Block.fromStateId(b.blockStateId());
+                } else if (p instanceof net.minestom.server.network.packet.server.play.MultiBlockChangePacket m) {
+                    Integer state = BlockWire.stateAt(m, overlay); // a view swap re-sends packed per section
+                    if (state != null) seen = Block.fromStateId(state);
                 }
             }
             assertTrue(seen.compare(Block.EMERALD_BLOCK), "the destination overlay survives the base light resend");
@@ -193,6 +197,9 @@ class ShardLightTest extends HeadlessServerTest {
                 } else if (p instanceof net.minestom.server.network.packet.server.play.BlockChangePacket b
                         && b.blockPosition().sameBlock(overlay)) {
                     seen = Block.fromStateId(b.blockStateId());
+                } else if (p instanceof net.minestom.server.network.packet.server.play.MultiBlockChangePacket m) {
+                    Integer state = BlockWire.stateAt(m, overlay); // a view swap re-sends packed per section
+                    if (state != null) seen = Block.fromStateId(state);
                 }
             }
             assertTrue(restored, "disabling relight restores the base chunk for lit chunks");

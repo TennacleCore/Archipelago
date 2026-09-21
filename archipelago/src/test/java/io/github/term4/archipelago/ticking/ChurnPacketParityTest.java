@@ -1,5 +1,6 @@
 package io.github.term4.archipelago.ticking;
 
+import io.github.term4.archipelago.testsupport.BlockWire;
 import io.github.term4.archipelago.shard.Shard;
 import io.github.term4.archipelago.shard.ShardManager;
 import io.github.term4.archipelago.testsupport.FakePlayer;
@@ -43,9 +44,7 @@ class ChurnPacketParityTest extends HeadlessServerTest {
                 domain.leave(b.player);
                 domain.join(b.player);
             }
-            long overlayResends = b.sent(BlockChangePacket.class).stream()
-                    .filter(p -> p.blockPosition().sameBlock(overlayPos) && p.blockStateId() == Block.GOLD_BLOCK.stateId())
-                    .count();
+            long overlayResends = BlockWire.countAt(b, overlayPos); // a re-send packs per section, a live write does not
             assertTrue(overlayResends >= 15, "every rejoin re-sent the overlay, got " + overlayResends);
 
             a.sent.clear();

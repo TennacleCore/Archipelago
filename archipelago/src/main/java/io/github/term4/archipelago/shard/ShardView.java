@@ -1,6 +1,7 @@
 package io.github.term4.archipelago.shard;
 
 import io.github.term4.polyp.world.MechanicsWorld;
+import java.util.Collection;
 import java.util.function.Predicate;
 import java.util.HashMap;
 import java.util.Map;
@@ -10,6 +11,7 @@ import net.minestom.server.coordinate.Point;
 import net.minestom.server.entity.Entity;
 import net.minestom.server.entity.Player;
 import net.minestom.server.instance.block.Block;
+import net.minestom.server.network.packet.server.play.MultiBlockChangePacket;
 import net.minestom.server.network.packet.server.play.BlockChangePacket;
 import net.minestom.server.tag.Tag;
 import org.jetbrains.annotations.NotNull;
@@ -274,7 +276,7 @@ public final class ShardView {
                 if (resent.contains(CoordConversion.chunkIndex(pos.chunkX(), pos.chunkZ()))) positions.add(pos);
             }
         }
-        for (Point pos : positions) sendViewAt(player, newView, pos);
+        sendView(player, newView, positions);
     }
 
     private static void collectChainDiff(Shard shard, @Nullable Shard stop, Set<Point> out) {
@@ -294,5 +296,15 @@ public final class ShardView {
         if (!player.getInstance().isChunkLoaded(pos)) return;
         Block block = view != null ? view.getBlock(pos) : player.getInstance().getBlock(pos);
         player.sendPacket(new BlockChangePacket(pos, block));
+    }
+
+    // a join or spectate diverges over the whole build: one packet per 16-cube, not per position
+    private static void sendView(Player player, @Nullable Shard view, Collection<Point> positions) {
+        Map<Point, Block> blocks = new HashMap<>();
+        for (Point pos : positions) {
+            if (!player.getInstance().isChunkLoaded(pos)) continue;
+            blocks.put(pos, view != null ? view.getBlock(pos) : player.getInstance().getBlock(pos));
+        }
+        for (MultiBlockChangePacket packet : Shard.sectionPackets(blocks)) player.sendPacket(packet);
     }
 }

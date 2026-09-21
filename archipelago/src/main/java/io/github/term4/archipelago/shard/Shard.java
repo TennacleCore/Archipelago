@@ -177,6 +177,11 @@ public final class Shard implements MechanicsWorld {
     }
 
     /** This shard's direct child layers; copy-on-write, so iterating is a snapshot without copying. */
+    /** Unlinks this shard from its parent: a reset husk kept here is walked by every later fan-out and light pass. */
+    public void detach() {
+        if (parent != null) parent.children.remove(this);
+    }
+
     public @NotNull List<Shard> children() {
         return Collections.unmodifiableList(children);
     }
@@ -510,17 +515,7 @@ public final class Shard implements MechanicsWorld {
     }
 
     private void sendSections(Map<Point, Block> blocks) {
-        record Section(int x, int y, int z) {}
-        Map<Section, List<Long>> bySection = new HashMap<>();
-        blocks.forEach((pos, block) -> bySection.computeIfAbsent(
-                new Section(pos.blockX() >> 4, pos.blockY() >> 4, pos.blockZ() >> 4),
-                k -> new ArrayList<>()).add(CoordConversion.encodeSectionBlockChange(
-                pos.blockX() & 15, pos.blockY() & 15, pos.blockZ() & 15, block.stateId())));
-        bySection.forEach((section, entries) -> {
-            long[] packed = new long[entries.size()];
-            for (int i = 0; i < packed.length; i++) packed[i] = entries.get(i);
-            sendToBlockViewers(new MultiBlockChangePacket(section.x(), section.y(), section.z(), packed));
-        });
+        for (MultiBlockChangePacket packet : sectionPackets(blocks)) sendToBlockViewers(packet);
     }
 
     @Override public boolean isChunkLoaded(@NotNull Point pos) { return base.isChunkLoaded(pos); }
@@ -981,15 +976,29 @@ public final class Shard implements MechanicsWorld {
         return false;
     }
 
+    /** {@code blocks} packed one {@link MultiBlockChangePacket} per 16-cube: a built map is thousands of positions. */
+    static List<MultiBlockChangePacket> sectionPackets(Map<Point, Block> blocks) {
+        record Section(int x, int y, int z) {}
+        Map<Section, List<Long>> bySection = new HashMap<>();
+        blocks.forEach((pos, block) -> bySection.computeIfAbsent(
+                new Section(pos.blockX() >> 4, pos.blockY() >> 4, pos.blockZ() >> 4),
+                k -> new ArrayList<>()).add(CoordConversion.encodeSectionBlockChange(
+                pos.blockX() & 15, pos.blockY() & 15, pos.blockZ() & 15, block.stateId())));
+        List<MultiBlockChangePacket> out = new ArrayList<>(bySection.size());
+        bySection.forEach((section, entries) -> {
+            long[] packed = new long[entries.size()];
+            for (int i = 0; i < packed.length; i++) packed[i] = entries.get(i);
+            out.add(new MultiBlockChangePacket(section.x(), section.y(), section.z(), packed));
+        });
+        return out;
+    }
+
     /** This chain's overlay entries in {@code (chunkX, chunkZ)} as one effective view (child wins) - the chunk-load re-send. */
     void sendChunkOverlay(Player player, int chunkX, int chunkZ) {
-        if (parent == null) {
-            overlay.forEachInChunk(chunkX, chunkZ, (pos, block) -> player.sendPacket(new BlockChangePacket(pos, block)));
-        } else {
-            Map<Point, Block> effective = new HashMap<>();
-            collectChunk(chunkX, chunkZ, effective);
-            effective.forEach((pos, block) -> player.sendPacket(new BlockChangePacket(pos, block)));
-        }
+        Map<Point, Block> effective = new HashMap<>();
+        if (parent == null) overlay.forEachInChunk(chunkX, chunkZ, effective::put);
+        else collectChunk(chunkX, chunkZ, effective);
+        for (MultiBlockChangePacket packet : sectionPackets(effective)) player.sendPacket(packet);
         ShardLighting l = light;
         if (l != null) l.sendTo(player, chunkX, chunkZ);
     }
