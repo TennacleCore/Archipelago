@@ -11,8 +11,11 @@ import net.minestom.server.event.player.PlayerSpawnEvent;
 import net.minestom.server.network.packet.server.play.PlayerInfoRemovePacket;
 import net.minestom.server.network.packet.server.play.PlayerInfoUpdatePacket;
 import net.minestom.server.tag.Tag;
+import org.jetbrains.annotations.Nullable;
 import org.jetbrains.annotations.NotNull;
 
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
@@ -125,12 +128,14 @@ public final class ShardTabList {
         // the broadcast filter: a new join's global ADD never reaches viewers whose scope excludes it
         events.addListener(PlayerPacketOutEvent.class, e -> {
             if (!(e.getPacket() instanceof PlayerInfoUpdatePacket info)) return;
-            if (!info.actions().contains(PlayerInfoUpdatePacket.Action.ADD_PLAYER)) { record(e.getPlayer(), info); return; }
+            // every action, not only ADD: an update for a subject outside the viewer's scope is a name and a
+            // uuid they were never meant to have, even though their client renders nothing for it
+            boolean adding = info.actions().contains(PlayerInfoUpdatePacket.Action.ADD_PLAYER);
             List<PlayerInfoUpdatePacket.Entry> allowed = new ArrayList<>(info.entries().size());
             boolean changed = false;
             for (PlayerInfoUpdatePacket.Entry entry : info.entries()) {
                 if (!allows(e.getPlayer(), entry.uuid())) { changed = true; continue; }
-                PlayerInfoUpdatePacket.Entry shaped = shape(e.getPlayer(), entry);
+                PlayerInfoUpdatePacket.Entry shaped = adding ? shape(e.getPlayer(), entry) : entry;
                 changed |= shaped != entry;
                 allowed.add(shaped);
             }
@@ -143,7 +148,10 @@ public final class ShardTabList {
             if (!e.isFirstSpawn()) resync(e.getPlayer());
         });
         // without this the diagnostic buffer keeps one entry per player the server has EVER seen
-        events.addListener(PlayerDisconnectEvent.class, e -> SENT.remove(e.getPlayer().getUuid()));
+        events.addListener(PlayerDisconnectEvent.class, e -> {
+            SENT.remove(e.getPlayer().getUuid());
+            ONLINE.remove(e.getPlayer().getUuid());
+        });
         // covers join/leave/spectate, and fires BEFORE the viewable rules - the spawns those send are only
         // rendered when the client already has the info entry (see the hook's doc)
         ShardView.viewChangeHook = ShardTabList::resync;
@@ -220,8 +228,20 @@ public final class ShardTabList {
 
     /** Whether {@code viewer}'s tab may contain {@code uuid} ({@code true} for non-player uuids - NPCs, ghosts). */
     private static boolean allows(Player viewer, UUID uuid) {
-        Player subject = MinecraftServer.getConnectionManager().getOnlinePlayerByUuid(uuid);
+        Player subject = online(uuid);
         return subject == null || listed(viewer, subject);
+    }
+
+    // getOnlinePlayerByUuid walks every online player; this runs per entry per packet per viewer
+    private static final Map<UUID, Player> ONLINE = new ConcurrentHashMap<>();
+
+    private static @Nullable Player online(UUID uuid) {
+        Player cached = ONLINE.get(uuid);
+        if (cached != null && cached.isOnline()) return cached;
+        Player found = MinecraftServer.getConnectionManager().getOnlinePlayerByUuid(uuid);
+        if (found != null) ONLINE.put(uuid, found);
+        else ONLINE.remove(uuid);
+        return found;
     }
 
     /** Whether {@code viewer}'s tab lists {@code subject}: override rules first, then the viewer's scope. */
