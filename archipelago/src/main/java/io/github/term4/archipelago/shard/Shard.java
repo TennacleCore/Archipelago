@@ -307,6 +307,7 @@ public final class Shard implements MechanicsWorld {
 
     /** Admits {@code player}: binds them to this shard, drops any explicit {@link ShardView}, applies the member view. */
     public void join(@NotNull Player player) {
+        if (destroyed) throw new IllegalStateException("shard is destroyed"); // nothing would ever evict them
         // one-pass retag: leave()-then-join briefly unbound the player, flashing them and base players at each other
         Shard previous = player.getTag(ENTITY_TAG) instanceof Shard s && s != this ? s : null;
         ShardView old = ShardView.of(player);
@@ -1072,7 +1073,9 @@ public final class Shard implements MechanicsWorld {
 
     @Override public void scheduleNextTick(@NotNull Consumer<MechanicsWorld> task) {
         ExecutionDomain d = domain;
-        if (d != null) {
+        // a dead clock runs execute() INLINE, and the usual idiom reschedules itself every tick: that is a
+        // stack overflow on the caller. A stasis shard is frozen, so the base's next tick is the honest answer
+        if (d != null && d.live()) {
             d.execute(() -> task.accept(this));
             return;
         }

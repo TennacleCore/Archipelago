@@ -1,5 +1,6 @@
 package io.github.term4.archipelago.replay;
 
+import io.github.term4.archipelago.event.ticking.DomainQuarantineEvent;
 import io.github.term4.archipelago.shard.Shard;
 import io.github.term4.archipelago.event.ShardDestroyEvent;
 import io.github.term4.archipelago.event.replay.RecordingStopEvent;
@@ -116,6 +117,12 @@ public final class Recording {
         this.shardWatch = EventNode.all("archipelago:replay-recording@" + System.identityHashCode(this));
         shardWatch.addListener(ShardDestroyEvent.class, e -> {
             if (e.shard() == shard) endRecording();
+        });
+        // a quarantined domain parks the shard instead of destroying it: the clock is dead, so every later
+        // op would stamp one frozen tick and the probes would stay live for the process
+        shardWatch.addListener(DomainQuarantineEvent.class, e -> {
+            ExecutionDomain d = shard.domain();
+            if (d != null && d.sharesClock(e.domain())) truncate("the shard's clock failed");
         });
         MinecraftServer.getGlobalEventHandler().addChild(shardWatch);
     }
@@ -440,8 +447,8 @@ public final class Recording {
         for (Map.Entry<Recordable<?>, Queue<Recorded<?>>> entry : ops.entrySet()) {
             Queue<Recorded<?>> queue = entry.getValue();
             if (queue.isEmpty()) continue;
-            List<Recorded<?>> drained = new ArrayList<>(queue);
-            queue.clear();
+            List<Recorded<?>> drained = new ArrayList<>(queue.size());
+            for (Recorded<?> op = queue.poll(); op != null; op = queue.poll()) drained.add(op); // clear() loses a concurrent append
             drained.sort(java.util.Comparator.comparingLong(Recorded::tick)); // a hop can land one tick late
             spooled.merge(entry.getKey(), drained.size(), Integer::sum);
             channels.put(entry.getKey().id(), channelTag(entry.getKey(), drained));
