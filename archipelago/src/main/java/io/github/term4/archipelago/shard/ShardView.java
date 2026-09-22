@@ -312,6 +312,6 @@ public final class ShardView {
             if (!player.getInstance().isChunkLoaded(pos)) continue;
             blocks.put(pos, view != null ? view.getBlock(pos) : player.getInstance().getBlock(pos));
         }
-        BaseBlockFilter.ownSend(() -> { for (MultiBlockChangePacket packet : Shard.sectionPackets(blocks)) player.sendPacket(packet); });
+        BaseBlockFilter.ownSend(() -> { for (MultiBlockChangePacket packet : ShardViewers.sectionPackets(blocks)) player.sendPacket(packet); });
     }
 }

@@ -81,10 +81,10 @@ public final class Shard implements MechanicsWorld {
     final Instance base;
     final @Nullable Shard parent;
     final List<Shard> children = new CopyOnWriteArrayList<>();
-    private final Overlay overlay = new Overlay();
+    final ShardBlocks blocks = new ShardBlocks(this);
     final ShardSky sky = new ShardSky();
-    private final Set<Player> members = ConcurrentHashMap.newKeySet();
-    private final Set<Player> membersView = Collections.unmodifiableSet(members);
+    final Set<Player> members = ConcurrentHashMap.newKeySet();
+    final Set<Player> membersView = Collections.unmodifiableSet(members);
     /** Non-members with an explicit {@link ShardView} referencing this shard; maintained by ShardView. */
     final Set<Player> observers = ConcurrentHashMap.newKeySet();
     private final Set<Player> observersView = Collections.unmodifiableSet(observers);
@@ -92,9 +92,10 @@ public final class Shard implements MechanicsWorld {
     private final ShardView memberView = ShardView.newMemberView(this);
     private final TagHandler tags = TagHandler.newHandler();
     volatile @Nullable ExecutionDomain domain;
-    private final List<BlockChangeHook> blockHooks = new CopyOnWriteArrayList<>();
+
     private final ShardClock clock = new ShardClock(this);
-    private volatile @Nullable ShardLighting light;
+    private final ShardViewers viewers = new ShardViewers(this);
+    volatile @Nullable ShardLighting light;
     private volatile ShardTabList.TabScope tabScope = ShardTabList.TabScope.WORLD;
     /** ShardManager.destroy guard: the cascade and the quarantine sweep may both reach a shard. */
     volatile boolean destroyed;
@@ -231,18 +232,18 @@ public final class Shard implements MechanicsWorld {
     }
 
     // no mask pruning: shards without light cost nothing, and light bleeds past exact positions anyway
-    private void lightChanged(Set<Long> sections) {
+    void lightChanged(Set<Long> sections) {
         ShardLighting l = light;
         if (l != null) l.changed(sections);
         for (Shard child : children) child.lightChanged(sections);
     }
 
     Set<Long> overlayChunks() {
-        return overlay.chunkKeys();
+        return blocks.chunkKeys();
     }
 
     boolean overlayTouches(int chunkX, int chunkZ) {
-        return overlay.touches(chunkX, chunkZ);
+        return blocks.touches(chunkX, chunkZ);
     }
 
     /**
@@ -266,17 +267,7 @@ public final class Shard implements MechanicsWorld {
      * Replay recordings ride this seam.
      */
     public @NotNull Runnable onBlockChange(@NotNull BlockChangeHook hook) {
-        blockHooks.add(hook);
-        return () -> blockHooks.remove(hook);
-    }
-
-    private @Nullable Block preWrite(Point pos) {
-        return blockHooks.isEmpty() ? null : getBlock(pos);
-    }
-
-    private void fireBlockChange(Point pos, @Nullable Block previous, Block block) {
-        if (previous == null || previous.equals(block)) return; // nobody listened, or a view no-op
-        for (BlockChangeHook hook : blockHooks) hook.changed(pos, previous, block);
+        return blocks.onChange(hook);
     }
 
     /**
@@ -316,14 +307,7 @@ public final class Shard implements MechanicsWorld {
     /** Drops the diff: every overlaid position reverts to the PARENT view (the base map for a root shard). */
     public void reset() {
         relay(() -> {
-            forEachDiff((pos, block) -> {
-                if (!base.isChunkLoaded(pos)) return; // never reached a client; nothing to revert
-                Block revert = parent != null ? parent.getBlock(pos) : base.getBlock(pos);
-                        // descendants saw this layer too, where unmasked
-                BaseBlockFilter.ownSend(() -> fanBlock(pos, new BlockChangePacket(pos, revert)));
-                fireBlockChange(pos, blockHooks.isEmpty() ? null : block, revert); // the entry IS the pre-reset view
-            });
-            overlay.clear();
+            blocks.resetDiff();
             refreshLight(); // recomputed without the diff = parent-view light; untouched chunks restore base
             for (Entity e : entities) e.remove();
             entities.clear();
@@ -343,7 +327,7 @@ public final class Shard implements MechanicsWorld {
     public @NotNull Set<Player> observers() { return observersView; }
 
     public int overlaySize() {
-        return overlay.size();
+        return blocks.size();
     }
 
     /** A tick-consistent snapshot of the diff - the EXPORT half; load one back with {@link #setBlocks}. */
@@ -357,7 +341,7 @@ public final class Shard implements MechanicsWorld {
 
     /** Copy-free diff read (persistence/replay recorders). */
     public void forEachDiff(@NotNull BiConsumer<Point, Block> consumer) {
-        overlay.forEach(consumer);
+        blocks.forEachDiff(consumer);
     }
 
     /**
@@ -381,9 +365,7 @@ public final class Shard implements MechanicsWorld {
     @Override public @NotNull Block getBlock(@NotNull Point pos) { return getBlock(pos.blockX(), pos.blockY(), pos.blockZ()); }
 
     @Override public @NotNull Block getBlock(int x, int y, int z) {
-        Block b = overlay.at(x, y, z);
-        if (b != null) return b;
-        return parent != null ? parent.getBlock(x, y, z) : base.getBlock(x, y, z);
+        return blocks.getBlock(x, y, z);
     }
 
     @Override public @NotNull Block getBlock(@NotNull Point pos, Block.Getter.@NotNull Condition condition) {
@@ -391,35 +373,21 @@ public final class Shard implements MechanicsWorld {
     }
 
     @Override public @NotNull Block getBlock(int x, int y, int z, Block.Getter.@NotNull Condition condition) {
-        Block b = overlay.at(x, y, z);
-        if (b != null) return b;
-        return parent != null ? parent.getBlock(x, y, z, condition) : base.getBlock(x, y, z, condition);
+        return blocks.getBlock(x, y, z, condition);
     }
 
     /** This chain's own entry at the position, or {@code null} when the chain reads straight through to the base. */
     @Nullable Block overlaidAt(int x, int y, int z) {
-        for (Shard s = this; s != null; s = s.parent) {
-            Block block = s.overlay.at(x, y, z);
-            if (block != null) return block;
-        }
-        return null;
+        return blocks.overlaidAt(x, y, z);
     }
 
     /** This chain's overlays in front of {@code bottom}, child-first. */
     private Block.Getter overlaid(Block.Getter bottom) {
-        return overlay.over(parent != null ? parent.overlaid(bottom) : bottom);
+        return blocks.overlaid(bottom);
     }
 
     @Override public void setBlock(@NotNull Point pos, @NotNull Block block) {
-        if (revertsToParent(pos, block)) {
-            if (overlay.at(pos.blockX(), pos.blockY(), pos.blockZ()) == null) return; // total no-op
-            Block previous = preWrite(pos);
-            overlay.remove(pos);
-            changed(pos, block);
-            fireBlockChange(pos, previous, block);
-            return;
-        }
-        pinBlock(pos, block);
+        blocks.setBlock(pos, block);
     }
 
     /**
@@ -428,11 +396,7 @@ public final class Shard implements MechanicsWorld {
      * have to read an unloadable parent block.
      */
     public void clearBlock(@NotNull Point pos) {
-        if (base.isChunkLoaded(pos)) {
-            setBlock(pos, parent != null ? parent.getBlock(pos) : base.getBlock(pos));
-            return;
-        }
-        overlay.remove(pos);
+        blocks.clearBlock(pos);
     }
 
     /**
@@ -441,75 +405,12 @@ public final class Shard implements MechanicsWorld {
      * recorded layer state must reproduce verbatim whatever order the ops land in.
      */
     public void pinBlock(@NotNull Point pos, @NotNull Block block) {
-        Block previous = preWrite(pos);
-        boolean shown = base.isChunkLoaded(pos) && block.equals(previous != null ? previous : getBlock(pos));
-        overlay.write(pos, block);
-        if (shown) return; // the pin lands, the wire stays quiet: a replay refold re-pins whole diffs
-        changed(pos, block);
-        fireBlockChange(pos, previous, block);
-    }
-
-    private void changed(Point pos, Block block) {
-        BaseBlockFilter.ownSend(() -> fanBlock(pos, new BlockChangePacket(pos, block)));
-        // no lighting anywhere below: skip the per-block section set and the descent
-        if (light == null && children.isEmpty()) return;
-        lightChanged(Set.of(ShardLighting.sectionKey(pos.blockX() >> 4, pos.blockY() >> 4, pos.blockZ() >> 4)));
-    }
-
-    // a write equal to the parent view isn't a diff: place-then-break ends with an EMPTY overlay, not a
-    // redundant explicit-air entry (unloaded chunks can't be compared - keep the entry)
-    private boolean revertsToParent(Point pos, Block block) {
-        if (!base.isChunkLoaded(pos)) return false;
-        return block.equals(parent != null ? parent.getBlock(pos) : base.getBlock(pos));
-    }
-
-    // a shard write has no native broadcast: it reaches this shard's block viewers plus every descendant's,
-    // pruned wherever a descendant's own diff masks the position (masking cuts off that whole subtree)
-    private void fanBlock(Point pos, BlockChangePacket packet) {
-        sendToBlockViewers(packet);
-        for (Shard child : children) {
-            if (child.overlay.at(pos.blockX(), pos.blockY(), pos.blockZ()) == null) child.fanBlock(pos, packet);
-        }
+        blocks.pinBlock(pos, block);
     }
 
     /** One overlay write pass, then one {@link MultiBlockChangePacket} per touched section to each block viewer. */
     @Override public void setBlocks(@NotNull Map<Point, Block> blocks) {
-        relay(() -> {
-            Map<Point, Block> changed = new HashMap<>();
-            blocks.forEach((pos, block) -> {
-                boolean reverts = revertsToParent(pos, block);
-                if (reverts && overlay.at(pos.blockX(), pos.blockY(), pos.blockZ()) == null) return; // total no-op
-                Block previous = preWrite(pos);
-                if (reverts) overlay.remove(pos);
-                else overlay.write(pos, block);
-                changed.put(pos, block);
-                fireBlockChange(pos, previous, block);
-            });
-            fanBatch(changed);
-            Set<Long> sections = new HashSet<>();
-            for (Point pos : changed.keySet()) {
-                sections.add(ShardLighting.sectionKey(pos.blockX() >> 4, pos.blockY() >> 4, pos.blockZ() >> 4));
-            }
-            if (!sections.isEmpty()) lightChanged(sections);
-            return null;
-        });
-    }
-
-    // each level builds its own section packets (only if it has viewers) from the positions its diff doesn't mask
-    private void fanBatch(Map<Point, Block> blocks) {
-        if (blocks.isEmpty()) return;
-        if (hasBlockViewers()) sendSections(blocks);
-        for (Shard child : children) {
-            Map<Point, Block> unmasked = new HashMap<>();
-            blocks.forEach((pos, block) -> {
-                if (child.overlay.at(pos.blockX(), pos.blockY(), pos.blockZ()) == null) unmasked.put(pos, block);
-            });
-            child.fanBatch(unmasked);
-        }
-    }
-
-    private void sendSections(Map<Point, Block> blocks) {
-        BaseBlockFilter.ownSend(() -> { for (MultiBlockChangePacket packet : sectionPackets(blocks)) sendToBlockViewers(packet); });
+        this.blocks.setBlocks(blocks);
     }
 
     @Override public boolean isChunkLoaded(@NotNull Point pos) { return base.isChunkLoaded(pos); }
@@ -793,9 +694,7 @@ public final class Shard implements MechanicsWorld {
         });
         relay(() -> {
             // view unchanged where the chain now matches; a child's masked entries stay load-bearing
-            committed.forEach((pos, block) -> {
-                if (revertsToParent(pos, block)) overlay.remove(pos);
-            });
+            blocks.dropWhereBaseMatches(committed);
             return null;
         });
     }
@@ -816,100 +715,42 @@ public final class Shard implements MechanicsWorld {
         EventDispatcher.call(new ShardTransferEvent(entity, from, this));
     }
 
-    @Override public @NotNull Collection<@NotNull Player> players() { return membersView; }
+    @Override public @NotNull Collection<@NotNull Player> players() { return viewers.players(); }
 
-    @Override public @NotNull Collection<@NotNull Player> watchers() {
-        Set<Player> allSeeing = ShardView.allSeeing();
-        if (observers.isEmpty() && allSeeing.isEmpty()) return membersView;
-        List<Player> out = new ArrayList<>(members);
-        forEachExtraWatcher(out::add);
-        return out;
-    }
+    @Override public @NotNull Collection<@NotNull Player> watchers() { return viewers.watchers(); }
 
-    // the base instance's chunk index, filtered to this shard's members: O(what is near), not O(members)
     @Override public void forEachMemberWithin(@NotNull Point point, double range, @NotNull Consumer<Player> action) {
-        base.getEntityTracker().nearbyEntities(point, range, EntityTracker.Target.PLAYERS, p -> {
-            if (members.contains(p)) action.accept(p);
-        });
+        viewers.forEachMemberWithin(point, range, action);
     }
 
     /** {@link #watchers()} without the snapshot - what every send iterates. */
     @Override public void forEachWatcher(@NotNull Consumer<Player> action) {
-        for (Player m : members) action.accept(m);
-        forEachExtraWatcher(action);
-    }
-
-    // only someone on THIS base instance renders this world, so a positional packet must never cross to
-    // another instance - an observer registered from elsewhere included
-    private void forEachExtraWatcher(Consumer<Player> action) {
-        for (Player o : observers) {
-            if (o.getInstance() == base && !members.contains(o)) action.accept(o);
-        }
-        for (Player o : ShardView.allSeeing()) {
-            if (o.getInstance() == base && !members.contains(o) && !observers.contains(o)) action.accept(o);
-        }
+        viewers.forEachWatcher(action);
     }
 
     @Override public void broadcast(@NotNull ServerPacket packet) {
-        forEachWatcher(p -> p.sendPacket(packet));
+        viewers.broadcast(packet);
     }
 
     @Override public void playSound(@NotNull Sound sound, @NotNull Point pos) {
-        forEachWatcher(p -> p.playSound(sound, pos.x(), pos.y(), pos.z()));
+        viewers.playSound(sound, pos);
     }
 
     void sendToBlockViewers(SendablePacket packet) {
-        forEachWatcher(p -> { if (blockViewer(p)) p.sendPacket(packet); });
+        viewers.sendToBlockViewers(packet);
     }
 
-    private boolean blockViewer(Player p) {
-        return p.getInstance() == base && WorldPolicy.seesBlocks(p, this);
-    }
-
-    // the same set sendToBlockViewers walks, with an early out
     boolean hasBlockViewers() {
-        for (Player m : members) {
-            if (blockViewer(m)) return true;
-        }
-        for (Player o : observers) {
-            if (!members.contains(o) && blockViewer(o)) return true;
-        }
-        for (Player o : ShardView.allSeeing()) {
-            if (!members.contains(o) && !observers.contains(o) && blockViewer(o)) return true;
-        }
-        return false;
-    }
-
-    /** {@code blocks} packed one {@link MultiBlockChangePacket} per 16-cube: a built map is thousands of positions. */
-    static List<MultiBlockChangePacket> sectionPackets(Map<Point, Block> blocks) {
-        record Section(int x, int y, int z) {}
-        Map<Section, List<Long>> bySection = new HashMap<>();
-        blocks.forEach((pos, block) -> bySection.computeIfAbsent(
-                new Section(pos.blockX() >> 4, pos.blockY() >> 4, pos.blockZ() >> 4),
-                k -> new ArrayList<>()).add(CoordConversion.encodeSectionBlockChange(
-                pos.blockX() & 15, pos.blockY() & 15, pos.blockZ() & 15, block.stateId())));
-        List<MultiBlockChangePacket> out = new ArrayList<>(bySection.size());
-        bySection.forEach((section, entries) -> {
-            long[] packed = new long[entries.size()];
-            for (int i = 0; i < packed.length; i++) packed[i] = entries.get(i);
-            out.add(new MultiBlockChangePacket(section.x(), section.y(), section.z(), packed));
-        });
-        return out;
+        return viewers.hasBlockViewers();
     }
 
     /** This chain's overlay entries in {@code (chunkX, chunkZ)} as one effective view (child wins) - the chunk-load re-send. */
     void sendChunkOverlay(Player player, int chunkX, int chunkZ) {
-        Map<Point, Block> effective = new HashMap<>();
-        if (parent == null) overlay.forEachInChunk(chunkX, chunkZ, effective::put);
-        else collectChunk(chunkX, chunkZ, effective);
-        BaseBlockFilter.ownSend(() -> { for (MultiBlockChangePacket packet : sectionPackets(effective)) player.sendPacket(packet); });
-        ShardLighting l = light;
-        if (l != null) l.sendTo(player, chunkX, chunkZ);
+        blocks.sendChunkOverlay(player, chunkX, chunkZ);
     }
 
     void collectChunk(int chunkX, int chunkZ, Map<Point, Block> out) {
-        if (parent != null) parent.collectChunk(chunkX, chunkZ, out);
-        overlay.forEachInChunk(chunkX, chunkZ, out::put);
+        blocks.collectChunk(chunkX, chunkZ, out);
     }
 
     @Override public @NotNull Weather weather() {
