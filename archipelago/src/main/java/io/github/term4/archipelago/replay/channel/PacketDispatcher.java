@@ -3,6 +3,7 @@ package io.github.term4.archipelago.replay.channel;
 import io.github.term4.archipelago.replay.Recording;
 import net.minestom.server.entity.Player;
 import net.minestom.server.event.Event;
+import net.minestom.server.event.EventListener;
 import net.minestom.server.event.EventNode;
 import net.minestom.server.event.player.PlayerPacketOutEvent;
 import net.minestom.server.network.packet.server.ServerPacket;
@@ -27,12 +28,15 @@ public abstract class PacketDispatcher extends EventDispatcher {
         LIVE.put(this, recording);
         if (INSTALLED.compareAndSet(false, true)) {
             EventNode<Event> shared = EventNode.all("archipelago:replay-packets");
-            shared.addListener(PlayerPacketOutEvent.class, e -> {
+            // a cancelled write is a DELIVERY decision (the lag simulator withholds and re-delivers later);
+            // a recording is what the server produced, so it reads the packet where it was produced or a
+            // delayed client would move the recorded moment
+            shared.addListener(EventListener.builder(PlayerPacketOutEvent.class).ignoreCancelled(false).handler(e -> {
                 if (LIVE.isEmpty()) return;
                 LIVE.forEach((dispatcher, live) -> {
                     if (live.covers(e.getPlayer())) dispatcher.packet(e.getPlayer(), e.getPacket(), live);
                 });
-            });
+            }).build());
             MinecraftServer.getGlobalEventHandler().addChild(shared);
         }
     }

@@ -9,6 +9,9 @@ import net.kyori.adventure.sound.Sound;
 import net.minestom.server.coordinate.Pos;
 import net.minestom.server.network.packet.server.play.SoundEffectPacket;
 import net.minestom.server.sound.SoundEvent;
+import net.minestom.server.MinecraftServer;
+import net.minestom.server.event.EventListener;
+import net.minestom.server.event.player.PlayerPacketOutEvent;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -155,5 +158,39 @@ class ProbesTest extends HeadlessServerTest {
     private static SoundEffectPacket pling(FakePlayer p, long seed) {
         return new SoundEffectPacket(SoundEvent.BLOCK_NOTE_BLOCK_PLING, Sound.Source.MASTER,
                 p.player.getPosition(), 1f, 1f, seed);
+    }
+
+    /**
+     * A cancelled write is a DELIVERY decision - /lag withholds a packet and re-delivers it later. The recording
+     * is what the server produced, so the probe has to read it where it was produced; otherwise a lagged player's
+     * copy lands ticks late and its beat is lost.
+     */
+    @Test
+    void aWithheldWriteIsStillRecorded() {
+        loadArea(2140, 0);
+        CoreChannels.register();
+        Shard live = new Shard(instance);
+        FakePlayer a = FakePlayer.connect(instance, new Pos(34240.5, 42, 0.5), "HeldA");
+        FakePlayer b = FakePlayer.connect(instance, new Pos(34243.5, 42, 0.5), "HeldB");
+        EventListener<PlayerPacketOutEvent> withhold = EventListener.builder(PlayerPacketOutEvent.class)
+                .handler(e -> { if (e.getPacket() instanceof SoundEffectPacket) e.setCancelled(true); }).build();
+        Recording rec = null;
+        try {
+            live.join(a.player);
+            live.join(b.player);
+            rec = Replay.record(live);
+            MinecraftServer.getGlobalEventHandler().addListener(withhold);
+            Sound pling = Sound.sound(SoundEvent.BLOCK_NOTE_BLOCK_PLING, Sound.Source.MASTER, 1f, 1f);
+            a.player.playSound(pling);
+            b.player.playSound(pling);
+            for (int i = 0; i < 3; i++) tick();
+            assertEquals(1, rec.counts().getOrDefault(Channels.FX.id(), 0),
+                    "the cue was produced, whoever withheld the write");
+        } finally {
+            MinecraftServer.getGlobalEventHandler().removeListener(withhold);
+            if (rec != null) rec.stop();
+            a.player.remove();
+            b.player.remove();
+        }
     }
 }
