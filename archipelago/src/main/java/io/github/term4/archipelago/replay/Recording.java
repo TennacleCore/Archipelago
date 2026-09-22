@@ -395,8 +395,9 @@ public final class Recording {
 
     /**
      * Spools the log to {@code file} in segments of {@code everyTicks}: a closed segment is encoded and appended
-     * off the clock, and its ops leave the heap. The final file reads the spool back at {@link #stop}; delete it
-     * with {@link #discard()} once that file is kept. Set before the first tick.
+     * on the recording's own clock, and its ops leave the heap. Only {@link #stopAsync} moves an
+     * encode off-thread. The final file reads the spool back at {@link #stop}; delete it with {@link #discard()}
+     * once that file is kept. Set before the first tick.
      */
     public @NotNull Recording spool(@NotNull Path file, int everyTicks) throws IOException {
         return spool(file, everyTicks, null);

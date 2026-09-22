@@ -194,14 +194,21 @@ public final class ShardView {
         return of(player).clock() == shard;
     }
 
-    /** A feature's per-player hook on any view/binding change (the tab-list scoper re-syncs here). Fires
-     *  BEFORE the viewable rules: a modern client DROPS a player spawn whose info entry hasn't arrived yet,
-     *  so tab adds must precede the spawns the rule update sends. */
-    static volatile Consumer<Player> viewChangeHook = p -> {};
+    private static final java.util.List<Consumer<Player>> VIEW_CHANGE = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+    /**
+     * A per-player hook on any view or binding change (the tab-list scoper re-syncs here), returning its own
+     * removal handle. Fires BEFORE the viewable rules: a modern client DROPS a player spawn whose info entry
+     * has not arrived yet, so tab adds must precede the spawns the rule update sends.
+     */
+    public static @NotNull Runnable onViewChange(@NotNull Consumer<Player> hook) {
+        VIEW_CHANGE.add(hook);
+        return () -> VIEW_CHANGE.remove(hook);
+    }
 
     /** After the player's binding or explicit view changed; {@code old} = the effective view before. */
     static void applyChange(Player player, ShardView old) {
-        viewChangeHook.accept(player);
+        for (Consumer<Player> hook : VIEW_CHANGE) hook.accept(player);
         ShardView now = of(player);
         if (old.blocks != now.blocks) {
             sendBlockSwap(player, old.blocks, now.blocks);

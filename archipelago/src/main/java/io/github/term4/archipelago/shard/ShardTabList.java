@@ -148,7 +148,7 @@ public final class ShardTabList {
         });
         // covers join/leave/spectate, and fires BEFORE the viewable rules - the spawns those send are only
         // rendered when the client already has the info entry (see the hook's doc)
-        ShardView.viewChangeHook = ShardTabList::resync;
+        ShardView.onViewChange(ShardTabList::resync);
     }
 
     private static final int HISTORY = 40;
