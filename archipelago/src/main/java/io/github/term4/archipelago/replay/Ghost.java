@@ -8,6 +8,7 @@ import net.minestom.server.entity.damage.Damage;
 import net.minestom.server.entity.metadata.avatar.PlayerMeta;
 import net.minestom.server.network.packet.server.SendablePacket;
 import net.minestom.server.network.packet.server.play.EntityEquipmentPacket;
+import io.github.term4.archipelago.LegacyNames;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import net.minestom.server.network.packet.server.play.PlayerInfoRemovePacket;
@@ -22,9 +23,6 @@ import java.util.List;
 
 /** A recorded actor's stand-in: a skinned player NPC driven by the actor track (a domain theater's clock ticks it). */
 public final class Ghost extends DomainLivingEntity {
-
-    /** A 1.8 profile name past this disconnects the client. */
-    private static final int LEGACY_NAME_CAP = 16;
 
     /** Ticks between absolute position syncs at full rate; a playback shortens it as it speeds up. */
     public static final int SYNC_TICKS = 200;
@@ -91,14 +89,14 @@ public final class Ghost extends DomainLivingEntity {
     /**
      * The name a 1.8 client draws over the head. It has no display-name lever there - the plate is the profile
      * name formatted by the team that name is on, and a team keys on the name, which a watcher of their own match
-     * shares with their ghost. So the color rides the name itself. Sixteen characters is the cap and a longer one
-     * DISCONNECTS the client, so a name with no room for the code keeps its plate plain rather than clipped.
+     * shares with their ghost. So the color rides the name itself, and a name with no room for the code keeps
+     * its plate plain rather than clipped.
      */
     private static String plateName(String name, @Nullable Component listName) {
         if (listName == null || listName.color() == null) return name;
         String coded = LegacyComponentSerializer.legacySection()
                 .serialize(Component.text(name).color(listName.color()));
-        return coded.length() <= LEGACY_NAME_CAP ? coded : name;
+        return LegacyNames.fitting(coded, name);
     }
 
     /** The recorded actor's username. */
