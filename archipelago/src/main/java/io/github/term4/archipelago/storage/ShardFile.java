@@ -94,22 +94,13 @@ public final class ShardFile {
     /** Atomic file save: written beside {@code path}, then moved into place - a crash never leaves a torn file. */
     public static void save(@NotNull Shard shard, @NotNull Path path, @Nullable Consumer<UserData.Writer> userData,
                             boolean withBefore) throws IOException {
-        moveIntoPlace(path, save(shard, userData, withBefore));
+        Durable.write(path, save(shard, userData, withBefore));
     }
 
-    /** Unique sibling per call (concurrent saves to one path must not share a temp), cleaned up on failure. */
+    /** @deprecated call {@link Durable#write} directly. */
+    @Deprecated
     public static void moveIntoPlace(Path path, byte[] bytes) throws IOException {
-        Path tmp = path.resolveSibling(path.getFileName() + "." + Long.toUnsignedString(System.nanoTime(), 36) + ".tmp");
-        try {
-            Files.write(tmp, bytes);
-            try {
-                Files.move(tmp, path, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
-            } catch (AtomicMoveNotSupportedException e) {
-                Files.move(tmp, path, StandardCopyOption.REPLACE_EXISTING);
-            }
-        } finally {
-            Files.deleteIfExists(tmp);
-        }
+        Durable.write(path, bytes);
     }
 
     public static @NotNull UserData.View load(@NotNull Shard shard, @NotNull Path path) throws IOException {
