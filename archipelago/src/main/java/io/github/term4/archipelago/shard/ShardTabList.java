@@ -5,6 +5,9 @@ import io.github.term4.polyp.world.WorldPolicy;
 import net.minestom.server.MinecraftServer;
 import net.minestom.server.entity.GameMode;
 import net.minestom.server.entity.Player;
+import net.minestom.server.event.EventNode;
+import net.minestom.server.event.EventListener;
+import net.minestom.server.event.Event;
 import net.minestom.server.entity.PlayerSkin;
 import net.minestom.server.event.player.PlayerDisconnectEvent;
 import net.minestom.server.event.player.PlayerPacketOutEvent;
@@ -81,6 +84,25 @@ public final class ShardTabList {
     }
 
     private static volatile boolean installed;
+    private static final List<EventListener<? extends Event>> listeners = new ArrayList<>();
+
+    private static <E extends Event> EventListener<E> register(EventNode<Event> events, Class<E> type,
+                                                               java.util.function.Consumer<E> handler) {
+        EventListener<E> listener = EventListener.of(type, handler);
+        events.addListener(listener);
+        return listener;
+    }
+
+    /** Takes the tab scoping back off. The listeners go by reference, so nothing else shifts in the order. */
+    public static void uninstall() {
+        synchronized (ShardTabList.class) {
+            if (!installed) return;
+            installed = false;
+            var events = MinecraftServer.getGlobalEventHandler();
+            for (EventListener<? extends Event> listener : listeners) events.removeListener(listener);
+            listeners.clear();
+        }
+    }
 
     private ShardTabList() {}
 
@@ -120,7 +142,7 @@ public final class ShardTabList {
         }
         var events = MinecraftServer.getGlobalEventHandler();
         // the broadcast filter: a new join's global ADD never reaches viewers whose scope excludes it
-        events.addListener(PlayerPacketOutEvent.class, e -> {
+        listeners.add(register(events, PlayerPacketOutEvent.class, e -> {
             if (!(e.getPacket() instanceof PlayerInfoUpdatePacket info)) return;
             // every action, not only ADD: an update for a subject outside the viewer's scope is a name and a
             // uuid they were never meant to have, even though their client renders nothing for it
@@ -136,16 +158,16 @@ public final class ShardTabList {
             if (!changed) { record(e.getPlayer(), info); return; } // untouched packets (and our re-sends) pass
             e.setCancelled(true);
             if (!allowed.isEmpty()) e.getPlayer().sendPacket(new PlayerInfoUpdatePacket(info.actions(), allowed));
-        });
+        }));
         // instance change: the world changed without a view change
-        events.addListener(PlayerSpawnEvent.class, e -> {
+        listeners.add(register(events, PlayerSpawnEvent.class, e -> {
             if (!e.isFirstSpawn()) resync(e.getPlayer());
-        });
+        }));
         // without this the diagnostic buffer keeps one entry per player the server has EVER seen
-        events.addListener(PlayerDisconnectEvent.class, e -> {
+        listeners.add(register(events, PlayerDisconnectEvent.class, e -> {
             SENT.remove(e.getPlayer().getUuid());
             ONLINE.remove(e.getPlayer().getUuid());
-        });
+        }));
         // covers join/leave/spectate, and fires BEFORE the viewable rules - the spawns those send are only
         // rendered when the client already has the info entry (see the hook's doc)
         ShardView.onViewChange(ShardTabList::resync);

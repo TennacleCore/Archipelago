@@ -40,13 +40,27 @@ public final class ShardManager {
     private final Map<Shard, String> names = new ConcurrentHashMap<>();
     private final Set<Shard> shards = ConcurrentHashMap.newKeySet();
 
+    private static EventNode<Event> node;
+
+    /** Detaches the quarantine listener the first manager installed. The next manager installs a fresh one. */
+    public static void uninstall() {
+        synchronized (ShardManager.class) {
+            if (!listenerInstalled) return;
+            listenerInstalled = false;
+            EventNode<Event> attached = node;
+            node = null;
+            if (attached != null) MinecraftServer.getGlobalEventHandler().removeChild(attached);
+        }
+    }
+
     public ShardManager() {
         synchronized (ShardManager.class) {
             if (!listenerInstalled) {
                 listenerInstalled = true;
-                EventNode<Event> node = EventNode.all("archipelago:shard-manager");
-                node.addListener(DomainQuarantineEvent.class, ShardManager::onQuarantine);
-                MinecraftServer.getGlobalEventHandler().addChild(node);
+                EventNode<Event> fresh = EventNode.all("archipelago:shard-manager");
+                fresh.addListener(DomainQuarantineEvent.class, ShardManager::onQuarantine);
+                MinecraftServer.getGlobalEventHandler().addChild(fresh);
+                node = fresh;
             }
             MANAGERS.add(this);
         }

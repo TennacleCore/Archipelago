@@ -31,14 +31,24 @@ import java.util.concurrent.atomic.AtomicBoolean;
 final class BaseBlockFilter {
 
     private static final AtomicBoolean INSTALLED = new AtomicBoolean();
+    private static volatile EventNode<Event> node;
 
     private BaseBlockFilter() {}
 
     static void install() {
         if (!INSTALLED.compareAndSet(false, true)) return;
-        EventNode<Event> node = EventNode.all("archipelago:base-blocks");
-        node.addListener(PlayerPacketOutEvent.class, BaseBlockFilter::filter);
-        MinecraftServer.getGlobalEventHandler().addChild(node);
+        EventNode<Event> fresh = EventNode.all("archipelago:base-blocks");
+        fresh.addListener(PlayerPacketOutEvent.class, BaseBlockFilter::filter);
+        MinecraftServer.getGlobalEventHandler().addChild(fresh);
+        node = fresh;
+    }
+
+    /** Detaches the filter. A re-install attaches a fresh node; leaving it on is what outlived its owner. */
+    static void uninstall() {
+        if (!INSTALLED.compareAndSet(true, false)) return;
+        EventNode<Event> attached = node;
+        node = null;
+        if (attached != null) MinecraftServer.getGlobalEventHandler().removeChild(attached);
     }
 
     // only for the re-send below, which happens inside the event on this very thread: without it the trimmed
