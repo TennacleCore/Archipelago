@@ -33,6 +33,7 @@ public final class Ghost extends DomainLivingEntity {
     private final List<PlayerInfoUpdatePacket.Property> props;
     private PlayerInfoUpdatePacket info;
     private PlayerInfoUpdatePacket legacyInfo;
+    private volatile String plated;
 
     public Ghost(@NotNull String name, @Nullable String textures, @Nullable String signature) {
         this(name, textures, signature, null);
@@ -65,8 +66,16 @@ public final class Ghost extends DomainLivingEntity {
      */
     public void listName(@Nullable Component listName) {
         info = profile(name, listName);
-        String plated = plateName(name, listName);
+        plated = plateName(name, listName);
         legacyInfo = plated.equals(name) ? info : profile(plated, listName);
+    }
+
+    /**
+     * The name {@code viewer}'s client holds this ghost's row under. A name-keyed objective (tab or below-name)
+     * has to score under this: an unscored row still draws a number on 1.8, and it is zero.
+     */
+    public @NotNull String listedName(@NotNull Player viewer) {
+        return Replay.legacyViewer(viewer) ? plated : name;
     }
 
     // the actions ARE the wire format: a field whose action is missing is never written, whatever the entry holds

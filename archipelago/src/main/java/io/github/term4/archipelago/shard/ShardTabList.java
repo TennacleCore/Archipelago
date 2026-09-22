@@ -311,6 +311,11 @@ public final class ShardTabList {
         return sort != null ? sort : player.getUsername();
     }
 
+    /** {@link #listName(Player)} as {@code viewer}'s own client holds it: a modern one never saw the sort name. */
+    public static @NotNull String listName(@NotNull Player player, @NotNull Player viewer) {
+        return legacy(viewer) ? listName(player) : player.getUsername();
+    }
+
     // the sort name is a 1.8 device: a modern client renders its section codes literally and sorts on listOrder
     private static boolean legacy(Player viewer) {
         return Viewers.legacy(viewer);

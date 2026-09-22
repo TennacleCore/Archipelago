@@ -96,6 +96,24 @@ class GhostListNameTest extends HeadlessServerTest {
         }
     }
 
+    /** A name-keyed objective has to score the row the viewer holds, and the two eras hold different names. */
+    @Test
+    void theScoredRowIsThePlatedOneOn18() {
+        Replay.viewerProtocol(p -> p.hasTag(LEGACY) ? 47 : -1);
+        Ghost ghost = new Ghost("Recorded", null, null, Component.text("Recorded", NamedTextColor.BLUE));
+        FakePlayer legacy = FakePlayer.connect(instance, new Pos(612.5, 64, 612.5), "ScoreLegacy");
+        FakePlayer modern = FakePlayer.connect(instance, new Pos(614.5, 64, 612.5), "ScoreModern");
+        try {
+            legacy.player.setTag(LEGACY, true);
+            assertEquals("§9Recorded", ghost.listedName(legacy.player));
+            assertEquals("Recorded", ghost.listedName(modern.player));
+        } finally {
+            legacy.player.remove();
+            modern.player.remove();
+            ghost.remove();
+        }
+    }
+
     private static String profileSentTo(Ghost ghost, String watcher, boolean legacy) {
         if (ghost.getInstance() == null) ghost.setInstance(instance, new Pos(608.5, 64, 608.5)).join();
         FakePlayer viewer = FakePlayer.connect(instance, new Pos(610.5, 64, 608.5), watcher);
