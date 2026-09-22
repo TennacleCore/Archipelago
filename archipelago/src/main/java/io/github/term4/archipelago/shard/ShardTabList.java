@@ -1,5 +1,6 @@
 package io.github.term4.archipelago.shard;
 
+import io.github.term4.archipelago.Viewers;
 import io.github.term4.polyp.world.WorldPolicy;
 import net.minestom.server.MinecraftServer;
 import net.minestom.server.entity.GameMode;
@@ -67,23 +68,16 @@ public final class ShardTabList {
     private static final java.util.concurrent.CopyOnWriteArrayList<TabRule> RULES =
             new java.util.concurrent.CopyOnWriteArrayList<>();
 
-    /** The last protocol drawing the {@link #SORT_NAME} wire (1.8.9); anything older rides it too. */
-    private static final int PROTOCOL_1_8 = 47;
-
-    private static volatile java.util.function.ToIntFunction<Player> protocolSource;
-    // modern: a wrong LEGACY guess draws raw section codes on a modern client, a wrong modern one only
-    // mis-sorts until the next resync
-    private static volatile int unknownProtocol = MinecraftServer.PROTOCOL_VERSION;
-
-    /** Where a viewer's protocol number comes from; negative = not known yet (the proxy handshake lands after
-     *  login). Unset: every viewer reads as {@link #protocolWhenUnknown}. */
+    /** @deprecated one era per viewer, library-wide: {@link Viewers#protocol}. */
+    @Deprecated
     public static void viewerProtocol(@NotNull java.util.function.ToIntFunction<Player> source) {
-        protocolSource = source;
+        Viewers.protocol(source);
     }
 
-    /** What a viewer reads as while their own protocol is unknown; the server's own build (modern) by default. */
+    /** @deprecated {@link Viewers#protocolWhenUnknown}. */
+    @Deprecated
     public static void protocolWhenUnknown(int protocol) {
-        unknownProtocol = protocol;
+        Viewers.protocolWhenUnknown(protocol);
     }
 
     private static volatile boolean installed;
@@ -319,9 +313,7 @@ public final class ShardTabList {
 
     // the sort name is a 1.8 device: a modern client renders its section codes literally and sorts on listOrder
     private static boolean legacy(Player viewer) {
-        java.util.function.ToIntFunction<Player> source = protocolSource;
-        int protocol = source == null ? -1 : source.applyAsInt(viewer);
-        return (protocol < 0 ? unknownProtocol : protocol) <= PROTOCOL_1_8;
+        return Viewers.legacy(viewer);
     }
 
     /**

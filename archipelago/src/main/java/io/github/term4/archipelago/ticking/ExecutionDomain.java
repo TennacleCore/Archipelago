@@ -26,9 +26,26 @@ public final class ExecutionDomain {
     private static long watchdogQuarantineMs = 15_000;
 
     final Domain node;
+    private final java.util.concurrent.atomic.AtomicInteger users = new java.util.concurrent.atomic.AtomicInteger();
 
     ExecutionDomain(Domain node) {
         this.node = node;
+    }
+
+    /** Registers a holder of this clock. A shard claims on binding and releases on destroy; anything else that
+     *  keeps a domain across ticks does the same, or retirement will not see it. */
+    public void claim() {
+        users.incrementAndGet();
+    }
+
+    /** Releases a {@link #claim}; {@code true} when this was the last holder, so the caller may {@link #retire}. */
+    public boolean release() {
+        return users.decrementAndGet() <= 0;
+    }
+
+    /** How many holders have {@link #claim claimed} this clock. */
+    public int users() {
+        return Math.max(0, users.get());
     }
 
     /** A new domain with its own clock, on the engine. */

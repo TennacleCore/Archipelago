@@ -138,7 +138,10 @@ public final class Shard implements MechanicsWorld {
         this.base = base;
         this.parent = parent;
         this.domain = domain;
-        if (domain != null) onDomainBound.accept(this);
+        if (domain != null) {
+            domain.claim();
+            onDomainBound.accept(this);
+        }
     }
 
     /** This shard's tick domain, or {@code null} (server-ticked). */
@@ -164,6 +167,7 @@ public final class Shard implements MechanicsWorld {
         synchronized (this) {
             old = this.domain;
             if (old == target) return;
+            target.claim();
             this.domain = target;
             if (tickDriver != null) {
                 tickDriver.run();
@@ -174,6 +178,7 @@ public final class Shard implements MechanicsWorld {
         onDomainBound.accept(this); // the world pass follows the clock, registered with a manager or not
         for (Player o : observers) adoptObserver(o);
         for (Entity e : entities) adoptTicking(e);
+        if (old != null) old.release(); // a re-clock moves the count; only a destroy ends a clock
         EventDispatcher.call(new ShardReclockEvent(this, old, target));
     }
 

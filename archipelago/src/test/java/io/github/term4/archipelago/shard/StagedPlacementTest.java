@@ -38,7 +38,7 @@ class StagedPlacementTest extends HeadlessServerTest {
             @Override
             public Block blockPlace(PlacementState state) {
                 Point other = state.placePosition().add(1, 0, 0);
-                if (!state.instance().getBlock(other).registry().isReplaceable()) return null;
+                if (!state.instance().getBlock(other).replaceable()) return null;
                 ((Block.Setter) state.instance()).setBlock(other, PAIRED.withProperty("part", "head"));
                 return PAIRED.withProperty("part", "foot");
             }

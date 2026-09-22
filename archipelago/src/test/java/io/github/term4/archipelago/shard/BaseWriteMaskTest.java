@@ -41,7 +41,7 @@ class BaseWriteMaskTest extends HeadlessServerTest {
             assertFalse(reaches(member, broken, Block.DIAMOND_BLOCK), "a base write under the mask is dropped");
             assertTrue(reaches(member, open, Block.DIAMOND_BLOCK), "an unmasked one still reaches them");
             assertTrue(reaches(bystander, broken, Block.DIAMOND_BLOCK), "a base viewer sees the base");
-            assertTrue(shard.getBlock(broken).isAir(), "and the chain still reads broken");
+            assertTrue(shard.getBlock(broken).air(), "and the chain still reads broken");
         } finally {
             instance.setBlock(broken, Block.AIR);
             member.player.remove();

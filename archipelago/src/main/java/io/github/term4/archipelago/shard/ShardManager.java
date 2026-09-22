@@ -192,10 +192,9 @@ public final class ShardManager {
             String name = names.remove(shard);
             if (name != null) byName.remove(name, shard);
             shards.remove(shard);
-            // shards may share a domain (a tree on one clock): retire it only with its last registered user
-            if (domain != null && shards.stream().noneMatch(s -> s.domain() != null && s.domain().sharesClock(domain))) {
-                domain.retire();
-            }
+            // shards may share a domain (a tree on one clock): the domain counts its own holders, so an
+            // unregistered shard or a bare fork on the same clock keeps it alive too
+            if (domain != null && domain.release()) domain.retire();
         } catch (Throwable t) {
             shard.destroyed = false; // a failed destroy must leave the shard destroyable
             throw t;

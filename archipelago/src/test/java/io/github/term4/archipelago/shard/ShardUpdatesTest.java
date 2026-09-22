@@ -40,7 +40,7 @@ class ShardUpdatesTest extends HeadlessServerTest {
             if (!below.compare(Block.CACTUS) && !below.compare(Block.SAND)) return Block.AIR;
             for (BlockFace face : new BlockFace[]{BlockFace.WEST, BlockFace.EAST, BlockFace.NORTH, BlockFace.SOUTH}) {
                 var d = face.toDirection();
-                if (state.instance().getBlock(pos.add(d.normalX(), 0, d.normalZ())).isSolid()) return Block.AIR;
+                if (state.instance().getBlock(pos.add(d.normalX(), 0, d.normalZ())).solid()) return Block.AIR;
             }
             return state.currentBlock();
         }

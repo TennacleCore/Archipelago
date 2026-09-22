@@ -70,8 +70,9 @@ final class ShardLight implements ShardLighting {
      *  writes, whole columns from sightings/refreshes. */
     private final Set<Long> dirtySections = ConcurrentHashMap.newKeySet();
     private final Set<Long> dirtyColumns = ConcurrentHashMap.newKeySet();
-    /** Columns whose sections have computed at least once (flush thread only). */
-    private final Set<Long> knownColumns = new HashSet<>();
+    /** Columns whose sections have computed at least once. Concurrent: close() restores from the caller's
+     *  thread while a flush is still reading. */
+    private final Set<Long> knownColumns = ConcurrentHashMap.newKeySet();
     private final AtomicBoolean inFlight = new AtomicBoolean();
     private volatile boolean resetPending;
     private volatile boolean closed;
@@ -297,6 +298,7 @@ final class ShardLight implements ShardLighting {
 
         boolean viewers = shard.hasBlockViewers();
         for (long index : publish) {
+            if (closed) return; // a close landing mid-publish must not send the rest
             int cx = CoordConversion.chunkIndexGetX(index), cz = CoordConversion.chunkIndexGetZ(index);
             UpdateLightPacket packet = new UpdateLightPacket(cx, cz, lightData(cx, cz, ctx));
             cache.put(index, packet);
