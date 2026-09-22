@@ -29,11 +29,10 @@ import net.minestom.server.network.packet.server.play.AcknowledgeBlockChangePack
 import net.minestom.server.network.packet.server.play.BlockChangePacket;
 import net.minestom.server.utils.chunk.ChunkUtils;
 import net.minestom.server.utils.inventory.PlayerInventoryUtils;
-import net.minestom.server.utils.validate.Check;
 import net.minestom.server.world.DimensionType;
 
 /**
- * Minestom's stock {@code BlockPlacementListener} (2026.07.12-26.2, faithful copy) with TWO marked changes:
+ * Minestom's stock {@code BlockPlacementListener} (2026.08.28-26.2, the pinned build, faithful copy) with TWO marked changes:
  * the entity-collision scan is scoped through {@link WorldPolicy#canAffect}, and a replaceable clicked block
  * is replaced in place (vanilla/client-prediction parity, PR'd upstream). Shard members' placements are
  * packet-intercepted by {@link BlockRouting} and never reach this; it serves players OUTSIDE any shard view.
@@ -59,12 +58,25 @@ final class BasePlacement {
         final Chunk interactedChunk = instance.getChunkAt(blockPosition);
         if (!ChunkUtils.isLoaded(interactedChunk)) {
             // Client tried to place a block in an unloaded chunk; ignore the request but still ack to reset the client prediction
+            refreshUsedHandSlot(player, hand);
             player.sendPacket(new AcknowledgeBlockChangePacket(packet.sequence()));
             return;
         }
 
         final ItemStack usedItem = player.getItemInHand(hand);
         final Block interactedBlock = instance.getBlock(blockPosition);
+
+        // Any use of a block outside the world border is rejected before interaction handling.
+        // The resulting placement position is intentionally not checked as placing outward across
+        // the border by clicking a block inside of it is allowed.
+        if (!instance.getWorldBorder().inBounds(blockPosition)) {
+            final Point relative = blockPosition.relative(blockFace);
+            if (ChunkUtils.isLoaded(instance.getChunkAt(relative))) {
+                BaseBlockFilter.ownSend(() -> player.sendPacket(new BlockChangePacket(relative, instance.getBlock(relative))));
+            }
+            rollback(player, hand, blockPosition, interactedBlock, packet.sequence());
+            return;
+        }
 
         final Point cursorPosition = new Vec(packet.cursorPositionX(), packet.cursorPositionY(), packet.cursorPositionZ());
 
@@ -79,6 +91,9 @@ final class BasePlacement {
             }
         }
         if (blockUse) {
+            // If the usage was blocked then the world is already up-to-date (from the prior handlers),
+            // So ack the change with the current world state.
+            refreshUsedHandSlot(player, hand);
             player.sendPacket(new AcknowledgeBlockChangePacket(packet.sequence()));
             return;
         }
@@ -104,41 +119,46 @@ final class BasePlacement {
         // Get the newly placed block position
         Point placementPosition = blockPosition;
         var interactedPlacementRule = BLOCK_MANAGER.getBlockPlacementRule(interactedBlock);
-        // local change 2 (mirrors BlockRouting.place): replaceable clicked block replaced IN PLACE like
-        // vanilla/client prediction; upstream bumps it to the neighbor
-        if (!interactedBlock.air() && !interactedBlock.replaceable()
+        // local change 2 (mirrors BlockRouting.place): a replaceable clicked block is replaced IN PLACE like
+        // vanilla and the client's own prediction; upstream bumps it to the neighbor
+        final boolean placeAdjacent = !interactedBlock.air() && !interactedBlock.replaceable()
                 && (interactedPlacementRule == null || !interactedPlacementRule.isSelfReplaceable(
-                new BlockPlacementRule.Replacement(interactedBlock, blockFace, cursorPosition, false, useMaterial)))) {
-            // If the block is not replaceable, try to place next to it.
-            placementPosition = blockPosition.relative(blockFace);
+                new BlockPlacementRule.Replacement(interactedBlock, blockFace, cursorPosition, false, useMaterial)));
+        // If the block is not replaceable, try to place next to it.
+        if (placeAdjacent) placementPosition = blockPosition.relative(blockFace);
 
+        final Chunk chunk = instance.getChunkAt(placementPosition);
+        if (!ChunkUtils.isLoaded(chunk)) {
+            // Placement into an unloaded chunk, reachable by placing against a block at the edge of loaded terrain.
+            refreshUsedHandSlot(player, hand);
+            player.sendPacket(new AcknowledgeBlockChangePacket(packet.sequence()));
+            return;
+        }
+
+        if (placeAdjacent) {
             var placementBlock = instance.getBlock(placementPosition);
             var placementRule = BLOCK_MANAGER.getBlockPlacementRule(placementBlock);
             if (!placementBlock.replaceable() && !(placementRule != null && placementRule.isSelfReplaceable(
                     new BlockPlacementRule.Replacement(placementBlock, blockFace, cursorPosition, true, useMaterial)))) {
+                // If the block is still not replaceable, cancel the placement
                 canPlaceBlock = false;
             }
         }
 
         final DimensionType instanceDim = instance.getCachedDimensionType();
         if (placementPosition.y() >= instanceDim.maxY() || placementPosition.y() < instanceDim.minY()) {
+            // Placement outside the world's build height (reachable by placing against the top/bottom block); ack to reset the prediction
             player.sendPacket(new AcknowledgeBlockChangePacket(packet.sequence()));
             return;
         }
 
-        // Ensure that the final placement position is inside the world border.
-        if (!instance.getWorldBorder().inBounds(placementPosition)) {
-            canPlaceBlock = false;
-        }
-
         if (!canPlaceBlock) {
+            // Keep the client in sync with a targeted block change (plus a held-slot refresh) instead of a chunk resend,
+            // which leaves the client desynced after rapid invalid block placements.
             rollback(player, hand, placementPosition, instance.getBlock(placementPosition), packet.sequence());
             return;
         }
 
-        final Chunk chunk = instance.getChunkAt(placementPosition);
-        Check.stateCondition(!ChunkUtils.isLoaded(chunk),
-                "A player tried to place a block in the border of a loaded chunk {0}", placementPosition);
         if (chunk.isReadOnly()) {
             rollback(player, hand, placementPosition, instance.getBlock(placementPosition), packet.sequence());
             return;
@@ -180,9 +200,15 @@ final class BasePlacement {
             final ItemStack newUsedItem = usedItem.consume(1);
             player.setItemInHand(hand, newUsedItem);
         } else {
-            final int slot = hand == PlayerHand.OFF ? PlayerInventoryUtils.OFFHAND_SLOT : player.getHeldSlot();
-            player.getInventory().sendSlotRefresh(slot, player.getItemInHand(hand));
+            // Prevent invisible item on client: it predicted a decrement that did not happen, so refresh just that slot.
+            refreshUsedHandSlot(player, hand);
         }
+    }
+
+    // Refreshes only the used hand slot so the client's predicted item count stays in sync without a full resend.
+    private static void refreshUsedHandSlot(Player player, PlayerHand hand) {
+        final int slot = hand == PlayerHand.OFF ? PlayerInventoryUtils.OFFHAND_SLOT : player.getHeldSlot();
+        player.getInventory().sendSlotRefresh(slot, player.getItemInHand(hand));
     }
 
     // the shape the placement rule settles on, which placeBlock only applies later: a slab merging into a double
@@ -209,8 +235,7 @@ final class BasePlacement {
 
     // upstream rollback: a targeted block change + the used hand slot, never a chunk resend
     private static void rollback(Player player, PlayerHand hand, Point placementPosition, Block block, int sequence) {
-        final int slot = hand == PlayerHand.OFF ? PlayerInventoryUtils.OFFHAND_SLOT : player.getHeldSlot();
-        player.getInventory().sendSlotRefresh(slot, player.getItemInHand(hand));
+        refreshUsedHandSlot(player, hand);
         BaseBlockFilter.ownSend(() -> player.sendPacket(new BlockChangePacket(placementPosition, block)));
         player.sendPacket(new AcknowledgeBlockChangePacket(sequence));
     }
