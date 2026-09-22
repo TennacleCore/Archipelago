@@ -1,6 +1,7 @@
 package io.github.term4.archipelago.replay;
 
 import io.github.term4.archipelago.storage.Nbt;
+import io.github.term4.polyp.world.EntitySync;
 import io.github.term4.archipelago.ticking.DomainEntity;
 import io.github.term4.archipelago.ticking.DomainLivingEntity;
 import net.kyori.adventure.nbt.BinaryTag;
@@ -76,18 +77,6 @@ public final class Visuals {
         return entity instanceof VisualEntity || entity instanceof VisualLiving;
     }
 
-    // Minestom seeds a first scheduled sync ~tick 20 that setSynchronizationTicks does NOT reset - on a
-    // track-driven twin that absolute lands mid-leg as a periodic catch-up snap
-    private static void clearSeededSync(Entity e) {
-        try {
-            var latch = Entity.class.getDeclaredField("nextSynchronizationTick");
-            latch.setAccessible(true);
-            latch.setLong(e, Long.MAX_VALUE);
-        } catch (ReflectiveOperationException ex) {
-            throw new IllegalStateException(ex);
-        }
-    }
-
     private static @Nullable CompoundBinaryTag encodeEntry(Metadata.Entry<?> entry) {
         CompoundBinaryTag.Builder out = CompoundBinaryTag.builder();
         int type = entry.type();
@@ -137,7 +126,7 @@ public final class Visuals {
             this.ownerId = ownerId;
             this.meta = meta;
             setNoGravity(true); // the recorded position track drives it, not physics
-            clearSeededSync(this);
+            EntitySync.clearSeeded(this);
         }
 
         // inert: the applier advances the server along its legs; the base tick would integrate the leg
@@ -166,7 +155,7 @@ public final class Visuals {
             super(type);
             this.meta = meta;
             setNoGravity(true);
-            clearSeededSync(this);
+            EntitySync.clearSeeded(this);
         }
 
         // the stock living spawn path sends this (plus equipment)
