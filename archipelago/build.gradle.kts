@@ -47,7 +47,7 @@ repositories {
 }
 
 dependencies {
-    val minestomVersion = "2026.08.28-26.2"
+    val minestomVersion = "2026.09.12-26.2"
     val junitVersion = "6.1.3"
 
     // the world seam is PROVIDED at runtime (by polyp, which embeds it, or an explicit polyp-world dep for
