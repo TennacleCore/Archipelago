@@ -36,8 +36,6 @@ import net.minestom.server.network.packet.server.ServerPacket;
 import net.minestom.server.network.packet.server.play.BlockChangePacket;
 import net.minestom.server.network.packet.server.play.MultiBlockChangePacket;
 import net.minestom.server.tag.TagHandler;
-import net.minestom.server.timer.Task;
-import net.minestom.server.timer.TaskSchedule;
 import net.minestom.server.world.DimensionType;
 import net.kyori.adventure.sound.Sound;
 import org.jetbrains.annotations.NotNull;
@@ -95,9 +93,7 @@ public final class Shard implements MechanicsWorld {
     private final TagHandler tags = TagHandler.newHandler();
     volatile @Nullable ExecutionDomain domain;
     private final List<BlockChangeHook> blockHooks = new CopyOnWriteArrayList<>();
-    private final List<LongConsumer> tickHooks = new CopyOnWriteArrayList<>();
-    /** Removal handle of the one underlying registration driving {@link #tickHooks} on the current clock. */
-    private @Nullable Runnable tickDriver;
+    private final ShardClock clock = new ShardClock(this);
     private volatile @Nullable ShardLighting light;
     private volatile ShardTabList.TabScope tabScope = ShardTabList.TabScope.WORLD;
     /** ShardManager.destroy guard: the cascade and the quarantine sweep may both reach a shard. */
@@ -169,10 +165,7 @@ public final class Shard implements MechanicsWorld {
             if (old == target) return;
             target.claim();
             this.domain = target;
-            if (tickDriver != null) {
-                tickDriver.run();
-                tickDriver = startTickDriver();
-            }
+            clock.rebind();
         }
         for (Player p : members) adoptTicking(p);
         onDomainBound.accept(this); // the world pass follows the clock, registered with a manager or not
@@ -258,8 +251,7 @@ public final class Shard implements MechanicsWorld {
      * {@link #domain(ExecutionDomain) re-clock} ({@link ShardReclockEvent}).
      */
     public long ticks() {
-        ExecutionDomain d = domain;
-        return d != null ? d.ticks() : base.getWorldAge();
+        return clock.ticks();
     }
 
     /** One view change through this shard's write API; {@code previous} = the pre-write view. */
@@ -292,33 +284,7 @@ public final class Shard implements MechanicsWorld {
      * shard's server scheduler. Survives a {@link #domain(ExecutionDomain) re-clock}. Returns the removal handle.
      */
     public @NotNull Runnable onTick(@NotNull LongConsumer hook) {
-        synchronized (this) {
-            tickHooks.add(hook);
-            if (tickDriver == null) tickDriver = startTickDriver();
-        }
-        return () -> {
-            synchronized (this) {
-                if (!tickHooks.remove(hook)) return;
-                // last hook out stops the driver - otherwise the scheduler task retains the shard forever
-                if (tickHooks.isEmpty() && tickDriver != null) {
-                    tickDriver.run();
-                    tickDriver = null;
-                }
-            }
-        };
-    }
-
-    // one underlying registration on the CURRENT clock fans out to the shard's hooks; swapped on re-clock
-    private Runnable startTickDriver() {
-        ExecutionDomain d = domain;
-        if (d != null) return d.onTick(this::fireTickHooks);
-        Task task = MinecraftServer.getSchedulerManager().scheduleTask(() -> fireTickHooks(ticks()),
-                TaskSchedule.tick(1), TaskSchedule.tick(1));
-        return task::cancel;
-    }
-
-    private void fireTickHooks(long tick) {
-        for (LongConsumer hook : tickHooks) hook.accept(tick);
+        return clock.onTick(hook);
     }
 
     /** Admits {@code player}: binds them to this shard, drops any explicit {@link ShardView}, applies the member view. */
@@ -666,16 +632,13 @@ public final class Shard implements MechanicsWorld {
      * {@link ExecutionDomain#relay} throws there - {@link #onOwner} hands off instead.
      */
     public <T> T relay(@NotNull Supplier<T> op) {
-        ExecutionDomain d = domain;
-        return d == null ? op.get() : d.relay(op);
+        return clock.relay(op);
     }
 
     /** {@link #relay} without waiting: {@code op} runs inline when already on this shard's clock, else on its
      *  next tick. The safe direction from another clock. */
     public void onOwner(@NotNull Runnable op) {
-        ExecutionDomain d = domain;
-        if (d != null && !d.onThread()) d.execute(op);
-        else op.run();
+        clock.onOwner(op);
     }
 
     /**
