@@ -88,4 +88,72 @@ class ProbesTest extends HeadlessServerTest {
             b.player.remove();
         }
     }
+
+    /**
+     * From games: a replay watcher heard only the trailing beats of a cage countdown, or none at all. The copies
+     * reach this probe at WRITE time, so anything skewing one player's flush past the tally's window drops the
+     * beat silently - /lag is the obvious one, and the two replays that showed holes were recorded under it.
+     */
+    @Test
+    void aWidelySplitBeatStillLands() {
+        loadArea(2120, 0);
+        CoreChannels.register();
+        Shard live = new Shard(instance);
+        FakePlayer a = FakePlayer.connect(instance, new Pos(33920.5, 42, 0.5), "SkewA");
+        FakePlayer b = FakePlayer.connect(instance, new Pos(33923.5, 42, 0.5), "SkewB");
+        Recording rec = null;
+        try {
+            live.join(a.player);
+            live.join(b.player);
+            rec = Replay.record(live);
+            Probes.FxProbe probe = new Probes.FxProbe();
+            probe.packet(a.player, pling(a, 11L), rec);
+            for (int i = 0; i < 5; i++) { probe.sample(rec); tick(); } // b's flush is five ticks behind
+            probe.packet(b.player, pling(b, 99L), rec);
+            probe.sample(rec);
+            tick();
+            assertEquals(1, rec.counts().getOrDefault(Channels.FX.id(), 0), "the beat survives the skew");
+        } finally {
+            if (rec != null) rec.stop();
+            a.player.remove();
+            b.player.remove();
+        }
+    }
+
+    /**
+     * The other side of that window: consecutive beats are byte-identical bar the seed, so nothing but time
+     * tells them apart. The window has to stay well under the beat cadence or two beats read as one.
+     */
+    @Test
+    void beatsACadenceApartStayApart() {
+        loadArea(2130, 0);
+        CoreChannels.register();
+        Shard live = new Shard(instance);
+        FakePlayer a = FakePlayer.connect(instance, new Pos(34080.5, 42, 0.5), "BeatA");
+        FakePlayer b = FakePlayer.connect(instance, new Pos(34083.5, 42, 0.5), "BeatB");
+        Recording rec = null;
+        try {
+            live.join(a.player);
+            live.join(b.player);
+            rec = Replay.record(live);
+            Probes.FxProbe probe = new Probes.FxProbe();
+            probe.packet(a.player, pling(a, 11L), rec); // this one's second copy never arrives
+            for (int i = 0; i < 20; i++) { probe.sample(rec); tick(); }
+            probe.packet(a.player, pling(a, 12L), rec);
+            probe.packet(b.player, pling(b, 98L), rec);
+            probe.sample(rec);
+            tick();
+            assertEquals(1, rec.counts().getOrDefault(Channels.FX.id(), 0),
+                    "the orphan aged out a cadence ago; only the beat both heard counts");
+        } finally {
+            if (rec != null) rec.stop();
+            a.player.remove();
+            b.player.remove();
+        }
+    }
+
+    private static SoundEffectPacket pling(FakePlayer p, long seed) {
+        return new SoundEffectPacket(SoundEvent.BLOCK_NOTE_BLOCK_PLING, Sound.Source.MASTER,
+                p.player.getPosition(), 1f, 1f, seed);
+    }
 }

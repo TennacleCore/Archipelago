@@ -360,10 +360,11 @@ final class Probes {
      *  game's, and kept, when two members got it that tick (every member, when there are fewer - a player may
      *  have muted it); one player's (a kill ding, a death knell) otherwise, and not the theater's to play. */
     static final class FxProbe extends PacketDispatcher {
-        // a packet reaches this probe as its connection flushes it (the packet-out event fires at write time, off
-        // the socket worker), so the copies of one broadcast can land on either side of a tick end: the tally and
-        // the dedup hold a few ticks, or a countdown beat whose two copies split the tick was never a cue
-        private static final long WINDOW = 3;
+        // a packet reaches this probe as its connection flushes it (the packet-out event fires at write time,
+        // off the socket worker), so one broadcast's copies land ticks apart and a tight window drops a
+        // countdown beat as if nobody heard it. Capped by the beat cadence: consecutive beats are identical
+        // bar the seed, so nothing but time tells them apart
+        private static final long WINDOW = 8;
 
         private record Heard(Set<UUID> by, long since) {}
 
