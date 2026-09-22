@@ -80,11 +80,11 @@ import java.util.function.Supplier;
  */
 public final class Shard implements MechanicsWorld {
 
-    private final Instance base;
-    private final @Nullable Shard parent;
+    final Instance base;
+    final @Nullable Shard parent;
     final List<Shard> children = new CopyOnWriteArrayList<>();
     private final Overlay overlay = new Overlay();
-    private final ShardSky sky = new ShardSky();
+    final ShardSky sky = new ShardSky();
     private final Set<Player> members = ConcurrentHashMap.newKeySet();
     private final Set<Player> membersView = Collections.unmodifiableSet(members);
     /** Non-members with an explicit {@link ShardView} referencing this shard; maintained by ShardView. */
@@ -93,7 +93,7 @@ public final class Shard implements MechanicsWorld {
     final Set<Entity> entities = ConcurrentHashMap.newKeySet();
     private final ShardView memberView = ShardView.newMemberView(this);
     private final TagHandler tags = TagHandler.newHandler();
-    private volatile @Nullable ExecutionDomain domain;
+    volatile @Nullable ExecutionDomain domain;
     private final List<BlockChangeHook> blockHooks = new CopyOnWriteArrayList<>();
     private final List<LongConsumer> tickHooks = new CopyOnWriteArrayList<>();
     /** Removal handle of the one underlying registration driving {@link #tickHooks} on the current clock. */
@@ -728,20 +728,7 @@ public final class Shard implements MechanicsWorld {
      */
     public @NotNull Shard fork(@NotNull BiFunction<Point, Block, @Nullable Block> blocks,
                                @Nullable Function<Entity, Entity> entityCloner) {
-        return relay(() -> { // the whole snapshot reads settled state, never mid-tick
-            Shard copy = parent != null ? new Shard(parent, null) : new Shard(base);
-            Map<Point, Block> kept = new HashMap<>();
-            forEachDiff((pos, block) -> {
-                Block out = blocks.apply(pos, block);
-                if (out != null) kept.put(pos, out);
-            });
-            copy.setBlocks(kept);
-            if (sky.timeOverride() >= 0) copy.setTime(sky.timeOverride());
-            Weather weather = sky.weatherOverride();
-            if (weather != null) copy.setWeather(weather);
-            forEachClone(entityCloner, copy::spawn);
-            return copy;
-        });
+        return ShardForks.fork(this, blocks, entityCloner);
     }
 
     /**
@@ -750,13 +737,7 @@ public final class Shard implements MechanicsWorld {
      * starts empty - base entities are not shard-visible, so nothing carries over without this.
      */
     public @NotNull Shard seedFromBase(@Nullable Function<Entity, Entity> cloner) {
-        if (cloner == null) return this;
-        for (Entity entity : base.getEntities()) {
-            if (entity.isRemoved() || entity instanceof Player || of(entity) != null) continue;
-            Entity clone = cloner.apply(entity);
-            if (clone != null) spawn(clone, entity.getPosition());
-        }
-        return this;
+        return ShardForks.seedFromBase(this, cloner);
     }
 
     /** Per-position flatten rule: the block the combined shard keeps ({@code null} = none); a side absent at the position is {@code null}. */
@@ -785,35 +766,7 @@ public final class Shard implements MechanicsWorld {
      */
     public @NotNull Shard flattenOnto(@NotNull Shard bottom, @NotNull BlockMerge merger,
                                       @Nullable Function<Entity, Entity> cloner) {
-        if (bottom.base != base) {
-            throw new IllegalArgumentException("shards flatten over one shared base instance");
-        }
-        Layer bottomSide;
-        Layer topSide;
-        if (sameClock(bottom)) { // one relay: the whole combine reads one settled tick
-            Layer[] both = relay(() -> new Layer[]{bottom.snapshot(cloner), snapshot(cloner)});
-            bottomSide = both[0];
-            topSide = both[1];
-        } else {
-            bottomSide = bottom.relay(() -> bottom.snapshot(cloner));
-            topSide = relay(() -> snapshot(cloner));
-        }
-        Shard flat = new Shard(base);
-        Map<Point, Block> merged = new HashMap<>();
-        Set<Point> union = new HashSet<>(bottomSide.blocks().keySet());
-        union.addAll(topSide.blocks().keySet());
-        for (Point pos : union) {
-            Block block = merger.merge(pos, bottomSide.blocks().get(pos), topSide.blocks().get(pos));
-            if (block != null) merged.put(pos, block);
-        }
-        flat.setBlocks(merged);
-        long time = topSide.time() >= 0 ? topSide.time() : bottomSide.time();
-        if (time >= 0) flat.setTime(time);
-        Weather weather = topSide.weather() != null ? topSide.weather() : bottomSide.weather();
-        if (weather != null) flat.setWeather(weather);
-        bottomSide.clones().forEach(flat::spawn);
-        topSide.clones().forEach(flat::spawn);
-        return flat;
+        return ShardForks.flattenOnto(this, bottom, merger, cloner);
     }
 
     /**
@@ -824,22 +777,7 @@ public final class Shard implements MechanicsWorld {
      * ancestor's entities read best-effort - one tree one clock is the recommended default).
      */
     public @NotNull Shard flatten(@Nullable Function<Entity, Entity> cloner) {
-        return relay(() -> {
-            Shard flat = new Shard(base);
-            Map<Point, Block> blocks = new HashMap<>();
-            effectiveDiff(blocks);
-            flat.setBlocks(blocks);
-            long time = effectiveTimeOverride();
-            if (time >= 0) flat.setTime(time);
-            Weather weather = effectiveWeatherOverride();
-            if (weather != null) flat.setWeather(weather);
-            if (cloner != null) {
-                List<Shard> chain = new ArrayList<>();
-                for (Shard s = this; s != null; s = s.parent) chain.add(s);
-                for (int i = chain.size() - 1; i >= 0; i--) chain.get(i).forEachClone(cloner, flat::spawn);
-            }
-            return flat;
-        });
+        return ShardForks.flatten(this, cloner);
     }
 
     /** {@link #flatten(Function)} without entities: blocks + sky only. */
@@ -847,44 +785,19 @@ public final class Shard implements MechanicsWorld {
         return flatten(null);
     }
 
-    private boolean sameClock(Shard other) {
-        if (domain == null || other.domain == null) return domain == other.domain;
-        return domain.sharesClock(other.domain);
-    }
-
-    private record Layer(Map<Point, Block> blocks, long time, @Nullable Weather weather, Map<Entity, Pos> clones) {}
-
-    private void forEachClone(@Nullable Function<Entity, Entity> cloner, BiConsumer<Entity, Pos> out) {
-        if (cloner == null) return;
-        for (Entity entity : entities) {
-            if (entity.isRemoved()) continue;
-            Entity clone = cloner.apply(entity);
-            if (clone != null) out.accept(clone, entity.getPosition());
-        }
-    }
-
-    // one side's settled state; call inside this shard's relay
-    private Layer snapshot(@Nullable Function<Entity, Entity> cloner) {
-        Map<Point, Block> blocks = new HashMap<>();
-        effectiveDiff(blocks);
-        Map<Entity, Pos> clones = new LinkedHashMap<>();
-        forEachClone(cloner, clones::put);
-        return new Layer(blocks, effectiveTimeOverride(), effectiveWeatherOverride(), clones);
-    }
-
     // root-most first: upper layers overwrite
-    private void effectiveDiff(Map<Point, Block> out) {
+    void effectiveDiff(Map<Point, Block> out) {
         if (parent != null) parent.effectiveDiff(out);
         forEachDiff(out::put);
     }
 
-    private long effectiveTimeOverride() {
+    long effectiveTimeOverride() {
         long own = sky.timeOverride();
         if (own >= 0) return own;
         return parent != null ? parent.effectiveTimeOverride() : -1;
     }
 
-    private @Nullable Weather effectiveWeatherOverride() {
+    @Nullable Weather effectiveWeatherOverride() {
         Weather own = sky.weatherOverride();
         if (own != null) return own;
         return parent != null ? parent.effectiveWeatherOverride() : null;
