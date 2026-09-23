@@ -1,5 +1,6 @@
 package io.github.term4.archipelago.replay;
 
+import io.github.term4.archipelago.Viewers;
 import io.github.term4.archipelago.testsupport.FakePlayer;
 import io.github.term4.archipelago.testsupport.HeadlessServerTest;
 import net.kyori.adventure.text.Component;
@@ -68,8 +69,8 @@ class GhostListNameTest extends HeadlessServerTest {
     }
 
     /**
-     * A 1.8 plate is the profile name formatted by that name's team, so the color rides the name; a modern client
-     * would render the section code literally and takes the plain one.
+     * A plate is the profile name formatted by that name's team, so where the tab sorts by name the color rides the
+     * name; from 1.21.2 the tab sorts on the list order and the ghost takes the plain one.
      */
     @Test
     void aLegacyPlateWearsTheColorInTheName() {
@@ -77,7 +78,7 @@ class GhostListNameTest extends HeadlessServerTest {
         Ghost ghost = new Ghost("Recorded", null, null, Component.text("Recorded", NamedTextColor.BLUE));
         try {
             assertEquals("§9Recorded", profileSentTo(ghost, "PlateLegacy", true), "the plate carries the code");
-            assertEquals("Recorded", profileSentTo(ghost, "PlateModern", false), "a modern client reads codes literally");
+            assertEquals("Recorded", profileSentTo(ghost, "PlateModern", false), "1.21.2+ takes the plain name");
         } finally {
             ghost.remove();
         }
@@ -110,6 +111,19 @@ class GhostListNameTest extends HeadlessServerTest {
         } finally {
             legacy.player.remove();
             modern.player.remove();
+            ghost.remove();
+        }
+    }
+
+    /** 1.9 sorts the tab by name as 1.8 does, so it takes the plated profile too. */
+    @Test
+    void platedUntilListOrder() {
+        Viewers.protocol(p -> p.getUsername().endsWith("Nine") ? 107 : Viewers.LIST_ORDER_PROTOCOL);
+        Ghost ghost = new Ghost("Recorded", null, null, Component.text("Recorded", NamedTextColor.BLUE));
+        try {
+            assertEquals("§9Recorded", profileSentTo(ghost, "PlateNine", false));
+            assertEquals("Recorded", profileSentTo(ghost, "PlateOrder", false));
+        } finally {
             ghost.remove();
         }
     }

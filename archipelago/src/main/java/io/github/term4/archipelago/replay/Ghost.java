@@ -9,6 +9,7 @@ import net.minestom.server.entity.metadata.avatar.PlayerMeta;
 import net.minestom.server.network.packet.server.SendablePacket;
 import net.minestom.server.network.packet.server.play.EntityEquipmentPacket;
 import io.github.term4.archipelago.LegacyNames;
+import io.github.term4.archipelago.Viewers;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import net.minestom.server.network.packet.server.play.PlayerInfoRemovePacket;
@@ -73,7 +74,7 @@ public final class Ghost extends DomainLivingEntity {
      * has to score under this: an unscored row still draws a number on 1.8, and it is zero.
      */
     public @NotNull String listedName(@NotNull Player viewer) {
-        return Replay.legacyViewer(viewer) ? plated : name;
+        return Viewers.sortsByName(viewer) ? plated : name;
     }
 
     // the actions ARE the wire format: a field whose action is missing is never written, whatever the entry holds
@@ -87,10 +88,10 @@ public final class Ghost extends DomainLivingEntity {
     }
 
     /**
-     * The name a 1.8 client draws over the head. It has no display-name lever there - the plate is the profile
-     * name formatted by the team that name is on, and a team keys on the name, which a watcher of their own match
-     * shares with their ghost. So the color rides the name itself, and a name with no room for the code keeps
-     * its plate plain rather than clipped.
+     * The name a client that sorts the tab by name draws over the head. A plate has no display-name lever - it
+     * is the profile name formatted by the team that name is on, and a team keys on the name, which a watcher of
+     * their own match shares with their ghost. So the color rides the name itself, and a name with no room for
+     * the code keeps its plate plain rather than clipped.
      */
     private static String plateName(String name, @Nullable Component listName) {
         if (listName == null || listName.color() == null) return name;
@@ -107,7 +108,7 @@ public final class Ghost extends DomainLivingEntity {
     // the tab-list profile must reach each viewer before the spawn packet (then leaves the list)
     @Override
     public void updateNewViewer(@NotNull Player player) {
-        player.sendPacket(Replay.legacyViewer(player) ? legacyInfo : info);
+        player.sendPacket(Viewers.sortsByName(player) ? legacyInfo : info);
         super.updateNewViewer(player);
         // an effect packet reaches only the viewers standing there when the effect lands, and a client times a
         // swing off the swinger's own haste/fatigue: a viewer who arrives after (a ghost re-raised by a seek,

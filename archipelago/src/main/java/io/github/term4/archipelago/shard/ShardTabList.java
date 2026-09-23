@@ -37,12 +37,13 @@ import java.util.UUID;
 public final class ShardTabList {
 
     /**
-     * The name a 1.8 client sorts this player under. 1.8 has no list-order field: {@code GuiPlayerTabOverlay}
-     * orders by team name then by the PROFILE name, and the same profile name is what it draws over the player's
-     * head ({@code EntityPlayer.getName()}) and keys a below-name score by. So the sort name must still READ as
-     * the player - {@link io.github.term4.archipelago.shard.ShardTabList} callers build it as a two-char section
-     * prefix plus the real username, which sorts on the prefix and renders as the colored name. Sent to LEGACY
-     * viewers only; a modern client would draw the section codes literally and sorts on {@link #LIST_ORDER}.
+     * The name a client before 1.21.2 sorts this player under. It has no list-order field: the tab
+     * ({@code GuiPlayerTabOverlay} on 1.8) orders by team name then by the PROFILE name, and the same profile name
+     * is what it draws over the player's head ({@code EntityPlayer.getName()}) and keys a below-name score by. So
+     * the sort name must still READ as the player - {@link io.github.term4.archipelago.shard.ShardTabList} callers
+     * build it as a two-char section prefix plus the real username, which sorts on the prefix and renders as the
+     * colored name. Sent to those viewers only ({@link Viewers#sortsByName}); from 1.21.2 the tab sorts on
+     * {@link #LIST_ORDER}.
      */
     public static final Tag<String> SORT_NAME = Tag.String("tab:sort-name");
     /** The 1.21.2+ per-entry list order (higher sorts first); ignored by pre-1.21.2 clients. */
@@ -221,7 +222,7 @@ public final class ShardTabList {
      */
     public static @NotNull List<String> describe(@NotNull Player viewer) {
         List<String> lines = new ArrayList<>();
-        lines.add("viewer=" + viewer.getUsername() + " legacy=" + legacy(viewer));
+        lines.add("viewer=" + viewer.getUsername() + " byName=" + Viewers.sortsByName(viewer));
         for (Player p : MinecraftServer.getConnectionManager().getOnlinePlayers()) {
             if (p != viewer && !listed(viewer, p)) continue;
             PlayerInfoUpdatePacket.Entry e = entry(viewer, p);
@@ -326,21 +327,16 @@ public final class ShardTabList {
     private static final EnumSet<PlayerInfoUpdatePacket.Action> ALL_ACTIONS =
             EnumSet.allOf(PlayerInfoUpdatePacket.Action.class);
 
-    /** The name a 1.8 client lists {@code player} under: the {@link #SORT_NAME} override, else the real name. A
-     *  name-keyed objective (tab or below-name) has to score under this to line up on those clients. */
+    /** The name a client that sorts by name lists {@code player} under: the {@link #SORT_NAME} override, else the
+     *  real name. A name-keyed objective (tab or below-name) has to score under this to line up on those clients. */
     public static @NotNull String listName(@NotNull Player player) {
         String sort = player.getTag(SORT_NAME);
         return sort != null ? sort : player.getUsername();
     }
 
-    /** {@link #listName(Player)} as {@code viewer}'s own client holds it: a modern one never saw the sort name. */
+    /** {@link #listName(Player)} as {@code viewer}'s own client holds it: from 1.21.2 it never saw the sort name. */
     public static @NotNull String listName(@NotNull Player player, @NotNull Player viewer) {
-        return legacy(viewer) ? listName(player) : player.getUsername();
-    }
-
-    // the sort name is a 1.8 device: a modern client renders its section codes literally and sorts on listOrder
-    private static boolean legacy(Player viewer) {
-        return Viewers.legacy(viewer);
+        return Viewers.sortsByName(viewer) ? listName(player) : player.getUsername();
     }
 
     /**
@@ -361,7 +357,7 @@ public final class ShardTabList {
         List<PlayerInfoUpdatePacket.Property> properties = skin != null && skin.signature() != null
                 ? List.of(new PlayerInfoUpdatePacket.Property("textures", skin.textures(), skin.signature()))
                 : List.of();
-        String sort = legacy(viewer) ? player.getTag(SORT_NAME) : null;
+        String sort = Viewers.sortsByName(viewer) ? player.getTag(SORT_NAME) : null;
         Integer order = player.getTag(LIST_ORDER);
         // no display-name fallback: a null one lets the client draw the profile name itself, which already reads
         // as the player. Pinning one here would freeze the pre-color white name onto entries built before it lands.

@@ -1,5 +1,6 @@
 package io.github.term4.archipelago.shard;
 
+import io.github.term4.archipelago.Viewers;
 import io.github.term4.archipelago.testsupport.FakePlayer;
 import io.github.term4.archipelago.testsupport.HeadlessServerTest;
 import net.minestom.server.MinecraftServer;
@@ -153,6 +154,11 @@ class ShardTabListTest extends HeadlessServerTest {
             ShardTabList.protocolWhenUnknown(MinecraftServer.PROTOCOL_VERSION);
             ShardTabList.viewerProtocol(p -> 47);
             assertEquals(sort, listedName(viewer), "a known 1.8 viewer sorts under the sort name");
+
+            ShardTabList.viewerProtocol(p -> 107);
+            assertEquals(sort, listedName(viewer), "1.9 has no list order either");
+            ShardTabList.viewerProtocol(p -> Viewers.LIST_ORDER_PROTOCOL);
+            assertEquals(viewer.player.getUsername(), listedName(viewer), "1.21.2 sorts on the list order");
         } finally {
             ShardTabList.viewerProtocol(p -> -1);
             ShardTabList.protocolWhenUnknown(MinecraftServer.PROTOCOL_VERSION);

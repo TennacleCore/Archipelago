@@ -15,10 +15,12 @@ public final class Viewers {
 
     /** The last protocol on the legacy wire (1.8.9); anything older rides it too. */
     public static final int PROTOCOL_1_8 = 47;
+    /** 1.21.2, the first client with a tab list order. */
+    public static final int LIST_ORDER_PROTOCOL = 768;
 
     private static volatile @Nullable ToIntFunction<Player> source;
-    // modern: a wrong legacy guess draws raw section codes and wasted anchor bytes on a modern client, a
-    // wrong modern one only mis-sorts until the next resync
+    // modern: a wrong legacy guess sends a modern client the 1.8 wire's extra anchors, a wrong modern one only
+    // mis-sorts until the next resync
     private static volatile int whenUnknown = MinecraftServer.PROTOCOL_VERSION;
 
     private Viewers() {}
@@ -42,5 +44,10 @@ public final class Viewers {
 
     public static boolean legacy(@NotNull Player viewer) {
         return protocolOf(viewer) <= PROTOCOL_1_8;
+    }
+
+    /** Before 1.21.2 the tab sorts by team name, then profile name: the only order a row can take there. */
+    public static boolean sortsByName(@NotNull Player viewer) {
+        return protocolOf(viewer) < LIST_ORDER_PROTOCOL;
     }
 }
