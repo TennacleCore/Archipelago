@@ -1,5 +1,6 @@
 package io.github.term4.archipelago.replay;
 
+import io.github.term4.archipelago.Viewers;
 import io.github.term4.archipelago.storage.Nbt;
 import io.github.term4.polyp.world.EntitySync;
 import io.github.term4.archipelago.ticking.DomainEntity;
@@ -171,6 +172,23 @@ public final class Visuals {
             EntityType.SMALL_FIREBALL, EntityType.DRAGON_FIREBALL, EntityType.WITHER_SKULL,
             EntityType.WIND_CHARGE, EntityType.BREEZE_WIND_CHARGE, EntityType.SHULKER_BULLET);
 
+
+    /** 1.10, the first client that honors NO_GRAVITY. */
+    private static final int NO_GRAVITY_PROTOCOL = 210;
+    /** 1.21.2, the first client that holds any parked twin still by itself (see {@link #clientDrifts}). */
+    private static final int HOLDS_STILL_PROTOCOL = 768;
+
+    /** Before 1.10 a client ignores NO_GRAVITY and drops a gliding twin between legs. */
+    public static boolean clientSinks(@NotNull Player viewer) {
+        return Viewers.protocolOf(viewer) < NO_GRAVITY_PROTOCOL;
+    }
+
+    /** Whether a twin parked at zero velocity still moves on {@code viewer}'s client: gravity before 1.10, a
+     *  hurting projectile's spawn-set power before 1.21, a resting arrow turning off zero motion until its
+     *  IN_GROUND syncs (1.21.2). */
+    public static boolean clientDrifts(@NotNull Player viewer) {
+        return Viewers.protocolOf(viewer) < HOLDS_STILL_PROTOCOL;
+    }
 
     /** The bobber sinks client-side even parked (its gravity ignores NO_GRAVITY). */
     public static boolean clientRestless(@NotNull Entity entity) {

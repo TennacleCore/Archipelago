@@ -62,22 +62,23 @@ final class Tracks {
     }
 
     /** The leg's per-tick anchors at the advanced (view-stamped) position, riding ALONGSIDE the
-     *  velocity: they land before the client's own move, so the frame still lerps the motion. Legacy
-     *  viewers always get them (bounds their drift; a latched 1.8 arrow ignores velocity and follows
-     *  only these - the reverse-arrow carrier); {@code everyone} for fireballs, whose sims amplify any
-     *  perturbation instead of decaying it. */
+     *  velocity: they land before the client's own move, so the frame still lerps the motion. A client
+     *  that sinks gliders always gets them (bounds their drift; a latched 1.8 arrow ignores velocity and
+     *  follows only these - the reverse-arrow carrier); {@code everyone} for fireballs, whose sims amplify
+     *  any perturbation instead of decaying it. */
     static void legSets(Entity e, boolean everyone) {
         if (e.getInstance() == null) return;
         Pos at = e.getPosition();
         var set = new net.minestom.server.network.packet.server.play.EntityPositionSyncPacket(
                 e.getEntityId(), at, Vec.ZERO, at.yaw(), at.pitch(), false);
         for (var viewer : e.getViewers()) {
-            if (everyone || Replay.legacyViewer(viewer)) viewer.sendPacket(set);
+            if (everyone || Visuals.clientSinks(viewer)) viewer.sendPacket(set);
         }
     }
 
-    /** Pause pin: legacy + restless only. A modern sim hit-kicked mid-pause stays displaced until
-     *  play resumes and the aims re-sync it - not worth per-tick spam to every viewer. */
+    /** Pause pin: clients that drift a parked twin, and restless twins. A client that holds it still,
+     *  hit-kicked mid-pause, stays displaced until play resumes and the aims re-sync it - not worth
+     *  per-tick spam to every viewer. */
     static void pinStill(Entity e) {
         pinAt(e, e.getPosition(), Visuals.clientRestless(e));
     }
@@ -100,7 +101,7 @@ final class Tracks {
         var still = new net.minestom.server.network.packet.server.play.EntityVelocityPacket(
                 e.getEntityId(), keep);
         for (var viewer : e.getViewers()) {
-            if (everyone || Replay.legacyViewer(viewer)) {
+            if (everyone || Visuals.clientDrifts(viewer)) {
                 viewer.sendPacket(set);
                 viewer.sendPacket(still);
             }

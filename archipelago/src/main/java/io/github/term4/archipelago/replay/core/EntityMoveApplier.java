@@ -252,9 +252,9 @@ final class EntityMoveApplier implements Applier<Channels.EntityMove> {
                 Pos before = e.getPosition();
                 Tracks.glide(e, g);
                 // at-rest holds: a restless client sinks its own sim between periodic syncs (both
-                // generations - the bobber sim ignores stillness), and a 1.8-generation arrow that
-                // never latched (a slow-rate ray is microscopic, so its own collision test never
-                // fires) sags under its own compounding gravity at the stick
+                // generations - the bobber sim ignores stillness), and an arrow that never latched on a
+                // client without NO_GRAVITY (a slow-rate ray is microscopic, so its own collision test
+                // never fires) sags under its own compounding gravity at the stick
                 boolean restless = Visuals.clientRestless(e);
                 if ((restless || Visuals.clientFrozen(e)) && e.getPosition().equals(before)) {
                     Tracks.pinAt(e, e.getPosition(), restless);
