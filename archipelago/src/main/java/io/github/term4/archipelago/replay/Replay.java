@@ -73,7 +73,9 @@ public final class Replay {
         Viewers.protocolWhenUnknown(protocol);
     }
 
-    /** Whether {@code viewer} renders the legacy (1.8-line) twin wire - see docs/replay-bridge.md. */
+    /** @deprecated the twin wire splits at several versions, each gated in {@link Visuals}; a 1.8 check is
+     *  {@link Viewers#legacy}. */
+    @Deprecated
     public static boolean legacyViewer(@NotNull Player viewer) {
         return Viewers.legacy(viewer);
     }

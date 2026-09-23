@@ -177,6 +177,8 @@ public final class Visuals {
     private static final int NO_GRAVITY_PROTOCOL = 210;
     /** 1.21.2, the first client that holds any parked twin still by itself (see {@link #clientDrifts}). */
     private static final int HOLDS_STILL_PROTOCOL = 768;
+    /** 1.21.2, the first client that pushes a hurting projectile before moving it. */
+    private static final int PUSHES_FIRST_PROTOCOL = 768;
 
     /** Before 1.10 a client ignores NO_GRAVITY and drops a gliding twin between legs. */
     public static boolean clientSinks(@NotNull Player viewer) {
@@ -188,6 +190,11 @@ public final class Visuals {
      *  IN_GROUND syncs (1.21.2). */
     public static boolean clientDrifts(@NotNull Player viewer) {
         return Viewers.protocolOf(viewer) < HOLDS_STILL_PROTOCOL;
+    }
+
+    /** Before 1.21.2 a hurting projectile moves by its velocity and pushes after, so a per-tick aim lands as sent. */
+    public static boolean clientMovesFirst(@NotNull Player viewer) {
+        return Viewers.protocolOf(viewer) < PUSHES_FIRST_PROTOCOL;
     }
 
     /** The bobber sinks client-side even parked (its gravity ignores NO_GRAVITY). */

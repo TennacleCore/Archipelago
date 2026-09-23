@@ -1,7 +1,6 @@
 package io.github.term4.archipelago.replay.core;
 
 import io.github.term4.archipelago.replay.Playback;
-import io.github.term4.archipelago.replay.Replay;
 import io.github.term4.archipelago.replay.Visuals;
 import io.github.term4.archipelago.replay.channel.Recorded;
 import net.minestom.server.ServerFlag;
@@ -44,20 +43,20 @@ final class Tracks {
                 (float) Math.toDegrees(Math.atan2(d.y(), h)));
     }
 
-    /** Per-viewer fireball aim: a legacy client MOVES first and mutates motion after (the plain leg is
-     *  exact under per-tick resets), a modern one moves by (v + 0.1 v-hat) x 0.95 - the inverted aim
+    /** Per-viewer fireball aim: a client before 1.21.2 MOVES first and pushes after (the plain leg is
+     *  exact under per-tick resets), a newer one moves by (v + 0.1 v-hat) x 0.95 - the inverted aim
      *  lands on the leg pace down to its 0.095 b/t floor, and below it a per-tick zero holds (a fresh
      *  zero also heals a viewer's own hit prediction, which the accel model would amplify). */
     static void aimFireball(Entity e, Glide g) {
         if (e.getInstance() == null) return;
         Vec step = g.step();
         double bt = step.length();
-        var legacyAim = new net.minestom.server.network.packet.server.play.EntityVelocityPacket(
+        var plainAim = new net.minestom.server.network.packet.server.play.EntityVelocityPacket(
                 e.getEntityId(), step);
-        var modernAim = new net.minestom.server.network.packet.server.play.EntityVelocityPacket(
+        var invertedAim = new net.minestom.server.network.packet.server.play.EntityVelocityPacket(
                 e.getEntityId(), bt > 0.096 ? step.normalize().mul(bt / 0.95 - 0.1) : Vec.ZERO);
         for (var viewer : e.getViewers()) {
-            viewer.sendPacket(Replay.legacyViewer(viewer) ? legacyAim : modernAim);
+            viewer.sendPacket(Visuals.clientMovesFirst(viewer) ? plainAim : invertedAim);
         }
     }
 
