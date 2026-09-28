@@ -154,6 +154,18 @@ public final class Playback {
         ticker = shard.onTick(this::step);
         // a zero-length playback can end inside its first tick, on the clock thread, BEFORE the handle exists
         if (ended.get()) ticker.run();
+        // the reverse-crossing indexes, off the clock: built on the first backward step, a long recording's took a
+        // second at the flip (the user, 2026-09-28)
+        List<Channel<?>> warm = List.copyOf(channels);
+        Thread.startVirtualThread(() -> {
+            for (Channel<?> channel : warm) {
+                try {
+                    channel.applier.prepare(this);
+                } catch (Exception e) {
+                    LOGGER.warn("replay channel {} prepare failed", channel.type.id(), e);
+                }
+            }
+        });
     }
 
     // seek/halt arrive on command threads; playback state is owner-thread-only, like Recording's mutators
@@ -496,12 +508,14 @@ public final class Playback {
     // one index shape per channel id - every LookBack on a channel must use its canonical key
     private final Map<String, Object> opIndexes = new HashMap<>();
 
-    /** Per-playback memo for lazily built op-list indexes, keyed by channel id. Owner-thread only. */
+    /** Per-playback memo for lazily built op-list indexes, keyed by channel id; {@link Applier#prepare} fills it off the clock. */
     @SuppressWarnings("unchecked")
     public <T> @NotNull T opIndex(@NotNull String channel, @NotNull java.util.function.Supplier<T> build) {
-        T got = (T) opIndexes.get(channel);
-        if (got == null) opIndexes.put(channel, got = build.get());
-        return got;
+        synchronized (opIndexes) {
+            T got = (T) opIndexes.get(channel);
+            if (got == null) opIndexes.put(channel, got = build.get());
+            return got;
+        }
     }
 
     /** The t0 snapshot's block at {@code pos}, or {@code null} (outside the recorded root's own diff) - reverse block fallback. */

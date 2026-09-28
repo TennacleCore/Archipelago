@@ -86,6 +86,11 @@ final class BlockApplier implements Applier<Channels.BlockOp> {
     }
 
     @Override
+    public void prepare(@NotNull Playback playback) {
+        history.warm(playback);
+    }
+
+    @Override
     public void unapply(@NotNull Playback pb, @NotNull Recorded<Channels.BlockOp> op) {
         Channels.BlockOp b = op.op();
         Shard in = pb.layer(b.layer());

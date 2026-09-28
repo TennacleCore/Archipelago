@@ -7,6 +7,7 @@ import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import io.github.term4.archipelago.replay.channel.Applier;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
@@ -17,11 +18,16 @@ import java.util.function.Function;
 final class LookBack<K, T> {
     private final Recordable<T> channel;
     private final Function<T, K> key;
-    private Map<K, List<Recorded<T>>> index;
+    private volatile Map<K, List<Recorded<T>>> index;
 
     LookBack(Recordable<T> channel, Function<T, K> key) {
         this.channel = channel;
         this.key = key;
+    }
+
+    /** {@link Applier#prepare}: the index ahead of the first crossing, from any thread. */
+    void warm(Playback pb) {
+        built(pb);
     }
 
     @Nullable Recorded<T> before(Playback pb, Recorded<T> op) {

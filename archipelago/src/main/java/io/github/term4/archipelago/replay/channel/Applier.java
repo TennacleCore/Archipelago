@@ -15,6 +15,12 @@ public interface Applier<T> {
      */
     default void unapply(@NotNull Playback playback, @NotNull Recorded<T> op) {}
 
+    /**
+     * Once after the playback starts, off its clock: build what the first reverse crossing would otherwise build
+     * on the clock (a keyed channel's whole op index, a second's pass over a long recording).
+     */
+    default void prepare(@NotNull Playback playback) {}
+
     /** Runs once per playback tick after that tick's ops (ongoing effects, e.g. crack animations). */
     default void tick(@NotNull Playback playback) {}
 

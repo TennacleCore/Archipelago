@@ -84,6 +84,11 @@ final class ActApplier implements Applier<Channels.Act> {
             a -> new ActKey(a.player(), group(a.kind())));
 
     @Override
+    public void prepare(@NotNull Playback playback) {
+        history.warm(playback);
+    }
+
+    @Override
     public void unapply(@NotNull Playback pb, @NotNull Recorded<Channels.Act> op) {
         String player = op.op().player();
         int kind = op.op().kind();

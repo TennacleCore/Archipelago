@@ -30,6 +30,12 @@ final class EntityMoveApplier implements Applier<Channels.EntityMove> {
     }
 
     @Override
+    public void prepare(@NotNull Playback playback) {
+        history.warm(playback);
+        spawns.warm(playback);
+    }
+
+    @Override
     public void unapply(@NotNull Playback pb, @NotNull Recorded<Channels.EntityMove> op) {
         Recorded<Channels.EntityMove> prev = history.before(pb, op);
         if (prev != null) {

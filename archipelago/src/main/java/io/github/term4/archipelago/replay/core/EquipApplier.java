@@ -18,6 +18,11 @@ final class EquipApplier implements Applier<Channels.Equip> {
     private final LookBack<String, Channels.Equip> history = new LookBack<>(Channels.EQUIPS, Channels.Equip::player);
 
     @Override
+    public void prepare(@NotNull Playback playback) {
+        history.warm(playback);
+    }
+
+    @Override
     public void unapply(@NotNull Playback pb, @NotNull Recorded<Channels.Equip> op) {
         Recorded<Channels.Equip> prev = history.before(pb, op);
         if (prev != null) {

@@ -22,6 +22,12 @@ final class EntityLayerApplier implements Applier<Channels.EntityLayer> {
     }
 
     @Override
+    public void prepare(@NotNull Playback playback) {
+        history.warm(playback);
+        spawns.warm(playback);
+    }
+
+    @Override
     public void unapply(@NotNull Playback pb, @NotNull Recorded<Channels.EntityLayer> op) {
         Recorded<Channels.EntityLayer> prev = history.before(pb, op);
         if (prev != null) {
