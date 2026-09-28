@@ -50,6 +50,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
+import java.util.function.IntSupplier;
 import java.util.function.Predicate;
 import java.util.HashSet;
 
@@ -78,6 +79,7 @@ public final class Recording {
     private final Map<Entity, Track> tracked = new ConcurrentHashMap<>();
     private final Map<Point, String> covered = new ConcurrentHashMap<>();
     private final List<Runnable> unhooks = new CopyOnWriteArrayList<>();
+    private volatile IntSupplier cueQuorum;
     private final List<Replay.Bookmark> bookmarks = new CopyOnWriteArrayList<>();
     private final Map<Entity, String> pickedUpBy = new ConcurrentHashMap<>();
     private final Set<String> refreshActors = ConcurrentHashMap.newKeySet();
@@ -169,6 +171,20 @@ public final class Recording {
 
     public @NotNull Shard shard() {
         return shard;
+    }
+
+    /**
+     * How many ears a self-positioned cue needs before it is the game's and not one side's: every member by
+     * default, {@code members} counting them for the app (a game's live seats, ghosts and watchers aside).
+     */
+    public @NotNull Recording cueQuorum(@NotNull IntSupplier members) {
+        this.cueQuorum = members;
+        return this;
+    }
+
+    public int cueQuorum() {
+        IntSupplier members = cueQuorum;
+        return members != null ? members.getAsInt() : shard.players().size();
     }
 
     /** The current recording tick (0 until the first sampled tick). */

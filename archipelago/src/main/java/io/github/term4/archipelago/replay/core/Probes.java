@@ -396,9 +396,10 @@ final class Probes {
         @Override
         public void sample(@NotNull Recording rec) {
             long now = rec.tick();
-            int members = rec.shard().players().size();
+            // a side's or a player's own cue (a lost bed's wither, a shooter's ding) is not the game's: every ear or none
+            int members = rec.cueQuorum();
             cues.entrySet().removeIf(entry -> {
-                if (members > 0 && entry.getValue().by().size() >= Math.min(2, members)) {
+                if (members > 0 && entry.getValue().by().size() >= members) {
                     rec.emit(Channels.FX, Channels.cue(entry.getKey()));
                     return true;
                 }
