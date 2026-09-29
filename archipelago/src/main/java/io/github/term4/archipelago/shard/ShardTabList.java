@@ -72,6 +72,28 @@ public final class ShardTabList {
     private static final java.util.concurrent.CopyOnWriteArrayList<TabRule> RULES =
             new java.util.concurrent.CopyOnWriteArrayList<>();
 
+    /** The row {@code viewer} lists {@code subject} under, after the list's own shaping: a name they are not to
+     *  read yet, say. Applied to ADD_PLAYER rows and to display-name updates; the viewer's own row passes too. */
+    @FunctionalInterface
+    public interface EntryRule {
+        PlayerInfoUpdatePacket.@NotNull Entry entry(@NotNull Player viewer, @NotNull Player subject,
+                                                    PlayerInfoUpdatePacket.@NotNull Entry entry);
+    }
+
+    private static final java.util.concurrent.CopyOnWriteArrayList<EntryRule> ENTRY_RULES =
+            new java.util.concurrent.CopyOnWriteArrayList<>();
+
+    /** Installs {@code rule}; the returned runnable removes it. Re-sync the affected viewers when what it answers changes. */
+    public static @NotNull Runnable entries(@NotNull EntryRule rule) {
+        ENTRY_RULES.add(rule);
+        return () -> ENTRY_RULES.remove(rule);
+    }
+
+    private static PlayerInfoUpdatePacket.Entry ruled(Player viewer, Player subject, PlayerInfoUpdatePacket.Entry entry) {
+        for (EntryRule rule : ENTRY_RULES) entry = rule.entry(viewer, subject, entry);
+        return entry;
+    }
+
     /** @deprecated one era per viewer, library-wide: {@link Viewers#protocol}. */
     @Deprecated
     public static void viewerProtocol(@NotNull java.util.function.ToIntFunction<Player> source) {
@@ -148,11 +170,13 @@ public final class ShardTabList {
             // every action, not only ADD: an update for a subject outside the viewer's scope is a name and a
             // uuid they were never meant to have, even though their client renders nothing for it
             boolean adding = info.actions().contains(PlayerInfoUpdatePacket.Action.ADD_PLAYER);
+            boolean naming = info.actions().contains(PlayerInfoUpdatePacket.Action.UPDATE_DISPLAY_NAME);
             List<PlayerInfoUpdatePacket.Entry> allowed = new ArrayList<>(info.entries().size());
             boolean changed = false;
             for (PlayerInfoUpdatePacket.Entry entry : info.entries()) {
                 if (!allows(e.getPlayer(), entry.uuid())) { changed = true; continue; }
-                PlayerInfoUpdatePacket.Entry shaped = adding ? shape(e.getPlayer(), entry) : entry;
+                PlayerInfoUpdatePacket.Entry shaped = adding ? shape(e.getPlayer(), entry)
+                        : naming ? renamed(e.getPlayer(), entry) : entry;
                 changed |= shaped != entry;
                 allowed.add(shaped);
             }
@@ -362,8 +386,8 @@ public final class ShardTabList {
         // no display-name fallback: a null one lets the client draw the profile name itself, which already reads
         // as the player. Pinning one here would freeze the pre-color white name onto entries built before it lands.
         GameMode mode = spectatorTo(viewer, player) ? GameMode.SPECTATOR : player.getGameMode();
-        return new PlayerInfoUpdatePacket.Entry(player.getUuid(), sort != null ? sort : player.getUsername(), properties, true,
-                player.getLatency(), mode, player.getDisplayName(), null, order != null ? order : 0, true);
+        return ruled(viewer, player, new PlayerInfoUpdatePacket.Entry(player.getUuid(), sort != null ? sort : player.getUsername(),
+                properties, true, player.getLatency(), mode, player.getDisplayName(), null, order != null ? order : 0, true));
     }
 
     /**
@@ -374,6 +398,15 @@ public final class ShardTabList {
      * a row that packet had just colored. So a reshaped entry is rebuilt from live state, and the original
      * object is kept only when nothing differs - which is also what lets the filter's own re-send terminate.
      */
+    // a display-name update under the entry rules, so a name a viewer is not to read never rides one
+    private static PlayerInfoUpdatePacket.Entry renamed(Player viewer, PlayerInfoUpdatePacket.Entry base) {
+        if (ENTRY_RULES.isEmpty()) return base;
+        Player p = MinecraftServer.getConnectionManager().getOnlinePlayerByUuid(base.uuid());
+        if (p == null) return base;
+        PlayerInfoUpdatePacket.Entry ruled = ruled(viewer, p, base);
+        return java.util.Objects.equals(ruled.displayName(), base.displayName()) ? base : ruled;
+    }
+
     private static PlayerInfoUpdatePacket.Entry shape(Player viewer, PlayerInfoUpdatePacket.Entry base) {
         Player p = MinecraftServer.getConnectionManager().getOnlinePlayerByUuid(base.uuid());
         if (p == null) return base;
